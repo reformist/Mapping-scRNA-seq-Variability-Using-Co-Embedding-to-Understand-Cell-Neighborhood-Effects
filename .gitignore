@@ -13,3 +13,7 @@ visualization/synthetic_data_pipeline
 visualization/vae_contrastive_pipeline
 *.json
 *.pkl
+starfysh_cn_generation.gv
+*.pdf
+vae_detailed_visualization.gv
+vae_visualization.gv
