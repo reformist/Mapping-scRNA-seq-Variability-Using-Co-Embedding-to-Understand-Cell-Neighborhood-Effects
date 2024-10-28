@@ -2,3 +2,12 @@
 .idea/*
 data/
 *.h5ad
+*.zip
+temp
+starfysh_reproducibility/
+
+visualization/graph.png
+visualization/graph
+*.png
+visualization/synthetic_data_pipeline
+visualization/vae_contrastive_pipeline
