@@ -28,12 +28,10 @@ with dot.subgraph(name='cluster_cells') as cells:
     with cells.subgraph(name='cluster_proteins') as proteins:
         proteins.attr(label='Proteins T')
         proteins.node('ynt', 'y_nt', **node_attrs)
-        proteins.node('bnt', 'β_nt\nProtein\nbackground')
 
 # Define edges
 dot.edge('zn', 'xng')
 dot.edge('zn', 'ynt')
-dot.edge('bnt', 'ynt')
 
 # Define edges from CN_n to both Genes and Proteins
 dot.edge('cnn', 'xng', label='', color='red', fontcolor='red')
