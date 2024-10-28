@@ -11,3 +11,5 @@ visualization/graph
 *.png
 visualization/synthetic_data_pipeline
 visualization/vae_contrastive_pipeline
+*.json
+*.pkl
