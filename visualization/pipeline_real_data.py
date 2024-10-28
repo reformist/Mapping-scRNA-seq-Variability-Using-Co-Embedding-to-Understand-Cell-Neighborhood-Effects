@@ -51,9 +51,10 @@ with dot.subgraph() as bottom:
     bottom.attr(rank='sink')
     bottom.node('cn_pred', 'Final Model for CN Prediction\n(Input: RNA, Output: CN)', **model_attrs)
     dot.edge('plate_rep', 'cn_pred', label='')
+    dot.edge('cn_data', 'cn_pred', label='Validate predictions\nwith ground truth CN labels')
 
 # Additional edges for contrastive learning context
-dot.edge('cn_data', 'contrastive', label='Uses CN Labels')
+dot.edge('cn_data', 'contrastive', label='Train using CN\nas ground truth')
 dot.edge('latent_space', 'contrastive', label='Applies to Latent Space')
 
 # Render the graph
