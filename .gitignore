@@ -17,3 +17,5 @@ starfysh_cn_generation.gv
 *.pdf
 vae_detailed_visualization.gv
 vae_visualization.gv
+*.pyc
+visualization/plate_edge_example

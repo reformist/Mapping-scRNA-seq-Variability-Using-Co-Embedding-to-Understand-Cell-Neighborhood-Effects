@@ -14,20 +14,20 @@ model_attrs = {'shape': 'hexagon', 'style': 'filled', 'fillcolor': 'lightgreen'}
 
 # Synthetic Data Generation Step
 dot.node('starfysh', 'Starfysh\nSynthetic Data Generation', **process_attrs)
-dot.node('rna_data', 'Synthetic RNA Data', **data_attrs)
+dot.node('rna_data', 'Real RNA Data', **data_attrs)
 # dot.node('protein_data', 'Real Protein Data', **data_attrs)
 dot.node('cn_data', 'Synthetic CN Labels\n(Cell Neighborhoods)', **data_attrs)
 
 # Arrows for Synthetic Data Generation Step
-dot.edge('starfysh', 'rna_data', label='Generates')
+dot.edge('rna_data','starfysh', label='')
 dot.edge('starfysh', 'cn_data', label='Generates')
-dot.node('dim_red', 'Dimension reduction', **model_attrs)
+dot.node('gene_selection', 'Gene Selection', **model_attrs)
 
 
 # VAE with Integrated Contrastive Learning
 dot.node('vae_contrastive', 'VAE with Integrated\nContrastive Learning', **model_attrs)
-dot.edge('rna_data', 'dim_red', label='Input embedding')
-dot.edge('dim_red', 'vae_contrastive', label='Input embedding')
+dot.edge('rna_data', 'gene_selection', label='')
+dot.edge('gene_selection', 'vae_contrastive', label='')
 
 # Plate for Latent Space and Contrastive Learning
 with dot.subgraph(name='cluster_plate') as plate:
