@@ -19,3 +19,5 @@ vae_detailed_visualization.gv
 vae_visualization.gv
 *.pyc
 visualization/plate_edge_example
+vae_workflow_graph
+vae_contrastive_pipeline
