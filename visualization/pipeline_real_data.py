@@ -3,6 +3,7 @@ from graphviz import Digraph
 # Initialize Digraph with increased spacing
 dot = Digraph(format='png')
 dot.attr(rankdir='TB', size='10', nodesep='1.2', ranksep='0.1')  # Increase nodesep and ranksep
+dot.attr(dpi='300')  # Set high DPI for better resolution
 
 # Define node styles
 process_attrs = {'shape': 'box', 'style': 'filled', 'fillcolor': 'lightblue'}
@@ -58,4 +59,5 @@ dot.edge('cn_data', 'vae_contrastive', label=' Train using CN\n as ground truth\
 # dot.edge('latent_space', 'contrastive', label=' Applies to Latent Space', minlen='2', labeldistance='2')
 
 # Render the graph
+dot.save(f'vae_contrastive_pipeline.{dot._format}')
 dot.render('vae_contrastive_pipeline', view=True)
