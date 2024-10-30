@@ -21,3 +21,5 @@ vae_visualization.gv
 visualization/plate_edge_example
 vae_workflow_graph
 vae_contrastive_pipeline
+synthetic_data_pipeline/tb_logs
+graph
