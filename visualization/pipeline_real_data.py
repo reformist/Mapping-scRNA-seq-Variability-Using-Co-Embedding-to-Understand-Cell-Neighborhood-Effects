@@ -20,14 +20,18 @@ dot.node('cn_data', 'CN (Cell Neighborhoods)', **data_attrs)
 # Arrows for Synthetic Data Generation Step
 
 # MaxFuse Co-embedding Step
-dot.node('maxfuse', 'MaxFuse Co-embedding\n(RNA and Protein)', **process_attrs)
+dot.node('maxfuse', 'Train MaxFuse Co-embedding\n(RNA and Protein)', **process_attrs)
+dot.node('maxfuse_2', 'Inference MaxFuse Co-embedding\n(RNA and Protein)', **process_attrs)
 dot.node('co_embedding', 'Co-embedding Space\n(RNA & Protein)', **embedding_attrs)
 
 # Arrows for MaxFuse Step
 dot.edge('rna_data', 'maxfuse', label='Input')
 dot.edge('protein_data', 'maxfuse', label='Input')
-dot.edge('protein_data', 'cn_data', label='Input')
-dot.edge('maxfuse', 'co_embedding', label='Outputs')
+dot.edge('protein_data', 'cn_data', label='Inferred')
+dot.edge('maxfuse_2', 'co_embedding', label='Protein Co-Embeddings Outputs')
+dot.edge('protein_data', 'maxfuse_2', label='Protein Profile')
+dot.edge('maxfuse', 'maxfuse_2', label='Use Trained Model',color='red')
+# dot.edge('maxfuse', 'co_embedding', label='Protein co-embeddings Outputs')
 
 # VAE with Integrated Contrastive Learning
 dot.node('vae_contrastive', 'VAE with Integrated\nContrastive Learning', **model_attrs)
@@ -59,3 +63,4 @@ dot.edge('latent_space', 'contrastive', label='Applies to Latent Space')
 
 # Render the graph
 dot.render('vae_contrastive_pipeline', view=True)
+
