@@ -34,7 +34,7 @@ dot.edge('maxfuse', 'co_embedding', label=' Protein Co-Embeddings Outputs', minl
 # VAE with Integrated Contrastive Learning
 dot.node('vae_contrastive', 'VAE with Integrated\nContrastive Learning', **model_attrs)
 dot.node('vae_contrastive_2', 'VAE with Integrated\nContrastive Learning', **model_attrs)
-dot.node('latent_space', 'CN Aware RNA Latent Space -\nCan Be Used For Classification tasks', **embedding_attrs_2)
+dot.node('latent_space', 'CN Aware RNA Latent Space -\nCan Be Used For Predicting CN', **embedding_attrs_2)
 
 
 # Plate for Latent Space and Contrastive Learning
