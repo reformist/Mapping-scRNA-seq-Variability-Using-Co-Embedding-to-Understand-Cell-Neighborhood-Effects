@@ -1,3 +1,4 @@
+cat requirements.txt | xargs -n 1 pip install
 absl-py==2.1.0
 aiohappyeyeballs==2.4.3
 aiohttp==3.10.10
