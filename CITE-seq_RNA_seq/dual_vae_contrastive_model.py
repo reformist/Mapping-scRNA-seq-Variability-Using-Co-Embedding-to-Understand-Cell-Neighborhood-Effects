@@ -1,40 +1,20 @@
-from functools import partial
-import tempfile
-from collections import Counter
-
-import anndata as ad
-import matplotlib.pyplot as plt
-import mudata as md
-from anndata import AnnData
 # import muon
-import scanpy as sc
-import scvi
-import seaborn as sns
-import torch
 # ignore warnings
 import warnings
-import pandas as pd
-import numpy    as np
-import os
-import tempfile
-import torch.functional as F
-from orbax.checkpoint.metadata.tree_test import Custom
-from scipy.sparse import issparse
-from scvi.model import SCVI
-from scvi.train import TrainingPlan
-import torch
+from functools import partial
+
+import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import scvi
 import seaborn as sns
 import torch
-import scvi
-from pytorch_lightning.loggers import TensorBoardLogger
-from datetime import datetime
-
-from sklearn.metrics import silhouette_score
-from sklearn.cluster import KMeans
+from anndata import AnnData
+from scipy.sparse import issparse
+from scvi.model import SCVI
+from scvi.train import TrainingPlan
 
 # set pandas display options
 pd.set_option("display.max_columns", 10)
@@ -52,8 +32,8 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 adata_rna_subset = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_rna_subset.hd5ad.h5ad')
 adata_prot_subset = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_prot_subset.hd5ad.h5ad')
 # take subset of data
-adata_rna_subset = adata_rna_subset[adata_rna_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
-adata_prot_subset = adata_prot_subset[adata_prot_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
+# adata_rna_subset = adata_rna_subset[adata_rna_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
+# adata_prot_subset = adata_prot_subset[adata_prot_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
 
 
 sc.pp.neighbors(adata_prot_subset,key_added='original_neighbors')
@@ -70,6 +50,7 @@ sc.pl.umap(adata_rna_subset, color="cell_types",neighbors_key='original_neighbor
 class DualVAETrainingPlan(TrainingPlan):
     def __init__(self, rna_module, **kwargs):
         protein_vae = kwargs.pop('protein_vae')
+        rna_vae = kwargs.pop('rna_vae')
         linkage_matrix = kwargs.pop('linkage_matrix')
         contrastive_weight = kwargs.pop('contrastive_weight', 1.0)
 
@@ -77,6 +58,7 @@ class DualVAETrainingPlan(TrainingPlan):
         super().__init__(rna_module, **kwargs)
 
         # Now assign the attributes
+        self.rna_vae = rna_vae
         self.protein_vae = protein_vae
         self.linkage_matrix = linkage_matrix
         self.contrastive_weight = contrastive_weight
@@ -93,44 +75,34 @@ class DualVAETrainingPlan(TrainingPlan):
         # Call the base training step for standard loss computation for RNA VAE
         _, _, rna_loss_output = self.forward(batch)
         rna_loss = rna_loss_output.loss
-
-        # Get protein batch data
         protein_batch = self._get_protein_batch(batch)
-
-        # Compute protein loss using the protein_module's forward method
         _, _, protein_loss_output = self.protein_vae.module.forward(protein_batch)
         prot_loss = protein_loss_output.loss
 
-        # Get latent embeddings from RNA VAE
         rna_inference_outputs = self.module.inference(
             batch["X"], batch_index=batch["batch"], n_samples=1
         )
         rna_latent_embeddings = rna_inference_outputs["z"].squeeze(0)
 
-        # Get latent embeddings from Protein VAE
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
         protein_latent_embeddings = protein_inference_outputs["z"].squeeze(0)
-        torch.cdist(rna_latent_embeddings, protein_latent_embeddings, p=1)
-        matching_rna_protein_latent_distances = torch.norm(rna_latent_embeddings - protein_latent_embeddings, p=2, dim=1)
-        # Compute pairwise distances for linked cells
-        # distances = torch.cdist(rna_latent_embeddings, rna_latent_embeddings, p=2)
+        matching_rna_protein_latent_distances = torch.norm(rna_latent_embeddings - protein_latent_embeddings, p=2,
+                                                           dim=1)
         prot_distances = torch.cdist(protein_latent_embeddings, protein_latent_embeddings, p=2)
         rna_distances = torch.cdist(rna_latent_embeddings, rna_latent_embeddings, p=2)
         if False: # plot    histogram of distances prot and rna on top of each other after each epoch
             plt.hist(prot_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
             plt.hist(rna_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
             plt.show()
-        distances = rna_distances+prot_distances #+rna_distances
-        linked_mask = self._get_linked_mask(batch_idx, distances.shape)
+        distances = 0.1 * rna_distances + prot_distances  # +rna_distances
 
         # Contrastive loss
-        cell_neighborhood_info = batch["labels"].squeeze()
-        major_cell_type = batch["extra_categorical_covs"][:,0].squeeze()
+        index = batch["labels"].detach().cpu().numpy().squeeze()
+        cell_neighborhood_info = torch.tensor(self.rna_vae.adata[index].obs["CN"].values).to(device)
+        major_cell_type = torch.tensor(self.rna_vae.adata[index].obs["major_cell_types"].values.codes).to(device).squeeze()
 
-        # positive_pairs = distances[linked_mask]
-        # negative_pairs = distances[~linked_mask]
         num_cells = cell_neighborhood_info.shape[0]
         diagonal_mask = torch.eye(num_cells, dtype=torch.bool, device=cell_neighborhood_info.device)
         # this will give us each row represents a item in the array, and each col is whether it is the same as the items in that index of the col
@@ -168,34 +140,27 @@ class DualVAETrainingPlan(TrainingPlan):
         # contrastive_loss = positive_loss + negative_loss
         positive_loss = same_major_type_same_cn_loss
 
-        # TODO change to temperature, learnable,
         negative_loss = different_major_type_different_cn_loss + different_major_type_same_cn_loss + 2 * same_major_type_different_cn_loss
         cn_loss = (positive_loss.sum() + negative_loss.sum()) / (num_cells * (num_cells - 1))
 
-        # Combine losses
-
-        # Combine losses
         total_loss = (rna_loss*1+prot_loss*1 +
                       self.contrastive_weight * cn_loss+
-                      100*matching_rna_protein_latent_distances.mean())
-        # total_loss =   self.contrastive_weight * cn_loss
-
+                      30 * matching_rna_protein_latent_distances.mean())
         # Log losses
         self.log("train_rna_loss", rna_loss, prog_bar=True)
         self.log("train_contrastive_loss", cn_loss, prog_bar=True)
         self.log("train_total_loss", total_loss, prog_bar=True)
-        # print(sum(torch.sum(x) for x in protein_vae.module.parameters()))
+        # print(sum(torch.sum(x) for x in protein_vae.module.parac  q**eters()))
         return total_loss
 
     def _get_protein_batch(self, batch):
         # Implement logic to fetch the corresponding protein batch
-        indices = batch['extra_categorical_covs'][:,1].detach().cpu().numpy().flatten()  # Assuming batch contains indices
+        indices = batch['labels'].detach().cpu().numpy().flatten()  # Assuming batch contains indices
         protein_data = self.protein_vae.adata[indices]
         protein_batch = {
             'X': torch.tensor(protein_data.X.A if issparse(protein_data.X) else protein_data.X).to(device),
             'batch': torch.tensor(protein_data.obs['_scvi_batch'].values, dtype=torch.long).to(device),
-        'extra_categorical_covs':batch['extra_categorical_covs'],
-        'labels':batch['labels'].to(device)
+        'labels':torch.tensor(protein_data.obs['CN'].values.astype(int)).to(device),
         }
         return protein_batch
 
@@ -208,44 +173,46 @@ class DualVAETrainingPlan(TrainingPlan):
 # Setup anndata for RNA and Protein datasets
 adata_rna_subset.obs['index'] = np.arange(adata_rna_subset.shape[0])
 adata_prot_subset.obs['index'] = np.arange(adata_prot_subset.shape[0])
+
+sc.pp.pca(adata_rna_subset,n_comps=10)
+sc.pp.pca(adata_prot_subset,n_comps=10)
+# adata_rna_subset.obsm['archetype_vec'] = adata_rna_subset.obsm['X_pca'][:, :10]
+# adata_prot_subset.obsm['archetype_vec'] = adata_prot_subset.obsm['X_pca'][:, :10]
+for i in range(10):
+    adata_rna_subset.obs[f"archetype_vec_{i+1}"] = adata_rna_subset.obsm["X_pca"][:, i]
+for i in range(10):
+    adata_prot_subset.obs[f"archetype_vec_{i+1}"] = adata_prot_subset.obsm["X_pca"][:, i]
+
 SCVI.setup_anndata(
     adata_rna_subset,
-    labels_key="CN",
-    categorical_covariate_keys=["major_cell_types",'index'],
+    labels_key="index",
 )
 
 SCVI.setup_anndata(
     adata_prot_subset,
-    labels_key="CN",
-    categorical_covariate_keys=["major_cell_types",'index'],
+    labels_key="index",
 )
 
 # Initialize VAEs
 rna_vae = scvi.model.SCVI(adata_rna_subset, gene_likelihood="nb", n_hidden=128)
 protein_vae = scvi.model.SCVI(adata_prot_subset, gene_likelihood="poisson", n_hidden=50)
-protein_vae
-
-def custom_optimizer(params):
-    # protein_vae.module.parameters() # 27 params
-    # rna_vae.module.parameters() # 27 params
-    # return torch.optim.AdamW(list(protein_vae.module.parameters()) + list(params), lr=0.001, weight_decay=1e-5)
-    return torch.optim.AdamW(list(protein_vae.module.parameters()),lr=0.0001)
-
 
 # Create linkage matrix (define your own linkage based on your data)
 linkage_matrix = ...  # Should be defined based on your dataset
 
 # Initialize the custom TrainingPlan
-training_plan = partial(DualVAETrainingPlan,
-                        # rna_module=rna_vae.module,
-                        protein_vae=protein_vae,
-                        linkage_matrix=linkage_matrix,
-                        contrastive_weight=10.0,
+training_plan = DualVAETrainingPlan
 
-                        )
 # Assign the training plan to the SCVI model
 rna_vae._training_plan_cls = training_plan
 # Train the model
+# training_plan = partial(DualVAETrainingPlan,
+#                         # rna_module=rna_vae.module,
+#                         protein_vae=protein_vae,
+#                         linkage_matrix=linkage_matrix,
+#                         contrastive_weight=10.0,
+#
+#                         )
 rna_vae.train(
     check_val_every_n_epoch=1,
     max_epochs=300,
@@ -253,6 +220,11 @@ rna_vae.train(
     early_stopping_patience=70,
     early_stopping_monitor="elbo_validation",
     batch_size=200,
+    plan_kwargs={'protein_vae': protein_vae,
+                 'rna_vae': rna_vae,
+                 'linkage_matrix': linkage_matrix,
+                 'contrastive_weight': 10.0,
+                 }
 
 )
 
@@ -274,8 +246,10 @@ sc.tl.umap(adata_prot_subset,neighbors_key='latent_space_neighbors')
 # minor cell types
 # sc.pl.umap(adata_rna_subset[adata_rna_subset.obs['major_cell_types'] =='B cells'], color="CN",neighbors_key='latent_space_neighbors',title='Latent space, minor cell types (B-cells only) with observed CN')
 # make sure that the latent space of the protein and rna are aligned by plotting them on top of each other
-sc.pl.umap(adata_rna_subset, color="cell_types",neighbors_key='latent_space_neighbors',title='Latent space, minor cell types RNA',legend_loc='on data')
-sc.pl.umap(adata_prot_subset, color="cell_types",neighbors_key='latent_space_neighbors',title='Latent space, minor cell types Protein',legend_loc='on data')
+sc.pl.umap(adata_rna_subset, color="cell_types", neighbors_key='latent_space_neighbors',
+           title='Latent space, minor cell types RNA')
+sc.pl.umap(adata_prot_subset, color="cell_types", neighbors_key='latent_space_neighbors',
+           title='Latent space, minor cell types Protein')
 # Combine the latent embeddings into one AnnData object before plotting
 combined_latent = ad.concat([AnnData(adata_rna_subset.obsm[SCVI_LATENT_KEY]), AnnData(adata_prot_subset.obsm[SCVI_LATENT_KEY])], join='outer', label='modality', keys=['RNA', 'Protein'])
 
@@ -286,6 +260,7 @@ sc.pl.umap(combined_latent,  color='modality', title='Combined Latent space, min
 # plot hist of distances between cells of diffrent modalities in latent space
 combined_latent.obs['modality'] = combined_latent.obs['modality'].astype('category')
 rna_latent = combined_latent[combined_latent.obs['modality']=='RNA']
+rna_latent.obs['major_cell_types'] = adata_rna_subset.obs['major_cell_types'].values
 prot_latent = combined_latent[combined_latent.obs['modality']=='Protein']
 # calc distances with numpy
 dis = (np.linalg.norm(rna_latent.X-prot_latent.X,axis=1))
@@ -293,13 +268,27 @@ rand_rna_latent = rna_latent.copy()
 #  randomize order of cells in rna latent space
 shuffled_indices = np.random.permutation(rand_rna_latent.obs.index)
 
-# Reindex the AnnData object
 rand_rna_latent = rand_rna_latent[shuffled_indices].copy()
 
 rand_dis = np.linalg.norm(rand_rna_latent.X-prot_latent.X,axis=1)
 # plot the distances hist with seaborn
+
+rand_rna_latent.obs['latent_dis'] = np.log(dis)
+sc.pl.umap(rand_rna_latent, cmap='coolwarm',
+           color='latent_dis', title='Latent space distances between RNA and Protein cells')
+plt.show()
+
+rand_rna_latent = rna_latent.copy()
+# randomize cell per cell types:
+for cell_type in rand_rna_latent.obs['major_cell_types'].unique():
+    cell_type_indices = rand_rna_latent.obs['major_cell_types'] == cell_type
+    shuffled_indices = np.random.permutation(rand_rna_latent[cell_type_indices].obs.index)
+    rand_rna_latent.X[cell_type_indices] = rand_rna_latent[cell_type_indices][shuffled_indices].copy().X
+
+rand_dis_2 = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
+
 sns.histplot(dis, bins=100, color='blue', label='True distances')
+sns.histplot(rand_dis_2, bins=100, color='yellow', label='Randomized distances within cell types')
 sns.histplot(rand_dis, bins=100, color='red', label='Randomized distances')
 plt.legend()
 plt.show()
-
