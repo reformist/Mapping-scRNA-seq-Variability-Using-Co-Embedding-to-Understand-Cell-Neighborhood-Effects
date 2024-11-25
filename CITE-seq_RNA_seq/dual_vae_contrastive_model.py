@@ -74,32 +74,39 @@ class DualVAETrainingPlan(TrainingPlan):
     def training_step(self, batch, batch_idx):
         # Call the base training step for standard loss computation for RNA VAE
         _, _, rna_loss_output = self.forward(batch)
-        rna_loss = rna_loss_output.loss
         protein_batch = self._get_protein_batch(batch)
         _, _, protein_loss_output = self.protein_vae.module.forward(protein_batch)
-        prot_loss = protein_loss_output.loss
-
         rna_inference_outputs = self.module.inference(
             batch["X"], batch_index=batch["batch"], n_samples=1
         )
+        index = batch["labels"].detach().cpu().numpy().squeeze()
+
         rna_latent_embeddings = rna_inference_outputs["z"].squeeze(0)
 
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
         protein_latent_embeddings = protein_inference_outputs["z"].squeeze(0)
-        matching_rna_protein_latent_distances = torch.norm(rna_latent_embeddings - protein_latent_embeddings, p=2,
-                                                           dim=1)
+        rna_index= index
+        protein_index= index
+        archetype_distances = self.rna_vae.adata.obsm['archetype_distances'][rna_index,:][:, protein_index]
+        rna_locs,protein_locs=np.where(archetype_distances < archetype_distances.mean()*0.5)
+        archetype_distances.argmin(0)
+        # rna_latent_embeddings_cpu = rna_latent_embeddings.detach().cpu().numpy()
+        # protein_latent_embeddings_cpu = protein_latent_embeddings.detach().cpu().numpy()
+        similar_archetypes_dis = torch.norm(rna_latent_embeddings[rna_locs] - protein_latent_embeddings[protein_locs], p=2, dim=1)
+        # matching_rna_protein_latent_distances = torch.norm(rna_latent_embeddings - protein_latent_embeddings, p=2,
+        #                                                    dim=1)
+        matching_rna_protein_latent_distances = similar_archetypes_dis.mean()
         prot_distances = torch.cdist(protein_latent_embeddings, protein_latent_embeddings, p=2)
         rna_distances = torch.cdist(rna_latent_embeddings, rna_latent_embeddings, p=2)
-        if False: # plot    histogram of distances prot and rna on top of each other after each epoch
+        if False: # plot histogram of distances prot and rna on top of each other after each epoch
             plt.hist(prot_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
             plt.hist(rna_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
             plt.show()
         distances = 0.1 * rna_distances + prot_distances  # +rna_distances
 
         # Contrastive loss
-        index = batch["labels"].detach().cpu().numpy().squeeze()
         cell_neighborhood_info = torch.tensor(self.rna_vae.adata[index].obs["CN"].values).to(device)
         major_cell_type = torch.tensor(self.rna_vae.adata[index].obs["major_cell_types"].values.codes).to(device).squeeze()
 
@@ -143,13 +150,15 @@ class DualVAETrainingPlan(TrainingPlan):
         negative_loss = different_major_type_different_cn_loss + different_major_type_same_cn_loss + 2 * same_major_type_different_cn_loss
         cn_loss = (positive_loss.sum() + negative_loss.sum()) / (num_cells * (num_cells - 1))
 
-        total_loss = (rna_loss*1+prot_loss*1 +
+        total_loss = (rna_loss_output.loss*1+protein_loss_output.loss*1 +
                       self.contrastive_weight * cn_loss+
                       30 * matching_rna_protein_latent_distances.mean())
         # Log losses
-        self.log("train_rna_loss", rna_loss, prog_bar=True)
+        self.log("train_rna_loss", rna_loss_output.loss, prog_bar=True)
+        self.log("train_protein_loss", protein_loss_output.loss, prog_bar=True)
         self.log("train_contrastive_loss", cn_loss, prog_bar=True)
         self.log("train_total_loss", total_loss, prog_bar=True)
+        self.log("train_matching_rna_protein_latent_distances", matching_rna_protein_latent_distances.mean(), prog_bar=True)
         # print(sum(torch.sum(x) for x in protein_vae.module.parac  q**eters()))
         return total_loss
 
@@ -164,11 +173,6 @@ class DualVAETrainingPlan(TrainingPlan):
         }
         return protein_batch
 
-    def _get_linked_mask(self, batch_idx, shape):
-        # Create a mask for linked cells (assuming one-to-one mapping)
-        mask = torch.eye(shape[0], dtype=torch.bool, device=self.module.device)
-        return mask
-
 
 # Setup anndata for RNA and Protein datasets
 adata_rna_subset.obs['index'] = np.arange(adata_rna_subset.shape[0])
@@ -176,12 +180,19 @@ adata_prot_subset.obs['index'] = np.arange(adata_prot_subset.shape[0])
 
 sc.pp.pca(adata_rna_subset,n_comps=10)
 sc.pp.pca(adata_prot_subset,n_comps=10)
-# adata_rna_subset.obsm['archetype_vec'] = adata_rna_subset.obsm['X_pca'][:, :10]
-# adata_prot_subset.obsm['archetype_vec'] = adata_prot_subset.obsm['X_pca'][:, :10]
+adata_rna_subset.obsm['archetype_vec'] = adata_rna_subset.obsm['X_pca'][:, :10]
+adata_prot_subset.obsm['archetype_vec'] = adata_prot_subset.obsm['X_pca'][:, :10]
 for i in range(10):
     adata_rna_subset.obs[f"archetype_vec_{i+1}"] = adata_rna_subset.obsm["X_pca"][:, i]
 for i in range(10):
     adata_prot_subset.obs[f"archetype_vec_{i+1}"] = adata_prot_subset.obsm["X_pca"][:, i]
+# set the archtyeps distances from rna to protein
+# calc th archtype distances
+archetype_distances = np.linalg.norm(adata_rna_subset.obsm['archetype_vec'][:,None] - adata_prot_subset.obsm['archetype_vec'][None,:], axis=2,ord=2)
+# set the archetype distances to the rna adata
+sns.heatmap(archetype_distances)
+plt.show()
+adata_rna_subset.obsm['archetype_distances'] = archetype_distances
 
 SCVI.setup_anndata(
     adata_rna_subset,
@@ -205,17 +216,10 @@ training_plan = DualVAETrainingPlan
 
 # Assign the training plan to the SCVI model
 rna_vae._training_plan_cls = training_plan
-# Train the model
-# training_plan = partial(DualVAETrainingPlan,
-#                         # rna_module=rna_vae.module,
-#                         protein_vae=protein_vae,
-#                         linkage_matrix=linkage_matrix,
-#                         contrastive_weight=10.0,
-#
-#                         )
+
 rna_vae.train(
     check_val_every_n_epoch=1,
-    max_epochs=300,
+    max_epochs=10,
     early_stopping=True,
     early_stopping_patience=70,
     early_stopping_monitor="elbo_validation",
@@ -225,9 +229,7 @@ rna_vae.train(
                  'linkage_matrix': linkage_matrix,
                  'contrastive_weight': 10.0,
                  }
-
 )
-
 SCVI_LATENT_KEY = "X_scVI"
 protein_vae.module.to('cpu')
 protein_vae.is_trained = True
@@ -256,7 +258,8 @@ combined_latent = ad.concat([AnnData(adata_rna_subset.obsm[SCVI_LATENT_KEY]), An
 # Plot the combined latent space
 sc.pp.neighbors(combined_latent)
 sc.tl.umap(combined_latent)
-sc.pl.umap(combined_latent,  color='modality', title='Combined Latent space, minor cell types')
+sc.pl.umap(combined_latent,  color='modality',
+           title='Combined Latent space, minor cell types',legend_loc='center')
 # plot hist of distances between cells of diffrent modalities in latent space
 combined_latent.obs['modality'] = combined_latent.obs['modality'].astype('category')
 rna_latent = combined_latent[combined_latent.obs['modality']=='RNA']
@@ -275,7 +278,8 @@ rand_dis = np.linalg.norm(rand_rna_latent.X-prot_latent.X,axis=1)
 
 rand_rna_latent.obs['latent_dis'] = np.log(dis)
 sc.pl.umap(rand_rna_latent, cmap='coolwarm',
-           color='latent_dis', title='Latent space distances between RNA and Protein cells')
+           color='latent_dis',
+           title='Latent space distances between RNA and Protein cells')
 plt.show()
 
 rand_rna_latent = rna_latent.copy()
