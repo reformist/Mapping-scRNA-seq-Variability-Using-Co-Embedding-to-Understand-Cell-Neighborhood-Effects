@@ -182,10 +182,6 @@ sc.pp.pca(adata_rna_subset,n_comps=10)
 sc.pp.pca(adata_prot_subset,n_comps=10)
 adata_rna_subset.obsm['archetype_vec'] = adata_rna_subset.obsm['X_pca'][:, :10]
 adata_prot_subset.obsm['archetype_vec'] = adata_prot_subset.obsm['X_pca'][:, :10]
-for i in range(10):
-    adata_rna_subset.obs[f"archetype_vec_{i+1}"] = adata_rna_subset.obsm["X_pca"][:, i]
-for i in range(10):
-    adata_prot_subset.obs[f"archetype_vec_{i+1}"] = adata_prot_subset.obsm["X_pca"][:, i]
 # set the archtyeps distances from rna to protein
 # calc th archtype distances
 archetype_distances = np.linalg.norm(adata_rna_subset.obsm['archetype_vec'][:,None] - adata_prot_subset.obsm['archetype_vec'][None,:], axis=2,ord=2)
