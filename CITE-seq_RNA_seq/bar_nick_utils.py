@@ -136,8 +136,8 @@ def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict):
     adata_prot_subset.obs['Y'] = np.random.randint(0, 1000, adata_prot_subset.n_obs)
     minor_to_region_dict = {}
     for i, (cell_type_1, cell_type_2, cell_type_3) in enumerate(
-            zip_longest(major_to_minor_dict['B cells'], major_to_minor_dict['T cells-2'],
-                        major_to_minor_dict['T cells-1'])):
+            zip_longest(major_to_minor_dict['B cells'], major_to_minor_dict['CD4 T'],
+                        major_to_minor_dict['CD8 T'])):
         minor_to_region_dict[(cell_type_1, cell_type_2, cell_type_3)] = i
 
     # Place the cells in the regions
