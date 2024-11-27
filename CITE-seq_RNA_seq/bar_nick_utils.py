@@ -1,5 +1,7 @@
 # funciton to avoid too much text in the notebook
 from itertools import product, zip_longest
+from typing import List
+
 import scanpy as sc
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,37 +24,201 @@ from py_pcha import PCHA
 # !pip install histomicstk --find-links https://girder.github.io/large_image_wheels
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-
+from torch.backends.mkl import verbose
 
 # computationally figure out which ones are best
 np.random.seed(8)
 plot_flag = False
 
 from scipy.optimize import nnls
-def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
+import cvxpy as cp
+from sklearn.linear_model import OrthogonalMatchingPursuit
+
+
+
+
+def nnls_omp(basis_matrix, target_vector, tol=1e-4):
+    omp = OrthogonalMatchingPursuit(tol=tol, fit_intercept=False)
+    omp.fit(basis_matrix.T, target_vector)
+    weights = omp.coef_
+    weights = np.maximum(0, weights)  # Enforce non-negativity
+    return weights
+
+import numpy as np
+# from sklearn.linear_model import OrthogonalMatchingPursuit
+#
+#
+# def nnls_omp(basis_matrix, target_vector, tol=1e-6):
+#     """
+#     Solve the non-negative least squares problem approximately using OMP.
+#
+#     Parameters:
+#     -----------
+#     basis_matrix : np.ndarray
+#         Matrix of basis vectors, shape (n_basis_vectors, n_features).
+#     target_vector : np.ndarray
+#         Target vector to approximate, shape (n_features,).
+#     tol : float, optional
+#         Tolerance for reconstruction error (default is 1e-6).
+#
+#     Returns:
+#     --------
+#     weights : np.ndarray
+#         Weights for the linear combination of basis vectors, shape (n_basis_vectors,).
+#     """
+#     # Initialize Orthogonal Matching Pursuit model
+#     omp = OrthogonalMatchingPursuit(tol=tol, fit_intercept=False)
+#     omp.fit(basis_matrix.T, target_vector)
+#     weights = omp.coef_
+#
+#     # Enforce non-negativity (optional, depending on your requirement)
+#     weights = np.maximum(0, weights)
+#
+#     return weights
+
+def get_cell_representations_as_archetypes_ols(count_matrix, archetype_matrix):
     """
-    Compute the linear combination weights of archetypes for each cell.
+    Compute archetype weights for each cell using Ordinary Least Squares (OLS).
+
     Parameters:
     -----------
     count_matrix : np.ndarray
-        Matrix of cells in reduced-dimensional space (e.g., PCA) [n_cells, n_features].
+        Matrix of cells in reduced-dimensional space (e.g., PCA),
+        shape (n_cells, n_features).
     archetype_matrix : np.ndarray
-        Matrix of archetypes [n_archetypes, n_features].
+        Matrix of archetypes,
+        shape (n_archetypes, n_features).
+
     Returns:
     --------
     weights : np.ndarray
-        Matrix of archetype weights for each cell [n_cells, n_archetypes].
-        Rows sum to 1.
+        Matrix of archetype weights for each cell,
+        shape (n_cells, n_archetypes).
     """
     n_cells = count_matrix.shape[0]
     n_archetypes = archetype_matrix.shape[0]
-    # Initialize weight matrix
     weights = np.zeros((n_cells, n_archetypes))
-    # For each cell, solve the NNLS problem
+
+    # Transpose the archetype matrix
+    A_T = archetype_matrix.T  # Shape: (n_features, n_archetypes)
+
+    # For each cell, solve the least squares problem
     for i in range(n_cells):
-        weights[i], _ = nnls(archetype_matrix.T, count_matrix[i])
-    # Normalize rows to sum to 1
+        x = count_matrix[i]
+        # Solve for w in A_T w = x
+        w, residuals, rank, s = np.linalg.lstsq(A_T, x, rcond=None)
+        weights[i] = w
+
+    return weights
+
+
+def get_cell_representations_as_archetypes_omp(count_matrix, archetype_matrix, tol=1e-4):
+    # Preprocess archetype matrix
+
+    n_cells = count_matrix.shape[0]
+    n_archetypes = archetype_matrix.shape[0]
+    weights = np.zeros((n_cells, n_archetypes))
+
+    for i in range(n_cells):
+        weights[i] = nnls_omp(archetype_matrix, count_matrix[i], tol=tol)
+
+    # Handle zero rows
+    row_sums = weights.sum(axis=1, keepdims=True)
+    weights[row_sums == 0] = 1.0 / n_archetypes  # Assign uniform weights to zero rows
+
+    # Normalize weights
     weights /= weights.sum(axis=1, keepdims=True)
+
+    return weights
+
+
+# def get_cell_representations_as_archetypes_omp(count_matrix, archetype_matrix):
+#     """
+#     Compute archetype weights for each cell using OMP.
+#     """
+#     n_cells = count_matrix.shape[0]
+#     n_archetypes = archetype_matrix.shape[0]
+#     weights = np.zeros((n_cells, n_archetypes))
+#     for i in range(n_cells):
+#         weights[i] = nnls_omp(archetype_matrix.T, count_matrix[i])
+#     weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
+#     return weights
+
+def nnls_cvxpy(A, b):
+    """
+    Solve the NNLS problem using cvxpy.
+    """
+    n_features = A.shape[1]
+    x = cp.Variable(n_features, nonneg=True)
+    objective = cp.Minimize(cp.sum_squares(A @ x - b))
+    problem = cp.Problem(objective)
+    problem.solve()
+    return x.value
+import numpy as np
+import cvxpy as cp
+
+import numpy as np
+import cvxpy as cp
+
+def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix, solver=cp.ECOS):
+    """
+    Compute archetype weights for each cell using constrained optimization (non-negative least squares).
+
+    Parameters:
+    -----------
+    count_matrix : np.ndarray
+        Matrix of cells in reduced-dimensional space,
+        shape (n_cells, n_features).
+    archetype_matrix : np.ndarray
+        Matrix of archetypes,
+        shape (n_archetypes, n_features).
+    solver : cvxpy solver, optional
+        Solver to use for optimization. Default is cp.ECOS.
+
+    Returns:
+    --------
+    weights : np.ndarray
+        Non-negative weights for each cell,
+        shape (n_cells, n_archetypes).
+    """
+    n_cells = count_matrix.shape[0]
+    n_archetypes = archetype_matrix.shape[0]
+    weights = np.zeros((n_cells, n_archetypes))
+
+    A_T = archetype_matrix.T  # Shape: (n_features, n_archetypes)
+    assert not np.isnan(count_matrix).any(), "count_matrix contains NaNs"
+    assert not np.isinf(count_matrix).any(), "count_matrix contains infinities"
+    assert not np.isnan(archetype_matrix).any(), "archetype_matrix contains NaNs"
+    assert not np.isinf(archetype_matrix).any(), "archetype_matrix contains infinities"
+
+    for i in range(n_cells):
+        x = count_matrix[i]
+        w = cp.Variable(n_archetypes)
+        objective = cp.Minimize(cp.sum_squares(A_T @ w - x))
+        constraints = [w >= 0]
+        problem = cp.Problem(objective, constraints)
+        try:
+            problem.solve(solver=solver)
+        except cp.SolverError:
+            problem.solve(solver=cp.SCS)  # Try SCS if the primary solver fails
+        weights[i] = w.value
+
+    return weights
+
+
+
+
+
+def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
+    """
+    Compute archetype weights for each cell using cvxpy.
+    """
+    n_cells = count_matrix.shape[0]
+    n_archetypes = archetype_matrix.shape[0]
+    weights = np.zeros((n_cells, n_archetypes))
+    for i in range(n_cells):
+        weights[i],_ = nnls(archetype_matrix.T, count_matrix[i])
+    weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
     return weights
 
 def preprocess_rna(adata, adata_rna):
@@ -202,7 +368,9 @@ def plot_torch_normal(mean, std_dev, num_points=1000):
 
 
 
-def plot_archetypes(data_points,archetype,samples_cell_types):
+def plot_archetypes(data_points,archetype,samples_cell_types:List[str]):
+    if not isinstance(samples_cell_types, List):
+        raise TypeError("samples_cell_types should be a list of strings.")
     categories = np.unique(samples_cell_types)
     num_categories = len(categories) + 1
     colormap = plt.cm.get_cmap("tab20", num_categories)  # Use a categorical colormap like 'tab20'
