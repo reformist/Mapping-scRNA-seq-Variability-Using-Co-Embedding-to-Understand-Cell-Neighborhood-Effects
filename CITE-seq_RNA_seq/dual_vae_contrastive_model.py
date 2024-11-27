@@ -1,8 +1,5 @@
-# import muon
-# ignore warnings
 import warnings
 from functools import partial
-
 import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +12,7 @@ from anndata import AnnData
 from scipy.sparse import issparse
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
+from datetime import datetime
 
 # set pandas display options
 pd.set_option("display.max_columns", 10)
@@ -29,12 +27,48 @@ np.random.seed(0)
 torch.random.manual_seed(0)
 plot_flag = False
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
-adata_rna_subset = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_rna_subset.hd5ad.h5ad')
-adata_prot_subset = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_prot_subset.hd5ad.h5ad')
-# take subset of data
-# adata_rna_subset = adata_rna_subset[adata_rna_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
-# adata_prot_subset = adata_prot_subset[adata_prot_subset.obs['major_cell_types'].isin([ 'B cells'])].copy()
+adata_rna = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_rna_subset.hd5ad.h5ad')
+adata_prot = sc.read('/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_prot_subset.hd5ad.h5ad')
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+save_dir = f"scvi_vae_model_{timestamp}"
+# sample subset of data using scanpy
+rna_archetype_vecs = pd.read_csv('data/rna_weights.csv',index_col = 0)
+protein_archetype_vecs = pd.read_csv('data/protein_weights.csv',index_col = 0)
+rna_archetype_vecs.index = adata_rna.obs.index
+protein_archetype_vecs.index = adata_prot.obs.index
+protein_mapping = ['Red blood cells', 'T cells-2', 'Plasmacytoid dendritic cells','Natural killer T cells', 'Natural killer cells', 'Neutrophils', 'Dendritic cells', 'Regulatory T cells', 'Monocytes', 'Macrophages', 'Conventional dendritic cells', 'B cells', 'T cells-1' ]
+gene_mapping = ['Monocytes', 'T cells-2', 'T cells-1', 'Macrophages', 'Neutrophils', 'Red blood cells', 'Natural killer cells', 'Conventional dendritic cells', 'Regulatory T cells', 'Dendritic cells', 'Natural killer T cells','Plasmacytoid dendritic cells', 'B cells' ]
+gene_argsort_indices = [i for i, _ in sorted(enumerate(gene_mapping), key=lambda x: x[1])]
+protein_argsort_indices = [i for i, _ in sorted(enumerate(protein_mapping), key=lambda x: x[1])]
+rna_archetype_vecs = rna_archetype_vecs.iloc[:,gene_argsort_indices]
+protein_archetype_vecs = protein_archetype_vecs.iloc[:,protein_argsort_indices]
+adata_rna.obsm['archetype_vec'] = rna_archetype_vecs
+adata_prot.obsm['archetype_vec'] = protein_archetype_vecs
+from sklearn.decomposition import PCA
+pca_1 = PCA(n_components=2).fit_transform(rna_archetype_vecs.iloc[:,:2])
+pca_2 = PCA(n_components=2).fit_transform(protein_archetype_vecs.iloc[:,:2])
+# plot the pca of the archetype vecs
+sns.heatmap(rna_archetype_vecs.div(rna_archetype_vecs.sum(axis=0), axis=1))
+plt.show()
+# rna_archetype_vecs = (rna_archetype_vecs - rna_archetype_vecs.min()) / (rna_archetype_vecs.max() - rna_archetype_vecs.min())
+# protein_archetype_vecs = (protein_archetype_vecs - protein_archetype_vecs.min()) / (protein_archetype_vecs.max() - protein_archetype_vecs.min())
+rna_archetype_vecs = (rna_archetype_vecs - rna_archetype_vecs.mean()) / rna_archetype_vecs.std()
+protein_archetype_vecs = (protein_archetype_vecs - protein_archetype_vecs.mean()) / protein_archetype_vecs.std()
+sns.heatmap(np.log1p(rna_archetype_vecs))
+plt.show()
 
+plt.scatter(pca_1[:,0],pca_1[:,1],label='RNA archetype vecs')
+plt.scatter(pca_2[:,0],pca_2[:,1],label='Protein archetype vecs')
+# make the color of the celes thier tyeps
+plt.scatter(pca_1[:,0],pca_1[:,1],c=pd.Categorical(adata_rna.obs['major_cell_types'].values.codes),label='RNA cells')
+plt.scatter(pca_2[:,0],pca_2[:,1],c=pd.Categorical(adata_prot.obs['major_cell_types'].values.codes),label='RNA cells')
+plt.legend()
+plt.show()
+
+
+adata_rna_subset = sc.pp.subsample(adata_rna, fraction=1, copy=True)
+adata_prot_subset = sc.pp.subsample(adata_prot, fraction=1, copy=True)
+del adata_rna, adata_prot
 
 sc.pp.neighbors(adata_prot_subset,key_added='original_neighbors')
 sc.pp.neighbors(adata_rna_subset,key_added='original_neighbors')
@@ -43,6 +77,8 @@ sc.tl.umap(adata_rna_subset,neighbors_key='original_neighbors')
 
 sc.pl.umap(adata_prot_subset, color="cell_types",neighbors_key='original_neighbors',title='Original protein data minor cell types')
 sc.pl.umap(adata_rna_subset, color="cell_types",neighbors_key='original_neighbors',title='Original RNA data minor cell types')
+sc.pl.umap(adata_rna_subset, color="CN",neighbors_key='original_neighbors',title='Original RNA data CN')
+sc.pl.umap(adata_prot_subset, color="CN",neighbors_key='original_neighbors',title='Original protein data CN')
 # sc.pl.umap(adata_prot_subset, color="major_cell_types",neighbors_key='original_neighbors',title='Original protein data major cell types')
 # sc.pl.umap(adata_rna_subset, color="major_cell_types",neighbors_key='original_neighbors',title='Original RNA data major cell types')
 # sc.pl.umap(adata_prot_subset[adata_prot_subset.obs['major_cell_types'] =='B cells'], color="cell_types",neighbors_key='original_neighbors',title='Latent space MINOR cell types, B cells only')
@@ -51,7 +87,6 @@ class DualVAETrainingPlan(TrainingPlan):
     def __init__(self, rna_module, **kwargs):
         protein_vae = kwargs.pop('protein_vae')
         rna_vae = kwargs.pop('rna_vae')
-        linkage_matrix = kwargs.pop('linkage_matrix')
         contrastive_weight = kwargs.pop('contrastive_weight', 1.0)
 
         # Call super().__init__() after removing custom kwargs
@@ -60,7 +95,6 @@ class DualVAETrainingPlan(TrainingPlan):
         # Now assign the attributes
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
-        self.linkage_matrix = linkage_matrix
         self.contrastive_weight = contrastive_weight
         self.protein_vae.module = self.protein_vae.module.to(device)
 
@@ -87,22 +121,25 @@ class DualVAETrainingPlan(TrainingPlan):
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
         protein_latent_embeddings = protein_inference_outputs["z"].squeeze(0)
-        rna_index= index
-        protein_index= index
+        rna_index=protein_index= index
+
         archetype_distances = self.rna_vae.adata.obsm['archetype_distances'][rna_index,:][:, protein_index]
-        rna_locs,protein_locs=np.where(archetype_distances < archetype_distances.mean()*0.5)
-        archetype_distances.argmin(0)
+        # rna_locs,protein_locs=np.where(archetype_distances < archetype_distances.mean()*0.3)
+        rna_locs,protein_locs=np.where(archetype_distances < np.percentile(archetype_distances,0.4))
         # rna_latent_embeddings_cpu = rna_latent_embeddings.detach().cpu().numpy()
         # protein_latent_embeddings_cpu = protein_latent_embeddings.detach().cpu().numpy()
         similar_archetypes_dis = torch.norm(rna_latent_embeddings[rna_locs] - protein_latent_embeddings[protein_locs], p=2, dim=1)
+        # the next line assumes that the rna and protein latent embeddings are in the same order
         # matching_rna_protein_latent_distances = torch.norm(rna_latent_embeddings - protein_latent_embeddings, p=2,
         #                                                    dim=1)
+        # the next line uses the archetype distances to find the matching rna and protein cells
         matching_rna_protein_latent_distances = similar_archetypes_dis.mean()
         prot_distances = torch.cdist(protein_latent_embeddings, protein_latent_embeddings, p=2)
         rna_distances = torch.cdist(rna_latent_embeddings, rna_latent_embeddings, p=2)
         if False: # plot histogram of distances prot and rna on top of each other after each epoch
             plt.hist(prot_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
             plt.hist(rna_distances.detach().cpu().numpy().flatten(),bins=100,alpha=0.5)
+            plt.hist(archetype_distances.flatten(), bins=100, alpha=0.5)
             plt.show()
         distances = 0.1 * rna_distances + prot_distances  # +rna_distances
 
@@ -160,6 +197,8 @@ class DualVAETrainingPlan(TrainingPlan):
         self.log("train_total_loss", total_loss, prog_bar=True)
         self.log("train_matching_rna_protein_latent_distances", matching_rna_protein_latent_distances.mean(), prog_bar=True)
         # print(sum(torch.sum(x) for x in protein_vae.module.parac  q**eters()))
+        if self.current_epoch % 50 == 0:
+            rna_vae.save(save_dir, prefix=f'batch_{batch_idx}_', save_anndata=False, overwrite=True)
         return total_loss
 
     def _get_protein_batch(self, batch):
@@ -175,57 +214,57 @@ class DualVAETrainingPlan(TrainingPlan):
 
 
 # Setup anndata for RNA and Protein datasets
-adata_rna_subset.obs['index'] = np.arange(adata_rna_subset.shape[0])
-adata_prot_subset.obs['index'] = np.arange(adata_prot_subset.shape[0])
-
-sc.pp.pca(adata_rna_subset,n_comps=10)
-sc.pp.pca(adata_prot_subset,n_comps=10)
-adata_rna_subset.obsm['archetype_vec'] = adata_rna_subset.obsm['X_pca'][:, :10]
-adata_prot_subset.obsm['archetype_vec'] = adata_prot_subset.obsm['X_pca'][:, :10]
+adata_rna_subset.obs['index_col'] = np.arange(adata_rna_subset.shape[0])
+adata_prot_subset.obs['index_col'] = np.arange(adata_prot_subset.shape[0])
+sc.pp.pca(adata_rna_subset,n_comps=50)
+sc.pp.pca(adata_prot_subset,n_comps=40)
+if 'archetype_vec' not in adata_rna_subset.obsm.keys():
+    # raise Exception('archetype_vec not in adata_rna_subset.obsm.keys()')
+    same_arr = adata_rna_subset.obsm['X_pca'][:, :10].copy()
+    adata_rna_subset.obsm['archetype_vec'] = pd.DataFrame(same_arr)
+    adata_prot_subset.obsm['archetype_vec'] = pd.DataFrame(same_arr)
 # set the archtyeps distances from rna to protein
 # calc th archtype distances
-archetype_distances = np.linalg.norm(adata_rna_subset.obsm['archetype_vec'][:,None] - adata_prot_subset.obsm['archetype_vec'][None,:], axis=2,ord=2)
+archetype_distances = np.linalg.norm(adata_rna_subset.obsm['archetype_vec'].values[:,None] - adata_prot_subset.obsm['archetype_vec'].values[None,:], axis=2,ord=2)
 # set the archetype distances to the rna adata
 sns.heatmap(archetype_distances)
 plt.show()
 adata_rna_subset.obsm['archetype_distances'] = archetype_distances
+# adata_rna_subset.X = adata_rna_subset.obsm["X_pca"]
+# adata_prot_subset.X = adata_prot_subset.obsm["X_pca"]
 
 SCVI.setup_anndata(
     adata_rna_subset,
-    labels_key="index",
+    labels_key="index_col",
 )
 
 SCVI.setup_anndata(
     adata_prot_subset,
-    labels_key="index",
+    labels_key="index_col",
 )
 
 # Initialize VAEs
 rna_vae = scvi.model.SCVI(adata_rna_subset, gene_likelihood="nb", n_hidden=128)
-protein_vae = scvi.model.SCVI(adata_prot_subset, gene_likelihood="poisson", n_hidden=50)
-
-# Create linkage matrix (define your own linkage based on your data)
-linkage_matrix = ...  # Should be defined based on your dataset
-
-# Initialize the custom TrainingPlan
-training_plan = DualVAETrainingPlan
-
-# Assign the training plan to the SCVI model
-rna_vae._training_plan_cls = training_plan
+protein_vae = scvi.model.SCVI(adata_prot_subset, gene_likelihood="nb", n_hidden=50)
+rna_vae._training_plan_cls = DualVAETrainingPlan
+rna_vae.save(save_dir, prefix='before_training_',save_anndata=True,overwrite=True) # to save the adata
 
 rna_vae.train(
     check_val_every_n_epoch=1,
-    max_epochs=10,
+    max_epochs=200,
     early_stopping=True,
     early_stopping_patience=70,
     early_stopping_monitor="elbo_validation",
-    batch_size=200,
+    batch_size=256,
     plan_kwargs={'protein_vae': protein_vae,
                  'rna_vae': rna_vae,
-                 'linkage_matrix': linkage_matrix,
                  'contrastive_weight': 10.0,
                  }
 )
+train_test_results = rna_vae.history["train_total_loss"]
+train_test_results["elbo_validation"] = rna_vae.history["elbo_validation"]
+train_test_results.iloc[:].plot(logy=True)  # exclude first 10 epochs
+plt.show()
 SCVI_LATENT_KEY = "X_scVI"
 protein_vae.module.to('cpu')
 protein_vae.is_trained = True
@@ -248,6 +287,10 @@ sc.pl.umap(adata_rna_subset, color="cell_types", neighbors_key='latent_space_nei
            title='Latent space, minor cell types RNA')
 sc.pl.umap(adata_prot_subset, color="cell_types", neighbors_key='latent_space_neighbors',
            title='Latent space, minor cell types Protein')
+sc.pl.umap(adata_rna_subset, color="CN", neighbors_key='latent_space_neighbors',
+           title='Latent space, CN RNA')
+sc.pl.umap(adata_prot_subset, color="CN", neighbors_key='latent_space_neighbors',
+              title='Latent space, CN Protein')
 # Combine the latent embeddings into one AnnData object before plotting
 combined_latent = ad.concat([AnnData(adata_rna_subset.obsm[SCVI_LATENT_KEY]), AnnData(adata_prot_subset.obsm[SCVI_LATENT_KEY])], join='outer', label='modality', keys=['RNA', 'Protein'])
 
@@ -286,9 +329,12 @@ for cell_type in rand_rna_latent.obs['major_cell_types'].unique():
     rand_rna_latent.X[cell_type_indices] = rand_rna_latent[cell_type_indices][shuffled_indices].copy().X
 
 rand_dis_2 = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
+# save the model with a timestamp
 
+
+sns.histplot(rand_dis, bins=100, color='red', label='Randomized distances')
 sns.histplot(dis, bins=100, color='blue', label='True distances')
 sns.histplot(rand_dis_2, bins=100, color='yellow', label='Randomized distances within cell types')
-sns.histplot(rand_dis, bins=100, color='red', label='Randomized distances')
 plt.legend()
 plt.show()
+
