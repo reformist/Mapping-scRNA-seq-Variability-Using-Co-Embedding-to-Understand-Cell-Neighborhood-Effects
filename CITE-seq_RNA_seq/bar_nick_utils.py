@@ -4,6 +4,28 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import numpy as np
+# import starfysh
+import pandas as pd
+import scanpy as sc
+import seaborn as sns
+from anndata import AnnData
+# import starfysh
+from matplotlib import pyplot as plt
+from py_pcha import PCHA
+# !pip install starfysh
+# !pip install pandas
+# !pip install scanpy
+# !pip install histomicstk
+# !pip install --upgrade pip setuptools wheel
+# !pip install pyvips --use-pep517
+# !pip install histomicstk --find-links https://girder.github.io/large_image_wheels
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+
+# computationally figure out which ones are best
+np.random.seed(8)
 plot_flag = False
 
 from scipy.optimize import nnls
@@ -177,3 +199,87 @@ def plot_torch_normal(mean, std_dev, num_points=1000):
     plt.ylabel("Density")
     plt.legend()
     plt.grid()
+
+
+
+def plot_archetypes(data_points,archetype,samples_cell_types):
+    categories = np.unique(samples_cell_types)
+    num_categories = len(categories) + 1
+    colormap = plt.cm.get_cmap("tab20", num_categories)  # Use a categorical colormap like 'tab20'
+    labels = ["data"] * len(data_points) + ["archetype"] * len(archetype)
+    cell_types = samples_cell_types + ['archetype'] * len(archetype)  # -1 for archetypes
+    data = np.concatenate((data_points, archetype), axis=0)
+    data = np.asarray(data)
+    data_pca = PCA(n_components=10).fit_transform(data)
+    data_tsne = TSNE(n_components=2).fit_transform(data_pca)
+    # Create a DataFrame
+    df_pca = pd.DataFrame({
+        "PCA1": data_pca[:, 0],
+        "PCA2": data_pca[:, 1],
+        "type": labels,
+        "cell_type": cell_types
+    })
+
+    unique_cell_types = df_pca["cell_type"].unique()
+    palette = sns.color_palette("tab20", len(unique_cell_types))  # Exclude archetype
+    palette_dict = {cell_type: color for cell_type, color in zip(unique_cell_types, palette)}
+    palette_dict["archetype"] = "black"  # Assign black to archetype
+
+    df_tsne = pd.DataFrame({
+        "TSNE1": data_tsne[:, 0],
+        "TSNE2": data_tsne[:, 1],
+        "type": labels,
+        "cell_type": cell_types
+    })
+
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(
+        data=df_pca,
+        x="PCA1",
+        y="PCA2",
+        hue="cell_type",
+        style="type",
+        palette=palette_dict,
+        size="type",
+        sizes={"data": 40, "archetype": 500},
+        legend="brief",
+        alpha=1
+    )
+
+    # Remove 'type' from the legend
+    handles, labels = plt.gca().get_legend_handles_labels()
+    # Keep only the unique cell types (skip "data" and "archetype")
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels) if l in palette_dict.keys()]
+    if cell_type_legend:
+        handles, labels = zip(*cell_type_legend)
+    plt.legend(handles, labels, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    plt.title("PCA Scatter Plot with Archetypes Highlighted in Black")
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(
+        data=df_tsne,
+        x="TSNE1",
+        y="TSNE2",
+        hue="cell_type",
+        style="type",
+        palette=palette_dict,
+        size="type",
+        sizes={"data": 20, "archetype": 500},
+        legend="brief",
+        alpha=1
+
+    )
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels) if l in palette_dict.keys()]
+    if cell_type_legend:
+        handles, labels = zip(*cell_type_legend)
+    plt.legend(handles, labels, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    plt.title("t-SNE Scatter Plot with Archetypes Highlighted in Black")
+    plt.tight_layout()
+    plt.show()
+
