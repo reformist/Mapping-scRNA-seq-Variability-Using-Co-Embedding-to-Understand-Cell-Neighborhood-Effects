@@ -6,6 +6,32 @@ import numpy as np
 import torch
 plot_flag = False
 
+from scipy.optimize import nnls
+def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
+    """
+    Compute the linear combination weights of archetypes for each cell.
+    Parameters:
+    -----------
+    count_matrix : np.ndarray
+        Matrix of cells in reduced-dimensional space (e.g., PCA) [n_cells, n_features].
+    archetype_matrix : np.ndarray
+        Matrix of archetypes [n_archetypes, n_features].
+    Returns:
+    --------
+    weights : np.ndarray
+        Matrix of archetype weights for each cell [n_cells, n_archetypes].
+        Rows sum to 1.
+    """
+    n_cells = count_matrix.shape[0]
+    n_archetypes = archetype_matrix.shape[0]
+    # Initialize weight matrix
+    weights = np.zeros((n_cells, n_archetypes))
+    # For each cell, solve the NNLS problem
+    for i in range(n_cells):
+        weights[i], _ = nnls(archetype_matrix.T, count_matrix[i])
+    # Normalize rows to sum to 1
+    weights /= weights.sum(axis=1, keepdims=True)
+    return weights
 
 def preprocess_rna(adata, adata_rna):
     # now need to do normalization
