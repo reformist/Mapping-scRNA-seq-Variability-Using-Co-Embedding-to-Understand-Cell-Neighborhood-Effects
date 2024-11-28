@@ -154,11 +154,47 @@ def nnls_cvxpy(A, b):
     problem = cp.Problem(objective)
     problem.solve()
     return x.value
-import numpy as np
-import cvxpy as cp
 
-import numpy as np
-import cvxpy as cp
+
+def reorder_rows_to_maximize_diagonal(matrix):
+    """
+    Reorders rows of a matrix to maximize diagonal dominance by placing the highest values
+    in the closest positions to the diagonal.
+
+    Parameters:
+    -----------
+    matrix : np.ndarray
+        An m x n matrix.
+
+    Returns:
+    --------
+    reordered_matrix : np.ndarray
+        The input matrix with reordered rows.
+    row_order : list
+        The indices of the rows in their new order.
+    """
+    # Track available rows and columns
+    available_rows = list(range(matrix.shape[0]))
+    available_cols = list(range(matrix.shape[1]))
+    row_order = []
+
+    # Reorder rows iteratively
+    for col in range(matrix.shape[1]):
+        if not available_rows:
+            break
+
+        # Find the row with the maximum value for the current column
+        best_row = max(available_rows, key=lambda r: matrix[r, col])
+        row_order.append(best_row)
+        available_rows.remove(best_row)
+
+    # Handle leftover rows if there are more rows than columns
+    row_order += available_rows
+
+    # Reorder the matrix
+    reordered_matrix = matrix[row_order]
+
+    return reordered_matrix, row_order
 
 def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix, solver=cp.ECOS):
     """
