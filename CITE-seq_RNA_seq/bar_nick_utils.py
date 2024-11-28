@@ -1,6 +1,8 @@
 # funciton to avoid too much text in the notebook
+import copy
 from itertools import product, zip_longest
-from typing import List
+from typing import List, Dict
+from scipy.optimize import linear_sum_assignment
 
 import scanpy as sc
 import matplotlib.pyplot as plt
@@ -15,6 +17,7 @@ from anndata import AnnData
 # import starfysh
 from matplotlib import pyplot as plt
 from py_pcha import PCHA
+from scipy.spatial.distance import cdist
 # !pip install starfysh
 # !pip install pandas
 # !pip install scanpy
@@ -173,7 +176,11 @@ def reorder_rows_to_maximize_diagonal(matrix):
     row_order : list
         The indices of the rows in their new order.
     """
-    # Track available rows and columns
+    # Track available rows and
+    original= None
+    if isinstance(matrix,pd.DataFrame):
+        original = copy.deepcopy(matrix)
+        matrix = matrix.values
     available_rows = list(range(matrix.shape[0]))
     available_cols = list(range(matrix.shape[1]))
     row_order = []
@@ -193,7 +200,8 @@ def reorder_rows_to_maximize_diagonal(matrix):
 
     # Reorder the matrix
     reordered_matrix = matrix[row_order]
-
+    if original is not None:
+        reordered_matrix = pd.DataFrame(reordered_matrix,index=original.index,columns=original.columns)
     return reordered_matrix, row_order
 
 def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix, solver=cp.ECOS):
@@ -593,3 +601,257 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str],modali
     plt.tight_layout()
     plt.show()
 
+def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
+    """
+    Evaluates multiple distance metrics to determine which one best captures the similarity
+    between matching rows in matrices A and B.
+
+    Parameters:
+    - A: np.ndarray of shape (n_samples, n_features)
+    - B: np.ndarray of shape (n_samples, n_features)
+    - metrics: List of distance metrics to evaluate
+
+    Returns:
+    - results: Dictionary containing evaluation metrics for each distance metric
+    """
+    results = {}
+
+    for metric in metrics:
+        print(f"Evaluating distance metric: {metric}")
+
+        # Compute the distance matrix between rows of A and rows of B
+        distances = cdist(A, B, metric=metric)
+        # For each row i, get the distances between A[i] and all rows in B
+        # Then compute the rank of the matching distance
+        ranks = []
+        for i in range(len(A)):
+            row_distances = distances[i, :]
+            # Get the rank of the matching distance
+            # Rank 1 means the smallest distance
+            rank = np.argsort(row_distances).tolist().index(i) + 1
+            ranks.append(rank)
+        ranks = np.array(ranks)
+        total_samples = len(A)
+        # Compute evaluation metrics
+        num_correct_matches = np.sum(ranks == 1)
+        percentage_correct = num_correct_matches / total_samples * 100
+        mean_rank = np.mean(ranks)
+        mrr = np.mean(1 / ranks)
+        print(f"Percentage of correct matches (rank 1): {percentage_correct:.2f}%")
+        print(f"Mean rank of matching rows: {mean_rank:.2f}")
+        print(f"Mean Reciprocal Rank (MRR): {mrr:.4f}")
+        print("")
+        results[metric] = {
+            'percentage_correct': percentage_correct,
+            'mean_rank': mean_rank,
+            'mrr': mrr,
+            'ranks': ranks
+        }
+    return results
+
+
+def plot_archetypes_matching(data1,data2):
+    offset = 1
+    rows = 5
+    for i in range(rows):
+        y1 = data1.iloc[i] + i * offset
+        y2 = data2.iloc[i] + i * offset
+        plt.plot(y1, label=f'modality 1 archetype {i + 1}')
+        plt.plot(y2, linestyle='--', label=f'modality 2 archetype {i + 1}')
+    plt.xlabel('Columns')
+    plt.ylabel('proportion of cell types accounted for an archetype')
+    plt.title('Show that the archetypes are aligned by using simple diagonal maximization (final solution)')
+    plt.legend()
+    # rotate x labels
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.show()
+
+
+def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
+    """
+    Evaluates multiple distance metrics to determine how much better they are compared
+    to random assignment in matching rows in matrices A and B.
+
+    Parameters:
+    - A: np.ndarray of shape (n_samples, n_features)
+    - B: np.ndarray of shape (n_samples, n_features)
+    - metrics: List of distance metrics to evaluate
+
+    Returns:
+    - results: Dictionary containing evaluation metrics for each distance metric
+    """
+    results = {}
+    n_samples = A.shape[0]
+
+    # Expected mean rank and MRR under random assignment
+    expected_mean_rank = (n_samples + 1) / 2
+    expected_mrr = np.mean(1 / np.arange(1, n_samples + 1))
+
+    for metric in metrics:
+        print(f"Evaluating distance metric: {metric}")
+
+        # Compute the distance matrix between rows of A and rows of B
+        distances = cdist(A, B, metric=metric)
+
+        # For each row i, get the distances between A[i] and all rows in B
+        # Then compute the rank of the matching distance
+        ranks = []
+        for i in range(n_samples):
+            row_distances = distances[i, :]
+            # Get the rank of the matching distance
+            # Rank 1 means the smallest distance
+            rank = np.argsort(row_distances).tolist().index(i) + 1
+            ranks.append(rank)
+        ranks = np.array(ranks)
+
+        # Compute evaluation metrics
+        mean_rank = np.mean(ranks)
+        mrr = np.mean(1 / ranks)
+
+        # Compare against expected values under random assignment
+        rank_improvement = (expected_mean_rank - mean_rank) / (expected_mean_rank - 1)
+        mrr_improvement = (mrr - expected_mrr) / (1 - expected_mrr)
+
+        print(f"Mean Rank: {mean_rank:.2f} (Random: {expected_mean_rank:.2f})")
+        print(f"MRR: {mrr:.4f} (Random: {expected_mrr:.4f})")
+        print(f"Improvement over random (Rank): {rank_improvement * 100:.2f}%")
+        print(f"Improvement over random (MRR): {mrr_improvement * 100:.2f}%\n")
+
+        results[metric] = {
+            'mean_rank': mean_rank,
+            'expected_mean_rank': expected_mean_rank,
+            'mrr': mrr,
+            'expected_mrr': expected_mrr,
+            'rank_improvement': rank_improvement,
+            'mrr_improvement': mrr_improvement,
+            'ranks': ranks
+        }
+    return results
+def compute_random_matching_cost(rna, protein, metric='cosine'):
+    """Compute normalized cost and distances for a random row assignment."""
+    n_samples = rna.shape[0]
+    random_indices = np.random.permutation(n_samples)
+    protein_random = protein[random_indices]
+
+    if metric == 'euclidean':
+        distances = np.linalg.norm(rna - protein_random, axis=1)
+    elif metric == 'cosine':
+        # Normalize rows to compute cosine similarity
+        rna_norm = rna / np.linalg.norm(rna, axis=1, keepdims=True)
+        protein_random_norm = protein_random / np.linalg.norm(protein_random, axis=1, keepdims=True)
+        cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
+        distances = 1 - cosine_similarity  # Cosine distance
+    else:
+        raise ValueError("Unsupported metric. Use 'euclidean' or 'cosine'.")
+
+    normalized_cost = np.sum(distances) / n_samples
+    return normalized_cost, distances
+
+
+def compare_matchings(archetype_proportion_list_rna,archetype_proportion_list_protein, metric='cosine', num_trials=100):
+    """Compare optimal matching cost with average random matching cost and plot norms."""
+    # Extract the best pair based on optimal matching
+    best_cost = float('inf')
+    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna,archetype_proportion_list_protein)):
+        rna = rna.values if hasattr(rna, 'values') else rna
+        protein = protein.values if hasattr(protein, 'values') else protein
+        row_ind, col_ind, cost, cost_matrix = match_rows(rna, protein, metric)
+        if cost < best_cost:
+            best_cost = cost
+            best_rna, best_protein = rna, protein
+            best_rna_archetype_order, best_protein_archetype_order = row_ind, col_ind
+            best_cost_matrix = cost_matrix
+    print(f"Optimal normalized matching cost: {best_cost:.4f}")
+
+    # Compute distances for the optimal matching
+    optimal_distances = best_cost_matrix[best_rna_archetype_order, best_protein_archetype_order]
+
+    # Compute distances for a single random matching
+    random_cost, random_distances = compute_random_matching_cost(best_rna, best_protein, metric)
+
+    # Visualization of distances
+    n_samples = best_rna.shape[0]
+    indices = np.arange(n_samples)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(indices, np.sort(optimal_distances), label='Optimal Matching', marker='o')
+    plt.plot(indices, np.sort(random_distances), label='Random Matching', marker='x')
+    plt.xlabel('Sample Index (sorted by distance)')
+    plt.ylabel('Distance')
+    plt.title('Comparison of Distances between Matched Rows')
+    plt.legend()
+    plt.show()
+
+    # Compute average random matching cost over multiple trials
+    random_costs = []
+    for _ in range(num_trials):
+        cost, _ = compute_random_matching_cost(best_rna, best_protein, metric)
+        random_costs.append(cost)
+    avg_random_cost = np.mean(random_costs)
+    std_random_cost = np.std(random_costs)
+    print(f"Average random matching cost over {num_trials} trials: {avg_random_cost:.4f}")
+    print(f"Standard deviation: {std_random_cost:.4f}")
+
+    # Bar plot of normalized matching costs
+    labels = ['Optimal Matching', 'Random Matching']
+    costs = [best_cost, avg_random_cost]
+    errors = [0, std_random_cost]
+    plt.figure(figsize=(8, 6))
+    plt.bar(labels, costs, yerr=errors, capsize=5, color=['skyblue', 'lightgreen'])
+    plt.ylabel('Normalized Matching Cost')
+    plt.title('Optimal vs. Random Row Matching Costs')
+    plt.show()
+
+def match_rows(rna, protein, metric='cosine'):
+    cost_matrix = cdist(rna, protein, metric=metric)
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    total_cost = cost_matrix[row_ind, col_ind].sum()
+    n_archetypes = rna.shape[0]
+    normalized_cost = total_cost / n_archetypes
+    return row_ind, col_ind, normalized_cost, cost_matrix
+
+
+def find_best_pair_by_row_matching(archetype_proportion_list_rna,archetype_proportion_list_protein, metric='cosine'):
+    """
+    Find the best index in the list by matching rows using linear assignment.
+
+    Parameters:
+    -----------
+    archetype_proportion_list : list of tuples
+        List where each tuple contains (rna, protein) matrices.
+    metric : str, optional
+        Distance metric to use ('euclidean' or 'cosine').
+
+    Returns:
+    --------
+    best_num_or_archetypes_index : int
+        Index of the best matching pair in the list.
+    best_total_cost : float
+        Total cost of the best matching.
+    best_rna_archetype_order : np.ndarray
+        Indices of RNA rows.
+    best_protein_archetype_order : np.ndarray
+        Indices of Protein rows matched to RNA rows.
+    """
+    best_num_or_archetypes_index = None
+    best_total_cost = float('inf')
+    best_rna_archetype_order = None
+    best_protein_archetype_order = None
+
+    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna,archetype_proportion_list_protein)):
+        rna = rna.values if hasattr(rna, 'values') else rna
+        protein = protein.values if hasattr(protein, 'values') else protein
+
+        assert rna.shape[1] == protein.shape[1], f"Mismatch in dimensions at index {i}."
+
+        row_ind, col_ind, total_cost, _ = match_rows(rna, protein, metric=metric)
+        print(f"Pair {i}: Total matching cost = {total_cost}")
+
+        if total_cost < best_total_cost:
+            best_total_cost = total_cost
+            best_num_or_archetypes_index = i
+            best_rna_archetype_order = row_ind
+            best_protein_archetype_order = col_ind
+
+    return best_num_or_archetypes_index, best_total_cost, best_rna_archetype_order, best_protein_archetype_order
