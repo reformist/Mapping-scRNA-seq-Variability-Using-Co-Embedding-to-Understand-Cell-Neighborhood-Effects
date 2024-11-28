@@ -257,59 +257,60 @@ def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
     return weights
 
-def preprocess_rna(adata, adata_rna):
-    # now need to do normalization
-    # mitochondrial genes, "MT-" for human, "Mt-" for mouse
-    # this CITE-seq data is mouse data
-    adata_rna.var["mt"] = adata.var_names.str.startswith("Mt-")
-    # ribosomal genes
-    adata_rna.var["ribo"] = adata.var_names.str.startswith(("RPS", "RPL"))
-    # hemoglobin genes
-    adata_rna.var["hb"] = adata.var_names.str.contains("^HB[^(P)]")
 
+def preprocess_rna(adata_rna):
+    """
+    Preprocess RNA data for downstream analysis with PCA and variance tracking.
+    """
+
+    # Annotate mitochondrial, ribosomal, and hemoglobin genes
+    adata_rna.var["mt"] = adata_rna.var_names.str.startswith("Mt-")  # Mouse data
+    adata_rna.var["ribo"] = adata_rna.var_names.str.startswith(("RPS", "RPL"))
+    adata_rna.var["hb"] = adata_rna.var_names.str.contains("^HB[^(P)]", regex=True)
+
+    # Calculate QC metrics
     sc.pp.calculate_qc_metrics(adata_rna, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=True)
 
-    # sc.pl.scatter(adata_rna, "total_counts", "n_genes_by_counts", color="pct_counts_mt")
 
-    # sc.pl.violin(
-    #     adata_rna,
-    #     ["n_genes_by_counts", "total_counts", "pct_counts_mt"],
-    #     jitter=0.4,
-    #     multi_panel=True,
-    # )
-    # adata_qc.concatenate(adata_slice)
-    sc.pp.filter_cells(adata_rna, min_genes=100)
-    sc.pp.filter_genes(adata_rna, min_cells=3)
 
-    # finding doublets
-    # adata.layers["counts"] = adata.X.copy()
+    # Add raw counts to layers for future reference
     adata_rna.layers["counts"] = adata_rna.X.copy()
-    sc.pp.normalize_total(adata_rna)
+
+    # Log-transform the data
     sc.pp.log1p(adata_rna)
+    sc.pp.pca(adata_rna)
+    print(f"Variance ratio after log transformation PCA: {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
-    sc.pp.highly_variable_genes(adata_rna, n_top_genes=2000, batch_key="batch")
-    # sc.pl.highly_variable_genes(adata_rna)
+    # Normalize total counts
+    sc.pp.normalize_total(adata_rna, target_sum=5e3)
+    sc.pp.pca(adata_rna)
+    print(f"Variance ratio after normalization PCA: {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
-    # sc.pl.pca_variance_ratio(adata_rna, n_pcs=50, log=True)
 
-    #     sc.pl.pca(
-    #     adata_rna,
-    #     color=["sample", "sample", "pct_counts_mt", "pct_counts_mt"],
-    #     dimensions=[(0, 1), (2, 3), (0, 1), (2, 3)],
-    #     ncols=2,
-    #     size=2,
-    # )
-    # sc.pp.neighbors(adata_rna)
-    # sc.tl.umap(adata_rna)
+    # Scale the data
+    # sc.pp.scale(adata_rna, max_value=10)
+    # sc.pp.pca(adata_rna)
+    # print(f"Variance ratio after scaling PCA: {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
+
     return adata_rna
 
 
 def preprocess_protein(adata_prot):
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
     sc.pp.normalize_total(adata_prot)
-    # might need to adjust these parameters for protein, not sure what the filtering should be
-    sc.pp.filter_cells(adata_prot, min_genes=20)
-    sc.pp.filter_genes(adata_prot, min_cells=3)
-    return  adata_prot
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after normalization PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    sc.pp.log1p(adata_prot)
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after log transformation PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    # matrix = adata_prot.X
+    # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
+    # adata_prot.X = matrix
+    # sc.pp.scale(adata_prot, max_value=10)
+
+    return adata_prot
+
 
 def select_gene_likelihood(adata):
     """
