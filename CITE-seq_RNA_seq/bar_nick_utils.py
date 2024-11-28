@@ -287,13 +287,12 @@ def preprocess_rna(adata_rna):
     # Log-transform the data
     sc.pp.log1p(adata_rna)
     sc.pp.pca(adata_rna)
-    print(f"Variance ratio after log transformation PCA: {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
-
+    print(f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    prin
     # Normalize total counts
     sc.pp.normalize_total(adata_rna, target_sum=5e3)
     sc.pp.pca(adata_rna)
-    print(f"Variance ratio after normalization PCA: {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
-
+    print(f"Variance ratio after normalization PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
     # Scale the data
     # sc.pp.scale(adata_rna, max_value=10)
@@ -305,13 +304,15 @@ def preprocess_rna(adata_rna):
 
 def preprocess_protein(adata_prot):
     sc.pp.pca(adata_prot)
-    print(f"Variance ratio after PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print(f"Variance ratio after PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print()
     sc.pp.normalize_total(adata_prot)
     sc.pp.pca(adata_prot)
-    print(f"Variance ratio after normalization PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print(f"Variance ratio after normalization PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print()
     sc.pp.log1p(adata_prot)
     sc.pp.pca(adata_prot)
-    print(f"Variance ratio after log transformation PCA: {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print(f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
     # matrix = adata_prot.X
     # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
     # adata_prot.X = matrix
