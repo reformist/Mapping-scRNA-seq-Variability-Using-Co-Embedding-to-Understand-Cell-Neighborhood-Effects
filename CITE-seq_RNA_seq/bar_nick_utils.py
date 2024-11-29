@@ -288,7 +288,6 @@ def preprocess_rna(adata_rna):
     sc.pp.log1p(adata_rna)
     sc.pp.pca(adata_rna)
     print(f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
-    prin
     # Normalize total counts
     sc.pp.normalize_total(adata_rna, target_sum=5e3)
     sc.pp.pca(adata_rna)
@@ -651,9 +650,9 @@ def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[st
     return results
 
 
-def plot_archetypes_matching(data1,data2):
+def plot_archetypes_matching(data1,data2,rows = 5):
     offset = 1
-    rows = 5
+
     for i in range(rows):
         y1 = data1.iloc[i] + i * offset
         y2 = data2.iloc[i] + i * offset
@@ -661,7 +660,7 @@ def plot_archetypes_matching(data1,data2):
         plt.plot(y2, linestyle='--', label=f'modality 2 archetype {i + 1}')
     plt.xlabel('Columns')
     plt.ylabel('proportion of cell types accounted for an archetype')
-    plt.title('Show that the archetypes are aligned by using simple diagonal maximization (final solution)')
+    plt.title('Show that the archetypes are aligned by using')
     plt.legend()
     # rotate x labels
     plt.xticks(rotation=45)
@@ -729,7 +728,7 @@ def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) 
             'ranks': ranks
         }
     return results
-def compute_random_matching_cost(rna, protein, metric='cosine'):
+def compute_random_matching_cost(rna, protein, metric='correlation'):
     """Compute normalized cost and distances for a random row assignment."""
     n_samples = rna.shape[0]
     random_indices = np.random.permutation(n_samples)
@@ -743,6 +742,21 @@ def compute_random_matching_cost(rna, protein, metric='cosine'):
         protein_random_norm = protein_random / np.linalg.norm(protein_random, axis=1, keepdims=True)
         cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
         distances = 1 - cosine_similarity  # Cosine distance
+    elif metric == 'correlation':
+        # Compute Pearson correlation distance
+        rna_mean = np.mean(rna, axis=1, keepdims=True)
+        protein_random_mean = np.mean(protein_random, axis=1, keepdims=True)
+        rna_centered = rna - rna_mean
+        protein_random_centered = protein_random - protein_random_mean
+
+        numerator = np.sum(rna_centered * protein_random_centered, axis=1)
+        denominator = (
+            np.sqrt(np.sum(rna_centered**2, axis=1)) *
+            np.sqrt(np.sum(protein_random_centered**2, axis=1))
+        )
+        pearson_correlation = numerator / denominator
+        distances = 1 - pearson_correlation  # Correlation distance
+
     else:
         raise ValueError("Unsupported metric. Use 'euclidean' or 'cosine'.")
 
