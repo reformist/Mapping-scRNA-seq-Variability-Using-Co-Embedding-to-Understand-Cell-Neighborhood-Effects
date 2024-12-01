@@ -466,7 +466,6 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str],modali
     # Ensure unique_cell_types are sorted consistently
     unique_cell_types = sorted(
         [cell_type for cell_type in df_pca["cell_type"].unique() if cell_type != 'archetype'],
-        key=int
     )
     palette = sns.color_palette("tab20", len(unique_cell_types))
     palette_dict = {cell_type: color for cell_type, color in zip(unique_cell_types, palette)}
