@@ -6,8 +6,8 @@ data/
 temp
 starfysh_reproducibility/
 **/tb_logs
-visualization/graph.png
-visualization/graph
+visualization/legacy/graph.png
+visualization/legacy/graph
 *.png
 visualization/synthetic_data_pipeline
 visualization/vae_contrastive_pipeline
@@ -18,7 +18,7 @@ starfysh_cn_generation.gv
 vae_detailed_visualization.gv
 vae_visualization.gv
 *.pyc
-visualization/plate_edge_example
+visualization/legacy/plate_edge_example
 vae_workflow_graph
 vae_contrastive_pipeline
 synthetic_data_pipeline/tb_logs
