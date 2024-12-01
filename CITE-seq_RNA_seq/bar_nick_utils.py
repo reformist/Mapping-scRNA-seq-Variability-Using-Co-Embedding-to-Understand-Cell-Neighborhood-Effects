@@ -38,8 +38,6 @@ import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
 
 
-
-
 def nnls_omp(basis_matrix, target_vector, tol=1e-4):
     omp = OrthogonalMatchingPursuit(tol=tol, fit_intercept=False)
     omp.fit(basis_matrix.T, target_vector)
@@ -47,7 +45,10 @@ def nnls_omp(basis_matrix, target_vector, tol=1e-4):
     weights = np.maximum(0, weights)  # Enforce non-negativity
     return weights
 
+
 import numpy as np
+
+
 # from sklearn.linear_model import OrthogonalMatchingPursuit
 #
 #
@@ -177,8 +178,8 @@ def reorder_rows_to_maximize_diagonal(matrix):
         The indices of the rows in their new order.
     """
     # Track available rows and
-    original= None
-    if isinstance(matrix,pd.DataFrame):
+    original = None
+    if isinstance(matrix, pd.DataFrame):
         original = copy.deepcopy(matrix)
         matrix = matrix.values
     available_rows = list(range(matrix.shape[0]))
@@ -201,8 +202,9 @@ def reorder_rows_to_maximize_diagonal(matrix):
     # Reorder the matrix
     reordered_matrix = matrix[row_order]
     if original is not None:
-        reordered_matrix = pd.DataFrame(reordered_matrix,index=original.index,columns=original.columns)
+        reordered_matrix = pd.DataFrame(reordered_matrix, index=original.index, columns=original.columns)
     return reordered_matrix, row_order
+
 
 def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix, solver=cp.ECOS):
     """
@@ -250,9 +252,6 @@ def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix,
     return weights
 
 
-
-
-
 def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     """
     Compute archetype weights for each cell using cvxpy.
@@ -261,7 +260,7 @@ def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     n_archetypes = archetype_matrix.shape[0]
     weights = np.zeros((n_cells, n_archetypes))
     for i in range(n_cells):
-        weights[i],_ = nnls(archetype_matrix.T, count_matrix[i])
+        weights[i], _ = nnls(archetype_matrix.T, count_matrix[i])
     weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
     return weights
 
@@ -279,15 +278,14 @@ def preprocess_rna(adata_rna):
     # Calculate QC metrics
     sc.pp.calculate_qc_metrics(adata_rna, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=True)
 
-
-
     # Add raw counts to layers for future reference
     adata_rna.layers["counts"] = adata_rna.X.copy()
 
     # Log-transform the data
     sc.pp.log1p(adata_rna)
     sc.pp.pca(adata_rna)
-    print(f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print(
+        f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
     # Normalize total counts
     sc.pp.normalize_total(adata_rna, target_sum=5e3)
     sc.pp.pca(adata_rna)
@@ -311,7 +309,8 @@ def preprocess_protein(adata_prot):
     print()
     sc.pp.log1p(adata_prot)
     sc.pp.pca(adata_prot)
-    print(f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print(
+        f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
     # matrix = adata_prot.X
     # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
     # adata_prot.X = matrix
@@ -345,6 +344,8 @@ def select_gene_likelihood(adata):
 
     print(f"Selected gene likelihood: {gene_likelihood}")
     return gene_likelihood
+
+
 def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict):
     horizontal_splits = [0, 500, 1000]
     vertical_splits = [0, 333, 666, 1000]
@@ -389,7 +390,29 @@ def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict):
         adata_prot_subset.obs['X'][cell_indices_3] = np.random.choice(coords[:, 0], sum(cell_indices_3))
         adata_prot_subset.obs['Y'][cell_indices_3] = np.random.choice(coords[:, 1], sum(cell_indices_3))
     adata_prot_subset.obsm['X_spatial'] = np.array(adata_prot_subset.obs[['X', 'Y']])
-    return adata_prot_subset,horizontal_splits,vertical_splits
+    return adata_prot_subset, horizontal_splits, vertical_splits
+
+
+def verify_gradients(*models):
+    for model in models:
+        if all(param.grad is None for param in model.parameters()):
+            raise ValueError("No gradients found for any parameter in the model.")
+
+
+def compute_pairwise_kl(loc, scale):
+    # Expand for broadcasting
+    loc1 = loc.unsqueeze(1)
+    loc2 = loc.unsqueeze(0)
+
+    scale1 = scale.unsqueeze(1)
+    scale2 = scale.unsqueeze(0)
+    # Compute KL divergence for each pair
+    kl_matrix = (
+            torch.log(scale2 / scale1) +
+            (scale1 ** 2 + (loc1 - loc2) ** 2) / (2 * scale2 ** 2) - 0.5
+    ).sum(dim=-1)  # Sum over latent dimensions
+    return kl_matrix
+
 
 def plot_torch_normal(mean, std_dev, num_points=1000):
     """
@@ -412,8 +435,7 @@ def plot_torch_normal(mean, std_dev, num_points=1000):
     plt.grid()
 
 
-
-def plot_archetypes(data_points, archetype, samples_cell_types: List[str],modality=''):
+def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modality=''):
     if not isinstance(samples_cell_types, List):
         raise TypeError("samples_cell_types should be a list of strings.")
 
@@ -439,7 +461,7 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str],modali
     cell_types = samples_cell_types + ['archetype'] * num_archetypes
 
     # Perform PCA and t-SNE
-    data_pca = data[:,:50]
+    data_pca = data[:, :50]
     data_tsne = TSNE(n_components=2).fit_transform(data_pca)
 
     # Create a numbering for archetypes
@@ -600,6 +622,7 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str],modali
     plt.tight_layout()
     plt.show()
 
+
 def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
     """
     Evaluates multiple distance metrics to determine which one best captures the similarity
@@ -649,7 +672,7 @@ def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[st
     return results
 
 
-def plot_archetypes_matching(data1,data2,rows = 5):
+def plot_archetypes_matching(data1, data2, rows=5):
     offset = 1
 
     for i in range(rows):
@@ -727,6 +750,8 @@ def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) 
             'ranks': ranks
         }
     return results
+
+
 def compute_random_matching_cost(rna, protein, metric='correlation'):
     """Compute normalized cost and distances for a random row assignment."""
     n_samples = rna.shape[0]
@@ -750,8 +775,8 @@ def compute_random_matching_cost(rna, protein, metric='correlation'):
 
         numerator = np.sum(rna_centered * protein_random_centered, axis=1)
         denominator = (
-            np.sqrt(np.sum(rna_centered**2, axis=1)) *
-            np.sqrt(np.sum(protein_random_centered**2, axis=1))
+                np.sqrt(np.sum(rna_centered ** 2, axis=1)) *
+                np.sqrt(np.sum(protein_random_centered ** 2, axis=1))
         )
         pearson_correlation = numerator / denominator
         distances = 1 - pearson_correlation  # Correlation distance
@@ -763,11 +788,12 @@ def compute_random_matching_cost(rna, protein, metric='correlation'):
     return normalized_cost, distances
 
 
-def compare_matchings(archetype_proportion_list_rna,archetype_proportion_list_protein, metric='cosine', num_trials=100):
+def compare_matchings(archetype_proportion_list_rna, archetype_proportion_list_protein, metric='cosine',
+                      num_trials=100):
     """Compare optimal matching cost with average random matching cost and plot norms."""
     # Extract the best pair based on optimal matching
     best_cost = float('inf')
-    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna,archetype_proportion_list_protein)):
+    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna, archetype_proportion_list_protein)):
         rna = rna.values if hasattr(rna, 'values') else rna
         protein = protein.values if hasattr(protein, 'values') else protein
         row_ind, col_ind, cost, cost_matrix = match_rows(rna, protein, metric)
@@ -817,6 +843,7 @@ def compare_matchings(archetype_proportion_list_rna,archetype_proportion_list_pr
     plt.title('Optimal vs. Random Row Matching Costs')
     plt.show()
 
+
 def match_rows(rna, protein, metric='cosine'):
     cost_matrix = cdist(rna, protein, metric=metric)
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -826,7 +853,22 @@ def match_rows(rna, protein, metric='cosine'):
     return row_ind, col_ind, normalized_cost, cost_matrix
 
 
-def find_best_pair_by_row_matching(archetype_proportion_list_rna,archetype_proportion_list_protein, metric='cosine'):
+def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index):
+    pca = PCA(n_components=2)
+    pca.fit(rna_mean)
+    rna_pca = pca.transform(rna_mean)
+    plt.subplot(1, 2, 1)
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'])
+    pca.fit(protein_mean)
+    protein_pca = pca.transform(protein_mean)
+    plt.title('during training, RNA')
+    plt.subplot(1, 2, 2)
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'])
+    plt.title('during training, protein')
+    plt.show()
+
+
+def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_proportion_list_protein, metric='cosine'):
     """
     Find the best index in the list by matching rows using linear assignment.
 
@@ -853,7 +895,7 @@ def find_best_pair_by_row_matching(archetype_proportion_list_rna,archetype_propo
     best_rna_archetype_order = None
     best_protein_archetype_order = None
 
-    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna,archetype_proportion_list_protein)):
+    for i, (rna, protein) in enumerate(zip(archetype_proportion_list_rna, archetype_proportion_list_protein)):
         rna = rna.values if hasattr(rna, 'values') else rna
         protein = protein.values if hasattr(protein, 'values') else protein
 
