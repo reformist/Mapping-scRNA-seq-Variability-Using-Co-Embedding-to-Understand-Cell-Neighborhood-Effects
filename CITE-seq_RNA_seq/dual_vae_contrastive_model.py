@@ -69,7 +69,7 @@ class DualVAETrainingPlan(TrainingPlan):
         super().__init__(rna_vae.module, **kwargs)
         super().__init__(protein_vae.module, **kwargs)
         # protein_vae.is_trained = True
-        rna_vae.is_trained = True
+        # rna_vae.is_trained = True
 
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
@@ -300,12 +300,11 @@ class DualVAETrainingPlan(TrainingPlan):
                 + matching_loss
         )
         # Log losses
-        self.log(f"train_rna_reconstruction_loss", rna_loss_output.loss)
-        self.log(f"train_protein_reconstruction_loss", protein_loss_output.loss, prog_bar=True)
-        self.log("total reconstruction loss", reconstruction_loss, prog_bar=True)
-        self.log(f"train_contrastive_loss", contrastive_loss, prog_bar=True)
-        self.log(f"train_matching_rna_protein_loss", matching_loss, prog_bar=True)
-        self.log(f"train_total_loss", total_loss, prog_bar=True)
+        self.log("train_rna_reconstruction_loss", rna_loss_output.loss, on_epoch=True, on_step=False)
+        self.log("train_protein_reconstruction_loss", protein_loss_output.loss, on_epoch=True, on_step=False)
+        self.log("train_contrastive_loss", contrastive_loss, on_epoch=True, on_step=False)
+        self.log("train_matching_rna_protein_loss", matching_loss, on_epoch=True, on_step=False)
+        self.log("train_total_loss", total_loss, on_epoch=True, on_step=False)
         if self.current_epoch % 50 == 0:
             rna_vae.save(save_dir, prefix=f'batch_{batch_idx}_', save_anndata=False, overwrite=True)
         return total_loss
@@ -354,12 +353,12 @@ rna_vae._training_plan_cls = DualVAETrainingPlan
 protein_vae._training_plan_cls = DualVAETrainingPlan
 protein_vae.module.to('cpu')
 rna_vae.module.to('cpu')
-rna_vae.is_trained = protein_vae.is_trained =True
+rna_vae.is_trained ,protein_vae.is_trained =True,True
 latent_rna_before = rna_vae.get_latent_representation().copy()
 latent_prot_before = protein_vae.get_latent_representation().copy()
-rna_vae.is_trained = protein_vae.is_trained = False
+rna_vae.is_trained,protein_vae.is_trained  = False, False
 
-protein_vae.train(  # for debug only!!! mess up the real training
+rna_vae.train(  # for debug only!!! mess up the real training
     check_val_every_n_epoch=99,
     max_epochs=2,
     early_stopping=False,
@@ -385,10 +384,10 @@ for name in initial_weights:
 # %% mdtraining_plan
 # %%
 fig, ax = plt.subplots(1, 1)
-for key in protein_vae.history.keys():
+for key in rna_vae.history.keys():
     if 'loss' in key:
-        norm_loss = (protein_vae.history[key] - protein_vae.history[key].min()) / (protein_vae.history[key].max() - protein_vae.history[key].min())
-        label = f'{key} min: {protein_vae.history[key].values.min():.0f} max: {protein_vae.history[key].values.max():.0f}'
+        norm_loss = (rna_vae.history[key] - rna_vae.history[key].min()) / (rna_vae.history[key].max() - rna_vae.history[key].min())
+        label = f'{key} min: {rna_vae.history[key].values.min():.0f} max: {rna_vae.history[key].values.max():.0f}'
         ax.plot(norm_loss, label=label)
 ax.legend()
 plt.show()

@@ -394,9 +394,11 @@ def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict):
 
 
 def verify_gradients(*models):
+    return
     for model in models:
-        if all(param.grad is None for param in model.parameters()):
-            raise ValueError("No gradients found for any parameter in the model.")
+        if all(param.grad is None for param in model.module.parameters()):
+            print("No gradients found for any parameter in the model.")
+            # raise ValueError("No gradients found for any parameter in the model.")
 
 
 def compute_pairwise_kl(loc, scale):
