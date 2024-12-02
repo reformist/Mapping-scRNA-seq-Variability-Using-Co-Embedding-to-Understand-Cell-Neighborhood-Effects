@@ -1,69 +1,50 @@
 from graphviz import Digraph
 
 # Initialize Digraph with increased spacing
-dot1 = Digraph(format='png')
-dot1.attr(rankdir='TB', size='10', nodesep='1.2', ranksep='0.1')  # Increase nodesep and ranksep
-dot1.attr(dpi='300')  # Set high DPI for better resolution
+dot = Digraph(format='png')
+dot.attr(rankdir='TB', size='10', nodesep='1.2', ranksep='0.1')  # Increase spacing
+dot.attr(dpi='300')  # Set high DPI for better resolution
 
 # Define node styles
-process_attrs = {'shape': 'box', 'style': 'filled', 'fillcolor': 'lightblue'}
 data_attrs = {'shape': 'ellipse', 'style': 'filled', 'fillcolor': 'lightgrey'}
-embedding_attrs = {'shape': 'diamond', 'style': 'filled', 'fillcolor': 'lightyellow'}
-embedding_attrs_2 = {'shape': 'diamond', 'style': 'filled', 'fillcolor': 'yellow'}
+process_attrs = {'shape': 'box', 'style': 'filled', 'fillcolor': 'lightblue'}
+alignment_attrs = {'shape': 'hexagon', 'style': 'filled', 'fillcolor': 'lightgreen'}
+embedding_attrs = {'shape': 'parallelogram', 'style': 'filled', 'fillcolor': 'lightyellow'}
 
 # Data Nodes
-dot1.node('rna_data', 'scRNA Data', **data_attrs)
-dot1.node('protein_data', 'scProtein Data', **data_attrs)
+dot.node('rna_data', 'scRNA Data', **data_attrs)
+dot.node('protein_data', 'scProtein Data', **data_attrs)
 
-# Archetype Detection Nodes
-dot1.node('archetype_detection_rna', 'Archetype Detection\n(RNA)', **process_attrs)
-dot1.node('archetype_detection_protein', 'Archetype Detection\n(Protein)', **process_attrs)
+# Archetype Vector Bases
+dot.node('rna_archetypes', 'RNA Vector Base', **process_attrs)
+dot.node('protein_archetypes', 'Protein Vector Base', **process_attrs)
 
-# Edges from data to archetype detection
-dot1.edge('rna_data', 'archetype_detection_rna')
-dot1.edge('protein_data', 'archetype_detection_protein')
+# Edges from data to vector bases
+dot.edge('rna_data', 'rna_archetypes')
+dot.edge('protein_data', 'protein_archetypes')
 
-# Archetype Outputs
-dot1.node('rna_archetypes', 'RNA Archetypes', **embedding_attrs)
-dot1.node('protein_archetypes', 'Protein Archetypes', **embedding_attrs)
+# Alignment Node
+dot.node('align_bases', 'Align Vector Bases\nfor Comparable Representation', **alignment_attrs)
 
-# Edges from archetype detection to outputs
-dot1.edge('archetype_detection_rna', 'rna_archetypes')
-dot1.edge('archetype_detection_protein', 'protein_archetypes')
+# Edges from vector bases to alignment
+dot.edge('rna_archetypes', 'align_bases')
+dot.edge('protein_archetypes', 'align_bases')
 
-# Archetype Weights Nodes
-dot1.node('archetype_weights_rna', 'Compute Archetype Weights\nfor RNA Cells', **process_attrs)
-dot1.node('archetype_weights_protein', 'Compute Archetype Weights\nfor Protein Cells', **process_attrs)
+# Aligned Bases Outputs
+dot.node('aligned_rna_base', 'Aligned RNA Vector Base', **data_attrs)
+dot.node('aligned_protein_base', 'Aligned Protein Vector Base', **data_attrs)
 
-# Edges from archetypes to weights computation
-dot1.edge('rna_archetypes', 'archetype_weights_rna')
-dot1.edge('protein_archetypes', 'archetype_weights_protein')
+# Edges from alignment to aligned bases
+dot.edge('align_bases', 'aligned_rna_base')
+dot.edge('align_bases', 'aligned_protein_base')
 
-# Weights Outputs
-dot1.node('rna_weights', 'RNA Archetype Weights', **embedding_attrs)
-dot1.node('protein_weights', 'Protein Archetype Weights', **embedding_attrs)
+# Cell Embedding Nodes
+dot.node('rna_embedding', 'RNA Cell \nArchetype Embeddings', **embedding_attrs)
+dot.node('protein_embedding', 'Protein Cell \nArchetype Embeddings', **embedding_attrs)
 
-# Edges from weights computation to weights outputs
-dot1.edge('archetype_weights_rna', 'rna_weights')
-dot1.edge('archetype_weights_protein', 'protein_weights')
-
-# Matching Archetypes Node
-dot1.node('match_archetypes', 'Match Archetypes\nAcross Modalities', **process_attrs)
-
-# Edges from archetype outputs to matching
-dot1.edge('rna_weights', 'match_archetypes')
-dot1.edge('protein_weights', 'match_archetypes')
-
-# Matched Archetypes Outputs
-dot1.node('matched_archetypes_rna', 'Matched RNA Archetypes', **embedding_attrs_2)
-dot1.node('matched_archetypes_protein', 'Matched Protein Archetypes', **embedding_attrs_2)
-
-# Edges from matching to matched archetypes
-dot1.edge('match_archetypes', 'matched_archetypes_rna', label='RNA Side')
-dot1.edge('match_archetypes', 'matched_archetypes_protein', label='Protein Side')
-
-# Save Matched Archetypes Nodes
-
+# Edges from aligned bases to embeddings
+dot.edge('aligned_rna_base', 'rna_embedding')
+dot.edge('aligned_protein_base', 'protein_embedding')
 
 # Render the graph
-dot1.render('archetype_creation_pipeline_simplified', view=True)
+dot.render('archetype_matching_pipeline_with_no_detection', view=True)
