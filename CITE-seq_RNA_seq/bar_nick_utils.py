@@ -437,9 +437,20 @@ def plot_torch_normal(mean, std_dev, num_points=1000):
     plt.grid()
 
 
-def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modality=''):
+def plot_archetypes(
+        data_points,
+        archetype,
+        samples_cell_types: List[str],
+        data_point_archetype_indices: List[int],
+        modality='',
+        cell_type_colors: Dict[str, Any] = None
+):
     if not isinstance(samples_cell_types, List):
         raise TypeError("samples_cell_types should be a list of strings.")
+    if not isinstance(data_point_archetype_indices, List):
+        raise TypeError("data_point_archetype_indices should be a list of integers.")
+    if len(data_points) != len(samples_cell_types) or len(data_points) != len(data_point_archetype_indices):
+        raise ValueError("Length of data_points, samples_cell_types, and data_point_archetype_indices must be equal.")
 
     # Check the shapes of data_points and archetype
     print("Shape of data_points:", data_points.shape)
@@ -467,7 +478,7 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
     data_tsne = TSNE(n_components=2).fit_transform(data_pca)
 
     # Create a numbering for archetypes
-    archetype_numbers = [np.nan] * len(data_points) + list(range(0, num_archetypes))
+    archetype_numbers = [np.nan] * len(data_points) + list(range(num_archetypes))
 
     # Create DataFrames for plotting
     df_pca = pd.DataFrame({
@@ -475,7 +486,8 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
         "PCA2": data_pca[:, 1],
         "type": labels,
         "cell_type": cell_types,
-        "archetype_number": archetype_numbers
+        "archetype_number": archetype_numbers,
+        "data_point_archetype_index": data_point_archetype_indices + [np.nan] * num_archetypes
     })
 
     df_tsne = pd.DataFrame({
@@ -483,17 +495,23 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
         "TSNE2": data_tsne[:, 1],
         "type": labels,
         "cell_type": cell_types,
-        "archetype_number": archetype_numbers
+        "archetype_number": archetype_numbers,
+        "data_point_archetype_index": data_point_archetype_indices + [np.nan] * num_archetypes
     })
-    df_tsne = df_tsne.sort_values(by='cell_type')
-    # Define color palette
-    # Ensure unique_cell_types are sorted consistently
-    unique_cell_types = sorted(
-        [cell_type for cell_type in df_pca["cell_type"].unique() if cell_type != 'archetype'],
-    )
-    palette = sns.color_palette("tab20", len(unique_cell_types))
-    palette_dict = {cell_type: color for cell_type, color in zip(unique_cell_types, palette)}
-    palette_dict["archetype"] = "black"  # Assign black to archetype
+
+    # Use the provided color mapping or generate a new one
+    if cell_type_colors is not None:
+        palette_dict = cell_type_colors
+    else:
+        # Define color palette based on unique cell types
+        unique_cell_types = list(pd.unique(samples_cell_types))
+        palette = sns.color_palette("tab20", len(unique_cell_types))
+        palette_dict = {cell_type: color for cell_type, color in zip(unique_cell_types, palette)}
+        palette_dict["archetype"] = "black"  # Assign black to archetype
+
+    # Ensure 'archetype' color is set
+    if "archetype" not in palette_dict:
+        palette_dict["archetype"] = "black"
 
     # Plot PCA
     plt.figure(figsize=(10, 6))
@@ -512,11 +530,11 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
     )
 
     # Remove 'type' from the legend
-    handles, labels = plt.gca().get_legend_handles_labels()
-    cell_type_legend = [(h, l) for h, l in zip(handles, labels) if l in palette_dict.keys()]
+    handles, labels_ = plt.gca().get_legend_handles_labels()
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys()]
     if cell_type_legend:
-        handles, labels = zip(*cell_type_legend)
-    plt.legend(handles, labels, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
+        handles, labels_ = zip(*cell_type_legend)
+    plt.legend(handles, labels_, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
 
     # Annotate archetype points with numbers
     archetype_points = df_pca[df_pca['type'] == 'archetype']
@@ -534,8 +552,7 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
     df_pca_data = df_pca[df_pca['type'] == 'data'].copy()
     df_pca_archetypes = df_pca[df_pca['type'] == 'archetype'].copy()
 
-    # Convert cell_type labels to integers for matching
-    df_pca_data['cell_type_int'] = df_pca_data['cell_type'].astype(int)
+    # 'archetype_number' is already assigned to archetypes
     df_pca_archetypes['archetype_number'] = df_pca_archetypes['archetype_number'].astype(int)
 
     # Create a mapping from archetype_number to its PCA coordinates
@@ -543,17 +560,17 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
 
     # Now for each data point, draw a line to its corresponding archetype
     for idx, row in df_pca_data.iterrows():
-        cell_type_int = row['cell_type_int']
+        archetype_index = int(row['data_point_archetype_index'])
         data_point_coords = (row['PCA1'], row['PCA2'])
         try:
-            archetype_point_coords = archetype_coords.loc[cell_type_int]
+            archetype_point_coords = archetype_coords.loc[archetype_index]
             plt.plot(
                 [data_point_coords[0], archetype_point_coords['PCA1']],
                 [data_point_coords[1], archetype_point_coords['PCA2']],
                 color='gray', linewidth=0.5, alpha=0.3
             )
         except KeyError:
-            # If cell_type_int does not match any archetype_number, skip
+            # If archetype_index does not match any archetype_number, skip
             pass
 
     plt.title(f"{modality} PCA Scatter Plot with Archetypes Numbered")
@@ -562,6 +579,7 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
 
     # Plot t-SNE
     plt.figure(figsize=(10, 6))
+    df_tsne = df_tsne.sort_values(by='cell_type')
     sns.scatterplot(
         data=df_tsne,
         x="TSNE1",
@@ -576,11 +594,11 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
     )
 
     # Remove 'type' from the legend
-    handles, labels = plt.gca().get_legend_handles_labels()
-    cell_type_legend = [(h, l) for h, l in zip(handles, labels) if l in palette_dict.keys()]
+    handles, labels_ = plt.gca().get_legend_handles_labels()
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys()]
     if cell_type_legend:
-        handles, labels = zip(*cell_type_legend)
-    plt.legend(handles, labels, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
+        handles, labels_ = zip(*cell_type_legend)
+    plt.legend(handles, labels_, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
 
     # Annotate archetype points with numbers
     archetype_points_tsne = df_tsne[df_tsne['type'] == 'archetype']
@@ -598,26 +616,22 @@ def plot_archetypes(data_points, archetype, samples_cell_types: List[str], modal
     df_tsne_data = df_tsne[df_tsne['type'] == 'data'].copy()
     df_tsne_archetypes = df_tsne[df_tsne['type'] == 'archetype'].copy()
 
-    # Convert cell_type labels to integers for matching
-    df_tsne_data['cell_type_int'] = df_tsne_data['cell_type'].astype(int)
-    df_tsne_archetypes['archetype_number'] = df_tsne_archetypes['archetype_number'].astype(int)
-
     # Create a mapping from archetype_number to its t-SNE coordinates
     archetype_coords_tsne = df_tsne_archetypes.set_index('archetype_number')[['TSNE1', 'TSNE2']]
 
     # Now for each data point, draw a line to its corresponding archetype
     for idx, row in df_tsne_data.iterrows():
-        cell_type_int = row['cell_type_int']
+        archetype_index = int(row['data_point_archetype_index'])
         data_point_coords = (row['TSNE1'], row['TSNE2'])
         try:
-            archetype_point_coords = archetype_coords_tsne.loc[cell_type_int]
+            archetype_point_coords = archetype_coords_tsne.loc[archetype_index]
             plt.plot(
                 [data_point_coords[0], archetype_point_coords['TSNE1']],
                 [data_point_coords[1], archetype_point_coords['TSNE2']],
                 color='gray', linewidth=0.2, alpha=0.3
             )
         except KeyError:
-            # If cell_type_int does not match any archetype_number, skip
+            # If archetype_index does not match any archetype_number, skip
             pass
 
     plt.title(f"{modality} t-SNE Scatter Plot with Archetypes Numbered")
@@ -859,13 +873,14 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     pca = PCA(n_components=2)
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
+    plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'])
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'],cmap='jet')
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
     plt.title('during training, RNA')
     plt.subplot(1, 2, 2)
-    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'])
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'],cmap='jet')
     plt.title('during training, protein')
     plt.show()
 
