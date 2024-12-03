@@ -2,6 +2,8 @@
 import copy
 from itertools import product, zip_longest
 from typing import List, Dict, Any
+
+from matplotlib.lines import Line2D
 from scipy.optimize import linear_sum_assignment
 
 import scanpy as sc
@@ -531,7 +533,7 @@ def plot_archetypes(
 
     # Remove 'type' from the legend
     handles, labels_ = plt.gca().get_legend_handles_labels()
-    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys()]
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys() and l != "archetype"]
     if cell_type_legend:
         handles, labels_ = zip(*cell_type_legend)
     plt.legend(handles, labels_, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")
@@ -595,7 +597,8 @@ def plot_archetypes(
 
     # Remove 'type' from the legend
     handles, labels_ = plt.gca().get_legend_handles_labels()
-    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys()]
+    cell_type_legend = [(h, l) for h, l in zip(handles, labels_) if l in palette_dict.keys() and l != "archetype"]
+
     if cell_type_legend:
         handles, labels_ = zip(*cell_type_legend)
     plt.legend(handles, labels_, title="Cell Types", bbox_to_anchor=(1.05, 1), loc="upper left")

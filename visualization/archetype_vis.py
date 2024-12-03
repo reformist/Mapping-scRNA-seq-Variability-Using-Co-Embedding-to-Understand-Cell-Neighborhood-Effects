@@ -14,37 +14,39 @@ embedding_attrs = {'shape': 'parallelogram', 'style': 'filled', 'fillcolor': 'li
 # Data Nodes
 dot.node('rna_data', 'scRNA Data', **data_attrs)
 dot.node('protein_data', 'scProtein Data', **data_attrs)
+dot.node('major_cell_types', 'Major Cell Types Labels\nRNA+Protein', **data_attrs)
 
-# Archetype Vector Bases
-dot.node('rna_archetypes', 'RNA Vector Base', **process_attrs)
-dot.node('protein_archetypes', 'Protein Vector Base', **process_attrs)
+# Archetype Vector Basiss
+dot.node('rna_archetypes', 'RNA Archetype Basis', **process_attrs)
+dot.node('protein_archetypes', 'Protein Archetype Basis', **process_attrs)
 
-# Edges from data to vector bases
-dot.edge('rna_data', 'rna_archetypes')
-dot.edge('protein_data', 'protein_archetypes')
+# Edges from data to vector basis
+dot.edge('rna_data', 'rna_archetypes',label='Extract Polygone Vertices (PCHA)')
+dot.edge('protein_data', 'protein_archetypes',label='Extract Polygone Vertices (PCHA)')
 
 # Alignment Node
-dot.node('align_bases', 'Align Vector Bases\nfor Comparable Representation', **alignment_attrs)
+dot.node('align_basis', 'Align Vector Basiss\nfor Comparable Representation', **alignment_attrs)
 
-# Edges from vector bases to alignment
-dot.edge('rna_archetypes', 'align_bases')
-dot.edge('protein_archetypes', 'align_bases')
+# Edges from vector basis to alignment
+dot.edge('rna_archetypes', 'align_basis')
+dot.edge('protein_archetypes', 'align_basis')
+dot.edge('major_cell_types', 'align_basis')
 
-# Aligned Bases Outputs
-dot.node('aligned_rna_base', 'Aligned RNA Vector Base', **data_attrs)
-dot.node('aligned_protein_base', 'Aligned Protein Vector Base', **data_attrs)
+# Aligned Basiss Outputs
+dot.node('aligned_rna_basis', 'Aligned RNA Archetype Basis', **process_attrs)
+dot.node('aligned_protein_basis', 'Aligned Protein Archetype Basis', **process_attrs)
 
-# Edges from alignment to aligned bases
-dot.edge('align_bases', 'aligned_rna_base')
-dot.edge('align_bases', 'aligned_protein_base')
+# Edges from alignment to aligned basis
+dot.edge('align_basis', 'aligned_rna_basis')
+dot.edge('align_basis', 'aligned_protein_basis')
 
 # Cell Embedding Nodes
 dot.node('rna_embedding', 'RNA Cell \nArchetype Embeddings', **embedding_attrs)
 dot.node('protein_embedding', 'Protein Cell \nArchetype Embeddings', **embedding_attrs)
 
-# Edges from aligned bases to embeddings
-dot.edge('aligned_rna_base', 'rna_embedding')
-dot.edge('aligned_protein_base', 'protein_embedding')
+# Edges from aligned basis to embeddings
+dot.edge('aligned_rna_basis', 'rna_embedding',label='NNLS Archetype Linear Combination')
+dot.edge('aligned_protein_basis', 'protein_embedding',label='NNLS Archetype Linear Combination')
 
 # Render the graph
 dot.render('archetype_matching_pipeline_with_no_detection', view=True)
