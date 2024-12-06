@@ -931,3 +931,51 @@ def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_prop
             best_protein_archetype_order = col_ind
 
     return best_num_or_archetypes_index, best_total_cost, best_rna_archetype_order, best_protein_archetype_order
+
+
+
+def plot_inference_outputs(rna_inference_outputs, protein_inference_outputs,
+                           matching_rna_protein_latent_distances, rna_distances, prot_distances):
+    """
+    Plots latent distributions for RNA and protein, KL divergence scores,
+    and histograms of distances for visual analysis.
+
+    Parameters:
+    - rna_inference_outputs: Dictionary with RNA latent space outputs.
+    - protein_inference_outputs: Dictionary with protein latent space outputs.
+    - matching_rna_protein_latent_distances: Torch tensor with KL divergence scores.
+    - rna_distances: Torch tensor with RNA pairwise distances.
+    - prot_distances: Torch tensor with protein pairwise distances.
+    """
+
+
+    # Plot for the first item in the batch
+    plt.subplot(2, 1, 1)
+    plot_torch_normal(rna_inference_outputs["qz"].mean[0][0].item(), rna_inference_outputs["qz"].scale[0][0].item())
+    plot_torch_normal(protein_inference_outputs["qz"].mean[0][0].item(), protein_inference_outputs["qz"].scale[0][0].item())
+    plt.title(f'KL Divergence Score (Item 1): {matching_rna_protein_latent_distances[0][0].item()}')
+
+    # Plot for the second item in the batch
+    plt.subplot(2, 1, 2)
+    plot_torch_normal(rna_inference_outputs["qz"].mean[1][0].item(), rna_inference_outputs["qz"].scale[1][0].item())
+    plot_torch_normal(protein_inference_outputs["qz"].mean[1][0].item(), protein_inference_outputs["qz"].scale[1][0].item())
+    plt.title(f'KL Divergence Score (Item 2): {matching_rna_protein_latent_distances[1][0].item()}')
+    plt.tight_layout()
+    plt.show()
+
+    # Histogram of distances for RNA, protein, and matching latent distances
+    plt.figure(figsize=(10, 6))
+    plt.hist(rna_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='RNA Latent Distances')
+    plt.hist(protein_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='Protein Latent Distances')
+    plt.hist(matching_rna_protein_latent_distances.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='Matching Distances')
+    plt.legend()
+    plt.title("Histogram of Latent Distances")
+    plt.show()
+
+    # Histogram of RNA and protein distances
+    plt.figure(figsize=(10, 6))
+    plt.hist(prot_distances.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='Protein Distances')
+    plt.hist(rna_distances.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='RNA Distances')
+    plt.legend()
+    plt.title("Histogram of Pairwise Distances")
+    plt.show()
