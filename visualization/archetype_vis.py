@@ -10,43 +10,49 @@ data_attrs = {'shape': 'ellipse', 'style': 'filled', 'fillcolor': 'lightgrey'}
 process_attrs = {'shape': 'box', 'style': 'filled', 'fillcolor': 'lightblue'}
 alignment_attrs = {'shape': 'hexagon', 'style': 'filled', 'fillcolor': 'lightgreen'}
 embedding_attrs = {'shape': 'parallelogram', 'style': 'filled', 'fillcolor': 'lightyellow'}
+final_output_attrs = {'shape': 'oval', 'style': 'filled', 'fillcolor': 'lightcoral'}  # Final output node style
 
 # Data Nodes
 dot.node('rna_data', 'scRNA Data', **data_attrs)
 dot.node('protein_data', 'scProtein Data', **data_attrs)
-dot.node('major_cell_types', 'Major Cell Types Labels\nRNA+Protein', **data_attrs)
 
-# Archetype Vector Basiss
-dot.node('rna_archetypes', 'RNA Archetype Basis', **process_attrs)
-dot.node('protein_archetypes', 'Protein Archetype Basis', **process_attrs)
+# Archetype Vector Bases (Non-Aligned)
+dot.node('rna_non_aligned_archetypes', 'Non-Aligned RNA\nArchetype Basis', **process_attrs)
+dot.node('protein_non_aligned_archetypes', 'Non-Aligned Protein\nArchetype Basis', **process_attrs)
+dot.node('non_aligned_rna_embedding', 'Non-Aligned RNA Cell\nArchetype Embeddings', **embedding_attrs)
+dot.node('non_aligned_protein_embedding', 'Non-Aligned Protein Cell\nArchetype Embeddings', **embedding_attrs)
+dot.edge('rna_non_aligned_archetypes', 'non_aligned_rna_embedding')
+dot.edge('protein_non_aligned_archetypes', 'non_aligned_protein_embedding')
+dot.edge('non_aligned_rna_embedding', 'align_non_aligned_basis', label='NNLS Archetype Linear Combination')
+dot.edge('non_aligned_protein_embedding', 'align_non_aligned_basis')
 
-# Edges from data to vector basis
-dot.edge('rna_data', 'rna_archetypes',label='Extract Polygone Vertices (PCHA)')
-dot.edge('protein_data', 'protein_archetypes',label='Extract Polygone Vertices (PCHA)')
+# Edges from data to non-aligned vector basis
+dot.edge('rna_data', 'rna_non_aligned_archetypes', label='Extract Polygon Vertices (PCHA)')
+dot.edge('protein_data', 'protein_non_aligned_archetypes', label='Extract Polygon Vertices (PCHA)')
+dot.node('major_cell_types', 'Major Cell Types Ground Truth Labels\nRNA+Protein', **data_attrs)
+dot.edge('major_cell_types', 'align_non_aligned_basis')
 
-# Alignment Node
-dot.node('align_basis', 'Align Vector Basiss\nfor Comparable Representation', **alignment_attrs)
+# Alignment Node for Non-Aligned Basis
+dot.node('align_non_aligned_basis', 'Align Non-Aligned Vector Bases\nfor Comparable Representation', **alignment_attrs)
 
-# Edges from vector basis to alignment
-dot.edge('rna_archetypes', 'align_basis')
-dot.edge('protein_archetypes', 'align_basis')
-dot.edge('major_cell_types', 'align_basis')
-
-# Aligned Basiss Outputs
-dot.node('aligned_rna_basis', 'Aligned RNA Archetype Basis', **process_attrs)
-dot.node('aligned_protein_basis', 'Aligned Protein Archetype Basis', **process_attrs)
+# RNA and Protein Archetype Embeddings
+# dot.node('aligned_rna_embedding', 'Aligned RNA Cell\nArchetype Embeddings', **embedding_attrs)
+# dot.node('aligned_protein_embedding', 'Aligned Protein Cell\nArchetype Embeddings', **embedding_attrs)
 
 # Edges from alignment to aligned basis
-dot.edge('align_basis', 'aligned_rna_basis')
-dot.edge('align_basis', 'aligned_protein_basis')
+# dot.edge('align_non_aligned_basis', 'aligned_rna_embedding', label='NNLS Archetype Linear Combination')
+# dot.edge('align_non_aligned_basis', 'aligned_protein_embedding')
 
-# Cell Embedding Nodes
-dot.node('rna_embedding', 'RNA Cell \nArchetype Embeddings', **embedding_attrs)
-dot.node('protein_embedding', 'Protein Cell \nArchetype Embeddings', **embedding_attrs)
-
-# Edges from aligned basis to embeddings
-dot.edge('aligned_rna_basis', 'rna_embedding',label='NNLS Archetype Linear Combination')
-dot.edge('aligned_protein_basis', 'protein_embedding',label='NNLS Archetype Linear Combination')
+# Final output node: Match similar cells across modalities
+dot.node('matched_cells', 'Modality-Agnostic\nCell Matching', **final_output_attrs)
+dot.edge('align_non_aligned_basis', 'matched_cells', label='Aligned Archetype Embeddings')
+# dot.edge('aligned_protein_embedding', 'matched_cells')
 
 # Render the graph
-dot.render('archetype_matching_pipeline_with_no_detection', view=True)
+dot.render('archetype_matching_pipeline', view=True)
+
+# Additional node label suggestions in comments:
+# 1. "Integrated Cell Matching Across Modalities"
+# 2. "Cross-Modality Cell Alignment"
+# 3. "Unified Cell Comparison Across Modalities"
+# 4. "Modality-Agnostic Cell Matching"
