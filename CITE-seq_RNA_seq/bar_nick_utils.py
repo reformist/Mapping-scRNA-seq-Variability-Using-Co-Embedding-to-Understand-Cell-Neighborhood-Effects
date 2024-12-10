@@ -5,6 +5,7 @@ import re
 from itertools import product, zip_longest
 from typing import List, Dict, Any
 
+from IPython.core.display_functions import clear_output
 from matplotlib.lines import Line2D
 from scipy.optimize import linear_sum_assignment
 
@@ -671,6 +672,118 @@ def plot_archetypes(
     plt.show()
 
 
+def plot_aligned_normalized_losses(history):
+    """
+    Plot aligned and normalized losses for train and validation data.
+
+    Parameters:
+        history (dict): Dictionary containing training and validation loss data as Pandas DataFrames.
+    """
+    # Extract all loss keys that contain 'loss'
+    all_loss_keys = [k for k in history.keys() if 'loss' in k]
+
+    # Identify unique base loss names
+    unique_losses = list(set(k.replace('train_', '').replace('validation_', '') for k in all_loss_keys))
+
+    # Filter to keep only those with both train and validation keys
+    filtered_losses = [
+        loss_name
+        for loss_name in unique_losses
+        if f"train_{loss_name}" in history.keys() and f"validation_{loss_name}" in history.keys()
+    ]
+
+    # Create figure and subplots
+    fig, axes = plt.subplots(len(filtered_losses), 1, figsize=(10, 4 * len(filtered_losses)), sharex=True)
+
+    # Handle single loss case
+    if len(filtered_losses) == 1:
+        axes = [axes]
+
+    for ax, loss_name in zip(axes, filtered_losses):
+        # Get train data
+        train_key = f"train_{loss_name}"
+        train_df = history[train_key]
+        train_epochs = train_df.index.astype(float)  # Ensure numeric indices
+        train_data = train_df.values.flatten().astype(float)  # Ensure numeric values
+
+        train_min, train_max = train_data.min(), train_data.max()
+        norm_train_data = (train_data - train_min) / (train_max - train_min) if train_min != train_max else train_data
+
+        # Get validation data
+        val_key = f"validation_{loss_name}"
+        val_df = history[val_key]
+        val_epochs = val_df.index.astype(float)  # Ensure numeric indices
+        val_data = val_df.values.flatten().astype(float)  # Ensure numeric values
+
+        val_min, val_max = val_data.min(), val_data.max()
+        norm_val_data = (val_data - val_min) / (val_max - val_min) if val_min != val_max else val_data
+
+        # Interpolate validation data to align with training epochs
+        interpolated_val_data = np.interp(train_epochs, val_epochs, norm_val_data)
+
+        # Plot both on the same subplot
+        ax.plot(train_epochs, norm_train_data, label=f"Train {loss_name} (min: {train_min:.2f}, max: {train_max:.2f})")
+        ax.plot(train_epochs, interpolated_val_data, label=f"Val {loss_name} (min: {val_min:.2f}, max: {val_max:.2f})")
+
+        ax.set_title(loss_name)
+        ax.set_ylabel('Normalized Loss')
+        ax.legend()
+
+    axes[-1].set_xlabel('Epoch')
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_normalized_losses(history, figsize=(8, 12)):
+    """
+    Plot normalized loss values from a training history dictionary.
+
+    Parameters:
+        history (dict): Dictionary containing loss values for training and validation.
+        figsize (tuple): Tuple specifying the figure size (width, height).
+    """
+    fig, axes = plt.subplots(2, 1, figsize=figsize)  # Two subplots: one for training and one for validation
+    train_ax, val_ax = axes
+
+    for key in history.keys():
+        if 'loss' in key:
+            # Extract the data and ensure it's numeric
+            loss_data = history[key].to_numpy()
+
+            # Calculate min, max, and range
+            min_val = loss_data.min()
+            max_val = loss_data.max()
+            range_val = max_val - min_val
+
+            # Safeguard against division by zero
+            if range_val == 0:
+                norm_loss = loss_data * 0  # Normalize to zero if no range
+            else:
+                norm_loss = (loss_data - min_val) / range_val
+
+            label = f'{key} min: {min_val:.0f} max: {max_val:.0f}'
+
+            # Plot on the respective subplot
+            if 'train' in key:
+                train_ax.plot(norm_loss, label=label)
+            elif 'val' in key:
+                val_ax.plot(norm_loss, label=label)
+
+    # Formatting subplots
+    train_ax.set_title('Training Losses')
+    train_ax.set_xlabel('Epoch')
+    train_ax.set_ylabel('Normalized Loss')
+    train_ax.legend()
+
+    val_ax.set_title('Validation Losses')
+    val_ax.set_xlabel('Epoch')
+    val_ax.set_ylabel('Normalized Loss')
+    val_ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
 def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
     """
     Evaluates multiple distance metrics to determine which one best captures the similarity
@@ -902,15 +1015,16 @@ def match_rows(rna, protein, metric='correlation'):
 
 
 def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index):
+    plt.figure(figsize=(10, 5))
     pca = PCA(n_components=2)
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
-    plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
+    plt.title('during training, RNA')
+
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
-    plt.title('during training, RNA')
     plt.subplot(1, 2, 2)
     plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, protein')
