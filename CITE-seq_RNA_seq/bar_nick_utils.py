@@ -447,7 +447,18 @@ def compute_pairwise_kl(loc, scale):
     ).sum(dim=-1)  # Sum over latent dimensions
     return kl_matrix
 
-
+def compute_pairwise_kl_two_items(loc1,loc2, scale1, scale2):
+    # Expand for broadcasting
+    loc1 = loc1.unsqueeze(1)
+    loc2 = loc2.unsqueeze(0)
+    scale1 = scale1.unsqueeze(1)
+    scale2 = scale2.unsqueeze(0)
+    # Compute KL divergence for each pair
+    kl_matrix = (
+            torch.log(scale2 / scale1) +
+            (scale1 ** 2 + (loc1 - loc2) ** 2) / (2 * scale2 ** 2) - 0.5
+    ).sum(dim=-1)  # Sum over latent dimensions
+    return kl_matrix
 def plot_torch_normal(mean, std_dev, num_points=1000):
     """
     Plots a Normal distribution given the mean and standard deviation.
@@ -693,7 +704,7 @@ def plot_aligned_normalized_losses(history):
     ]
 
     # Create figure and subplots
-    fig, axes = plt.subplots(len(filtered_losses), 1, figsize=(10, 4 * len(filtered_losses)), sharex=True)
+    fig, axes = plt.subplots(len(filtered_losses), 1, figsize=(8, 4 * len(filtered_losses)), sharex=True)
 
     # Handle single loss case
     if len(filtered_losses) == 1:
@@ -734,7 +745,7 @@ def plot_aligned_normalized_losses(history):
     plt.show()
 
 
-def plot_normalized_losses(history, figsize=(8, 12)):
+def plot_normalized_losses(history, figsize=(6, 8)):
     """
     Plot normalized loss values from a training history dictionary.
 
@@ -1019,15 +1030,21 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     pca = PCA(n_components=2)
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
-    plt.subplot(1, 2, 1)
+    plt.subplot(1, 3, 1)
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, RNA')
 
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, protein')
+
+    plt.subplot(1, 3, 3)
+    # plot merged RNA and protein
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c='red', label='RNA')
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c='blue', label='protein')
+    plt.title('merged RNA and protein')
     plt.show()
 
 
