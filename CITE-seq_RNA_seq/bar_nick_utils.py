@@ -1,5 +1,7 @@
 # funciton to avoid too much text in the notebook
 import copy
+import os
+import re
 from itertools import product, zip_longest
 from typing import List, Dict, Any
 
@@ -238,6 +240,9 @@ def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix,
     assert not np.isinf(count_matrix).any(), "count_matrix contains infinities"
     assert not np.isnan(archetype_matrix).any(), "archetype_matrix contains NaNs"
     assert not np.isinf(archetype_matrix).any(), "archetype_matrix contains infinities"
+    # make sure all values are positive
+    # if not (count_matrix >= 0).all():
+    #     count_matrix = count_matrix - count_matrix.min()
 
     for i in range(n_cells):
         x = count_matrix[i]
@@ -348,50 +353,75 @@ def select_gene_likelihood(adata):
     return gene_likelihood
 
 
-def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict):
+def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict, plot_flag=False) -> (AnnData, list, list):
+    import numpy as np
+    import pandas as pd
+    from itertools import product, zip_longest
+    import matplotlib.pyplot as plt
+
     horizontal_splits = [0, 500, 1000]
     vertical_splits = [0, 333, 666, 1000]
+
+    # Create regions as a list of coordinate grids
     regions = [
         list(product(range(horizontal_splits[i], horizontal_splits[i + 1]),
                      range(vertical_splits[j], vertical_splits[j + 1])))
         for i in range(len(horizontal_splits) - 1)
         for j in range(len(vertical_splits) - 1)
     ]
+
+    # Create a board for visualization (optional)
     board = np.zeros((1000, 1000))
     for idx, region in enumerate(regions):
-        # Convert each region's list of tuples to an array to index properly
         coords = np.array(region)
-        board[coords[:, 0], coords[:, 1]] = idx + 1  # Assign different values for each region
+        board[coords[:, 0], coords[:, 1]] = idx + 1
+
     if plot_flag:
         plt.imshow(board)
         plt.title('CNs')
         plt.colorbar()
         plt.show()
-    # set x and y coor for each cell in dataset and place it in the adata_prot_subset
+
+    # Assign random initial coordinates to all cells
     adata_prot_subset.obs['X'] = np.random.randint(0, 1000, adata_prot_subset.n_obs)
     adata_prot_subset.obs['Y'] = np.random.randint(0, 1000, adata_prot_subset.n_obs)
+
+    # Create a dictionary mapping tuples of (cell_type_1, cell_type_2, cell_type_3) to a region index
     minor_to_region_dict = {}
-    for i, (cell_type_1, cell_type_2, cell_type_3) in enumerate(
-            zip_longest(major_to_minor_dict['B cells'], major_to_minor_dict['CD4 T'],
-                        major_to_minor_dict['CD8 T'])):
+    major_B = major_to_minor_dict.get('B cells', [])
+    major_CD4 = major_to_minor_dict.get('CD4 T', [])
+    major_CD8 = major_to_minor_dict.get('CD8 T', [])
+
+    for i, (cell_type_1, cell_type_2, cell_type_3) in enumerate(zip_longest(major_B, major_CD4, major_CD8)):
+        # If any of these are None, they won't match any cell, but we can still store them
         minor_to_region_dict[(cell_type_1, cell_type_2, cell_type_3)] = i
 
-    # Place the cells in the regions
-    for (cell_type_1, cell_type_2, cell_type_3), region in minor_to_region_dict.items():
-        # Get the indices of the cells of the current cell type
-        cell_indices_1 = adata_prot_subset.obs['cell_types'] == cell_type_1
-        cell_indices_2 = adata_prot_subset.obs['cell_types'] == cell_type_2
-        cell_indices_3 = adata_prot_subset.obs['cell_types'] == cell_type_3
-        # Get the coordinates of the cells
-        coords = np.array(regions[region])
-        # Place the cells in the regions
-        adata_prot_subset.obs['X'][cell_indices_1] = np.random.choice(coords[:, 0], sum(cell_indices_1))
-        adata_prot_subset.obs['Y'][cell_indices_1] = np.random.choice(coords[:, 1], sum(cell_indices_1))
-        adata_prot_subset.obs['X'][cell_indices_2] = np.random.choice(coords[:, 0], sum(cell_indices_2))
-        adata_prot_subset.obs['Y'][cell_indices_2] = np.random.choice(coords[:, 1], sum(cell_indices_2))
-        adata_prot_subset.obs['X'][cell_indices_3] = np.random.choice(coords[:, 0], sum(cell_indices_3))
-        adata_prot_subset.obs['Y'][cell_indices_3] = np.random.choice(coords[:, 1], sum(cell_indices_3))
-    adata_prot_subset.obsm['X_spatial'] = np.array(adata_prot_subset.obs[['X', 'Y']])
+    # Now place the cells of each subgroup into their assigned region
+    for (cell_type_1, cell_type_2, cell_type_3), region_index in minor_to_region_dict.items():
+        coords = np.array(regions[region_index])
+
+        # Update positions for each cell type if not None
+        if cell_type_1 is not None:
+            cell_indices_1 = (adata_prot_subset.obs['cell_types'] == cell_type_1)
+            if cell_indices_1.sum() > 0:
+                adata_prot_subset.obs.loc[cell_indices_1, 'X'] = np.random.choice(coords[:, 0], cell_indices_1.sum())
+                adata_prot_subset.obs.loc[cell_indices_1, 'Y'] = np.random.choice(coords[:, 1], cell_indices_1.sum())
+
+        if cell_type_2 is not None:
+            cell_indices_2 = (adata_prot_subset.obs['cell_types'] == cell_type_2)
+            if cell_indices_2.sum() > 0:
+                adata_prot_subset.obs.loc[cell_indices_2, 'X'] = np.random.choice(coords[:, 0], cell_indices_2.sum())
+                adata_prot_subset.obs.loc[cell_indices_2, 'Y'] = np.random.choice(coords[:, 1], cell_indices_2.sum())
+
+        if cell_type_3 is not None:
+            cell_indices_3 = (adata_prot_subset.obs['cell_types'] == cell_type_3)
+            if cell_indices_3.sum() > 0:
+                adata_prot_subset.obs.loc[cell_indices_3, 'X'] = np.random.choice(coords[:, 0], cell_indices_3.sum())
+                adata_prot_subset.obs.loc[cell_indices_3, 'Y'] = np.random.choice(coords[:, 1], cell_indices_3.sum())
+
+    # Store the spatial coordinates in obsm
+    adata_prot_subset.obsm['X_spatial'] = adata_prot_subset.obs[['X', 'Y']].to_numpy()
+
     return adata_prot_subset, horizontal_splits, vertical_splits
 
 
@@ -407,7 +437,6 @@ def compute_pairwise_kl(loc, scale):
     # Expand for broadcasting
     loc1 = loc.unsqueeze(1)
     loc2 = loc.unsqueeze(0)
-
     scale1 = scale.unsqueeze(1)
     scale2 = scale.unsqueeze(0)
     # Compute KL divergence for each pair
@@ -807,7 +836,7 @@ def compute_random_matching_cost(rna, protein, metric='correlation'):
     return normalized_cost, distances
 
 
-def compare_matchings(archetype_proportion_list_rna, archetype_proportion_list_protein, metric='cosine',
+def compare_matchings(archetype_proportion_list_rna, archetype_proportion_list_protein, metric='correlation',
                       num_trials=100):
     """Compare optimal matching cost with average random matching cost and plot norms."""
     # Extract the best pair based on optimal matching
@@ -863,7 +892,7 @@ def compare_matchings(archetype_proportion_list_rna, archetype_proportion_list_p
     plt.show()
 
 
-def match_rows(rna, protein, metric='cosine'):
+def match_rows(rna, protein, metric='correlation'):
     cost_matrix = cdist(rna, protein, metric=metric)
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
     total_cost = cost_matrix[row_ind, col_ind].sum()
@@ -878,17 +907,18 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     rna_pca = pca.transform(rna_mean)
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'],cmap='jet')
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
     plt.title('during training, RNA')
     plt.subplot(1, 2, 2)
-    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'],cmap='jet')
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, protein')
     plt.show()
 
 
-def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_proportion_list_protein, metric='cosine'):
+def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_proportion_list_protein,
+                                   metric='correlation'):
     """
     Find the best index in the list by matching rows using linear assignment.
 
@@ -933,6 +963,31 @@ def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_prop
     return best_num_or_archetypes_index, best_total_cost, best_rna_archetype_order, best_protein_archetype_order
 
 
+def get_latest_file(folder, prefix):
+    files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith('.h5ad')]
+    if not files:
+        return None
+    files.sort(key=lambda x: re.search(r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}', x).group(), reverse=True)
+    return os.path.join(folder, files[0])
+
+
+def clean_uns_for_h5ad(adata: AnnData):
+    """
+    Remove or convert non-serializable objects from the `uns` attribute of an AnnData object.
+    """
+    keys_to_remove = []
+    for key, value in adata.uns.items():
+        if isinstance(value, sns.palettes._ColorPalette):
+            # Convert seaborn ColorPalette to a list of colors
+            adata.uns[key] = list(value)
+        elif not isinstance(value, (str, int, float, list, dict, np.ndarray)):
+            # Mark non-serializable keys for removal
+            keys_to_remove.append(key)
+    for key in keys_to_remove:
+        del adata.uns[key]
+    if hasattr(adata, 'obsm'):
+        adata.obsm = {str(key): value for key, value in adata.obsm.items()}
+
 
 def plot_inference_outputs(rna_inference_outputs, protein_inference_outputs,
                            matching_rna_protein_latent_distances, rna_distances, prot_distances):
@@ -948,26 +1003,30 @@ def plot_inference_outputs(rna_inference_outputs, protein_inference_outputs,
     - prot_distances: Torch tensor with protein pairwise distances.
     """
 
-
     # Plot for the first item in the batch
     plt.subplot(2, 1, 1)
     plot_torch_normal(rna_inference_outputs["qz"].mean[0][0].item(), rna_inference_outputs["qz"].scale[0][0].item())
-    plot_torch_normal(protein_inference_outputs["qz"].mean[0][0].item(), protein_inference_outputs["qz"].scale[0][0].item())
+    plot_torch_normal(protein_inference_outputs["qz"].mean[0][0].item(),
+                      protein_inference_outputs["qz"].scale[0][0].item())
     plt.title(f'KL Divergence Score (Item 1): {matching_rna_protein_latent_distances[0][0].item()}')
 
     # Plot for the second item in the batch
     plt.subplot(2, 1, 2)
     plot_torch_normal(rna_inference_outputs["qz"].mean[1][0].item(), rna_inference_outputs["qz"].scale[1][0].item())
-    plot_torch_normal(protein_inference_outputs["qz"].mean[1][0].item(), protein_inference_outputs["qz"].scale[1][0].item())
+    plot_torch_normal(protein_inference_outputs["qz"].mean[1][0].item(),
+                      protein_inference_outputs["qz"].scale[1][0].item())
     plt.title(f'KL Divergence Score (Item 2): {matching_rna_protein_latent_distances[1][0].item()}')
     plt.tight_layout()
     plt.show()
 
     # Histogram of distances for RNA, protein, and matching latent distances
     plt.figure(figsize=(10, 6))
-    plt.hist(rna_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='RNA Latent Distances')
-    plt.hist(protein_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='Protein Latent Distances')
-    plt.hist(matching_rna_protein_latent_distances.detach().cpu().numpy().flatten(), bins=100, alpha=0.5, label='Matching Distances')
+    plt.hist(rna_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5,
+             label='RNA Latent Distances')
+    plt.hist(protein_inference_outputs["qz"].loc.detach().cpu().numpy().flatten(), bins=100, alpha=0.5,
+             label='Protein Latent Distances')
+    plt.hist(matching_rna_protein_latent_distances.detach().cpu().numpy().flatten(), bins=100, alpha=0.5,
+             label='Matching Distances')
     plt.legend()
     plt.title("Histogram of Latent Distances")
     plt.show()
