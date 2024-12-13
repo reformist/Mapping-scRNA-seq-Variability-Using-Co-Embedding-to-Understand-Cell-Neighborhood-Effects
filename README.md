@@ -7,16 +7,21 @@ affect variability and relationships between transcriptomic and proteomic data.
 
 ## Contents
 
+- [Reproducing the Results](#reproducing-the-results)
 - [Overview](#overview)
 - [Repository Structure](#repository-structure)
 - [System Requirements and Dependencies](#system-requirements-and-dependencies)
 - [Installation](#installation)
 - [Data Preparation](#data-preparation)
-- [Running the Analysis](#running-the-analysis)
-- [Training the Models](#training-the-models)
-- [Saving and Loading Models](#saving-and-loading-models)
-- [Reproducing the Results](#reproducing-the-results)
-- [Troubleshooting](#troubleshooting)
+- [Running Model](#running-model)
+
+## Reproducing the Results
+
+To reproduce the provided results:
+
+1. Follow [Installation](#installation) instructions.
+2. Run `archetype_generation.ipynb` end-to-end with the same parameters.
+3. Run `train_vae_with_archetypes_vectors.ipynb` to train the dual VAE model.
 
 ## Overview
 
@@ -130,7 +135,7 @@ Inside the notebooks, you will find parameters controlling:
   
 The resulting files (e.g., `adata_rna_YYYY-MM-DD-HH-MM-SS.h5ad` and `adata_prot_YYYY-MM-DD-HH-MM-SS.h5ad`) will be saved in `data/`.
 
-## Running the Analysis
+## Running Model
 
 1. **Archetype Generation:**
    - Open and run `archetype_generation.ipynb`.
@@ -151,10 +156,3 @@ The resulting files (e.g., `adata_rna_YYYY-MM-DD-HH-MM-SS.h5ad` and `adata_prot_
      - Save the trained model.
 
     
-## Reproducing the Results
-
-To reproduce the provided results:
-
-1. Follow [Installation](#installation) instructions.
-2. Run `archetype_generation.ipynb` end-to-end with the same parameters.
-3. Run `train_vae_with_archetypes_vectors.ipynb` to train the dual VAE model.
