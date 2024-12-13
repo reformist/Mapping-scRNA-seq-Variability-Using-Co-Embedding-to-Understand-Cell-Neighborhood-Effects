@@ -53,6 +53,7 @@ This project involves:
 │  ├─ archetype_generation.ipynb          # Notebook for generating archetypes and analyzing them
 │  ├─ train_vae_with_archetypes_vectors.ipynb # Notebook for training dual VAEs using archetype constraints
 │  ├─ bar_nick_utils.py                   # Utility functions for plotting, data manipulation, etc.
+│  ├─ model.pt                            # dual VAE model weights
 │  ├─ data/                               # Directory containing input data and saved results
 │  │  ├─ adata_rna_*.h5ad                 # Processed RNA AnnData files with timestamp
 │  │  ├─ adata_prot_*.h5ad                # Processed Protein AnnData files with timestamp
