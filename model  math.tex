@@ -1,0 +1,80 @@
+\documentclass{article}
+\usepackage{amsmath}
+
+\begin{document}
+
+\section*{Generative Process}
+
+\subsection*{For each cell $n$:}
+\begin{align*}
+z_n^{(\text{RNA})} &\sim \mathcal{N}(0, I) \\
+z_n^{(\text{PROT})} &\sim \mathcal{N}(0, I) \\
+l_n^{(\text{RNA})} &\sim \log \mathcal{N}(\ell^{(\text{RNA})}, \sigma^2_{(\text{RNA})}) \\
+l_n^{(\text{PROT})} &\sim \log \mathcal{N}(\ell^{(\text{PROT})}, \sigma^2_{(\text{PROT})})
+\end{align*}
+
+\subsection*{RNA Modality}
+For each gene $g$ and cell $n$:
+\begin{align*}
+\mu_{ng}^{(\text{RNA})} &= f_\mu^{(\text{RNA})}(z_n^{(\text{RNA})}) \\
+\theta_g &= f_\theta^{(\text{RNA})}(z_n^{(\text{RNA})}) \\
+\pi_{ng} &= f_\pi^{(\text{RNA})}(z_n^{(\text{RNA})}) \\
+\text{counts}_{x_{ng}} &\sim \text{ZINB}(\mu_{ng}^{(\text{RNA})} \cdot l_n^{(\text{RNA})}, \theta_g, \pi_{ng})
+\end{align*}
+
+\subsection*{Protein Modality}
+For each protein $t$ and cell $n$:
+\begin{align*}
+\mu_{nt}^{(\text{PROT})} &= f_\mu^{(\text{PROT})}(z_n^{(\text{PROT})}) \\
+\sigma_{nt}^{(\text{PROT})} &= f_\sigma^{(\text{PROT})}(z_n^{(\text{PROT})}) \\
+\text{counts}_{x_{nt}} &\sim \mathcal{N}(\mu_{nt}^{(\text{PROT})} \cdot l_n^{(\text{PROT})}, \sigma_{nt}^{(\text{PROT})})
+\end{align*}
+
+\subsection*{Observed Variables}
+For each gene $g$ and cell $n$:
+\begin{align*}
+w_{ng} &\sim \text{Gamma}(f_w(z_n, s_n), \theta_g) \\
+l_n &\sim \text{LogNormal}(\ell_\mu^n, \ell_\nu^n) \\
+y_{ng} &\sim \text{Poisson}(l_n w_{ng}) \\
+h_{ng} &\sim \text{Bernoulli}(f_h(z_n, s_n)) \\
+\text{obs\_counts}_{x_{ng}} &=
+\begin{cases}
+  y_{ng} & \text{if } h_{ng} = 0 \\
+  0 & \text{otherwise}
+\end{cases}
+\end{align*}
+
+\section*{Loss Terms and Alignment}
+
+\begin{itemize}
+    \item \textbf{Reconstruction Loss:} Both RNA and protein modalities include reconstruction losses that measure how well the generated data matches the observed data for each modality.
+    \[
+    \mathcal{L}_{\text{reconstruction}} = \mathcal{L}_{\text{RNA}} + \mathcal{L}_{\text{PROT}}
+    \]
+    \item \textbf{Contrastive Loss:} A contrastive loss term is applied to encourage alignment between RNA and protein latent spaces based on archetype embeddings (\(\text{CAE}_n\)) and cell neighborhood information (\(\text{CN}_n\)).
+    \[
+    \mathcal{L}_{\text{contrastive}} = f(\text{CAE}_n, \text{CN}_n, z^{(\text{RNA})}_n, z^{(\text{PROT})}_n)
+    \]
+    \item \textbf{Latent Space Alignment:} KL divergence is used to align the latent distributions of RNA and protein modalities.
+    \[
+    \mathcal{L}_{\text{latent}} = D_{\text{KL}}(q(z^{(\text{RNA})}_n) \| q(z^{(\text{PROT})}_n))
+    \]
+    \item \textbf{Matching Loss:} Aligns the latent spaces by ensuring that pairwise distances between latent embeddings match distances in the archetype space.
+\end{itemize}
+
+\section*{Key Components}
+
+\begin{itemize}
+    \item \textbf{Latent Space:} Low-dimensional latent representations \( z^{(\text{RNA})}_n \) and \( z^{(\text{PROT})}_n \) are learned for each cell \( n \).
+    \item \textbf{Neural Networks:} The functions \( f^{(\text{RNA})}_\mu \), \( f^{(\text{RNA})}_\theta \), \( f^{(\text{RNA})}_\pi \), \( f^{(\text{PROT})}_\mu \), and \( f^{(\text{PROT})}_\sigma \) map latent variables to distributional parameters.
+    \item \textbf{Count Distribution:} RNA counts are modeled with a Zero-Inflated Negative Binomial (ZINB) distribution.
+    \item \textbf{Continuous Distribution:} Protein expression is modeled using a Normal distribution.
+    \item \textbf{Library Size Scaling:} Separate library sizes \( l^{(\text{RNA})}_n \) and \( l^{(\text{PROT})}_n \) scale the respective mean expressions after distributional parameters are computed.
+    \item \textbf{Cross-Modality and Spatial Context:}
+        \begin{itemize}
+            \item \(\text{CAE}_n\) aligns the RNA and protein latent spaces.
+            \item \(\text{CN}_n\) provides spatial context for the protein modality.
+        \end{itemize}
+\end{itemize}
+
+\end{document}
