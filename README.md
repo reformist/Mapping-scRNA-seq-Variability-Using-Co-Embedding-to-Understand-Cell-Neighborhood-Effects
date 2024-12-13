@@ -27,3 +27,11 @@ For example, if you can only use torch cpu:
 ```bash
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 ```
+
+### 3. Run the Jupyter Notebook
+Start by running [archetype_generation.ipynb](CITE-seq_RNA_seq/archetype_generation.ipynb)
+which will guide you through the process of generating cell archetypes and synthetic spatial coordinates.
+and will save a new annotated dataset with the archetype embedding
+
+Second run [train_vae_with_archetypes_vectors.ipynb](CITE-seq_RNA_seq/train_vae_with_archetypes_vectors.ipynb)
+which will guide you through the process of training a dual VAE model with the archetype embedding as a matching loss across modalities

@@ -1,42 +1,21 @@
-# funciton to avoid too much text in the notebook
 import copy
 import os
 import re
-from itertools import product, zip_longest
 from typing import List, Dict, Any
 
-from IPython.core.display_functions import clear_output
-from matplotlib.lines import Line2D
 from scipy.optimize import linear_sum_assignment
 
-import scanpy as sc
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
-import numpy as np
-# import starfysh
-import pandas as pd
 import scanpy as sc
 import seaborn as sns
 from anndata import AnnData
-# import starfysh
-from matplotlib import pyplot as plt
-from py_pcha import PCHA
 from scipy.spatial.distance import cdist
-# !pip install starfysh
-# !pip install pandas
-# !pip install scanpy
-# !pip install histomicstk
-# !pip install --upgrade pip setuptools wheel
-# !pip install pyvips --use-pep517
-# !pip install histomicstk --find-links https://girder.github.io/large_image_wheels
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from torch.backends.mkl import verbose
-
-# computationally figure out which ones are best
-np.random.seed(8)
-plot_flag = False
+import numpy as np
+import pandas as pd
+from itertools import product, zip_longest
+import matplotlib.pyplot as plt
 
 from scipy.optimize import nnls
 import cvxpy as cp
@@ -50,40 +29,6 @@ def nnls_omp(basis_matrix, target_vector, tol=1e-4):
     weights = np.maximum(0, weights)  # Enforce non-negativity
     return weights
 
-
-import numpy as np
-
-
-# from sklearn.linear_model import OrthogonalMatchingPursuit
-#
-#
-# def nnls_omp(basis_matrix, target_vector, tol=1e-6):
-#     """
-#     Solve the non-negative least squares problem approximately using OMP.
-#
-#     Parameters:
-#     -----------
-#     basis_matrix : np.ndarray
-#         Matrix of basis vectors, shape (n_basis_vectors, n_features).
-#     target_vector : np.ndarray
-#         Target vector to approximate, shape (n_features,).
-#     tol : float, optional
-#         Tolerance for reconstruction error (default is 1e-6).
-#
-#     Returns:
-#     --------
-#     weights : np.ndarray
-#         Weights for the linear combination of basis vectors, shape (n_basis_vectors,).
-#     """
-#     # Initialize Orthogonal Matching Pursuit model
-#     omp = OrthogonalMatchingPursuit(tol=tol, fit_intercept=False)
-#     omp.fit(basis_matrix.T, target_vector)
-#     weights = omp.coef_
-#
-#     # Enforce non-negativity (optional, depending on your requirement)
-#     weights = np.maximum(0, weights)
-#
-#     return weights
 
 def get_cell_representations_as_archetypes_ols(count_matrix, archetype_matrix):
     """
@@ -131,27 +76,15 @@ def get_cell_representations_as_archetypes_omp(count_matrix, archetype_matrix, t
     for i in range(n_cells):
         weights[i] = nnls_omp(archetype_matrix, count_matrix[i], tol=tol)
 
-    # Handle zero rows
     row_sums = weights.sum(axis=1, keepdims=True)
     weights[row_sums == 0] = 1.0 / n_archetypes  # Assign uniform weights to zero rows
 
-    # Normalize weights
     weights /= weights.sum(axis=1, keepdims=True)
 
     return weights
 
 
-# def get_cell_representations_as_archetypes_omp(count_matrix, archetype_matrix):
-#     """
-#     Compute archetype weights for each cell using OMP.
-#     """
-#     n_cells = count_matrix.shape[0]
-#     n_archetypes = archetype_matrix.shape[0]
-#     weights = np.zeros((n_cells, n_archetypes))
-#     for i in range(n_cells):
-#         weights[i] = nnls_omp(archetype_matrix.T, count_matrix[i])
-#     weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
-#     return weights
+
 
 def nnls_cvxpy(A, b):
     """
@@ -355,10 +288,7 @@ def select_gene_likelihood(adata):
 
 
 def add_spatial_data_to_prot(adata_prot_subset, major_to_minor_dict, plot_flag=False) -> (AnnData, list, list):
-    import numpy as np
-    import pandas as pd
-    from itertools import product, zip_longest
-    import matplotlib.pyplot as plt
+
 
     horizontal_splits = [0, 500, 1000]
     vertical_splits = [0, 333, 666, 1000]
@@ -938,6 +868,13 @@ def compute_random_matching_cost(rna, protein, metric='correlation'):
         protein_random_norm = protein_random / np.linalg.norm(protein_random, axis=1, keepdims=True)
         cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
         distances = 1 - cosine_similarity  # Cosine distance
+        for i in range(100):
+            random_indices = np.random.permutation(n_samples)
+            protein_random = protein[random_indices]
+            protein_random_norm = protein_random / np.linalg.norm(protein_random, axis=1, keepdims=True)
+            cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
+            distances = np.vstack((distances, 1 - cosine_similarity))
+        distances = np.mean(distances, axis=0)
     elif metric == 'correlation':
         # Compute Pearson correlation distance
         rna_mean = np.mean(rna, axis=1, keepdims=True)
