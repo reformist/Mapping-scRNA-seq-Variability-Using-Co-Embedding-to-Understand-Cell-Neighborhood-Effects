@@ -59,7 +59,7 @@ This project involves:
 │  │  ├─ adata_prot_*.h5ad                # Processed Protein AnnData files with timestamp
 │  │  ├─ adata_archetype_rna_*.h5ad       # RNA archetype embeddings AnnData files
 │  │  ├─ adata_archetype_prot_*.h5ad      # Protein archetype embeddings AnnData files
-│  │  ├─ spleen_lymph_cite_seq.h5ad       # Example input data (if provided)
+│  │  ├─ spleen_lymph_cite_seq.h5ad       # input data
 └─ ...
 ```
 
