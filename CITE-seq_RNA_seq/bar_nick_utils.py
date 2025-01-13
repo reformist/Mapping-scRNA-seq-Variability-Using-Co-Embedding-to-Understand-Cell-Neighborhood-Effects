@@ -182,7 +182,9 @@ def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix,
         x = count_matrix[i]
         w = cp.Variable(n_archetypes)
         objective = cp.Minimize(cp.sum_squares(A_T @ w - x))
-        constraints = [w >= 0]
+        # constraints = [w >= 0] # legacy=
+        constraints = [w >= 0, cp.sum(w) == 1] # this make sure that each data points is a convex combination of the archetypes
+
         problem = cp.Problem(objective, constraints)
         try:
             problem.solve(solver=solver)
