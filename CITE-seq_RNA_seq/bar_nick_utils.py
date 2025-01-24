@@ -21,6 +21,13 @@ from scipy.optimize import nnls
 import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
 
+# Function to get the latest file based on the timestamp
+def get_latest_file(prefix,folder):
+    files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith('.h5ad')]
+    if not files:
+        return None
+    files.sort(key=lambda x: re.search(r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}', x).group(), reverse=True)
+    return os.path.join(folder, files[0])
 
 def nnls_omp(basis_matrix, target_vector, tol=1e-4):
     omp = OrthogonalMatchingPursuit(tol=tol, fit_intercept=False)
@@ -190,6 +197,7 @@ def get_cell_representations_as_archetypes_cvxpy(count_matrix, archetype_matrix,
             problem.solve(solver=solver)
         except cp.SolverError:
             problem.solve(solver=cp.SCS)  # Try SCS if the primary solver fails
+
         weights[i] = w.value
 
     return weights
