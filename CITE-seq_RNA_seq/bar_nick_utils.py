@@ -816,7 +816,7 @@ def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) 
     - results: Dictionary containing evaluation metrics for each distance metric
     """
     results = {}
-    n_samples = A.shape[0]
+    n_samples =min( A.shape[0],B.shape[0])
 
     # Expected mean rank and MRR under random assignment
     expected_mean_rank = (n_samples + 1) / 2
