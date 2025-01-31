@@ -978,7 +978,8 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
     plt.subplot(1, 3, 1)
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
+    # plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], cmap='jet')
     plt.title('during training, RNA')
 
     pca.fit(protein_mean)
