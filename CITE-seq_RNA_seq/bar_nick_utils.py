@@ -21,6 +21,7 @@ from scipy.optimize import nnls
 import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
 import scib
+import scipy
 # Function to get the latest file based on the timestamp
 def get_mixing_score(adata,batch_key="batch",label_key="cell_type"):
 
@@ -50,6 +51,263 @@ def get_mixing_score(adata,batch_key="batch",label_key="cell_type"):
 
     print(f"Median iLISI: {ilisi_score}, cLISI: {clisi_score}, kBET: {kBET_score}")
     return {"ilisi": ilisi_score, "clisi": clisi_score, "kBET": kBET_score}
+
+
+def plot_merged_pca_tsne(
+    adata1,
+    adata2,
+    unmatched_prot_indices,
+    unmatched_rna_indices,
+    pca_components=5
+):
+    """
+    1) Combines Protein + RNA 'archetype_vec' data.
+    2) Dynamically adjusts PCA components if needed.
+    3) Plots the first two principal components in one figure.
+    4) Applies TSNE to the PCA output, and generates TWO separate figures:
+       - Figure A: Colors by modality (Protein vs. RNA).
+       - Figure B: Colors by matched vs. unmatched status.
+
+    Parameters
+    ----------
+    adata1 : anndata.AnnData
+        Protein subset with 'archetype_vec' in obsm.
+    adata2 : anndata.AnnData
+        RNA subset with 'archetype_vec' in obsm.
+    unmatched_prot_indices : list or np.ndarray
+        Indices of unmatched protein cells.
+    unmatched_rna_indices : list or np.ndarray
+        Indices of unmatched RNA cells.
+    pca_components : int
+        Requested number of principal components before TSNE.
+    """
+
+    # -------------------- MERGE DATA --------------------
+    prot_data = adata1.obsm['archetype_vec']
+    rna_data = adata2.obsm['archetype_vec']
+    merged_data = np.vstack([prot_data, rna_data])
+
+    max_valid_components = min(merged_data.shape[0], merged_data.shape[1])
+    final_pca_components = min(pca_components, max_valid_components)
+
+    # -------------------- PCA --------------------
+    pca_model = PCA(n_components=final_pca_components)
+    pca_result = pca_model.fit_transform(merged_data)
+
+    # Split PCA results back
+    prot_pca = pca_result[:len(prot_data)]
+    rna_pca = pca_result[len(prot_data):]
+
+    # -------------------- PCA PLOT --------------------
+    plt.figure(figsize=(6, 5))
+
+    # Matched vs. unmatched (Protein)
+    plt.scatter(
+        prot_pca[:, 0],
+        prot_pca[:, 1],
+        c='blue',
+        s=5,
+        label='Matched Protein'
+    )
+    plt.scatter(
+        prot_pca[unmatched_prot_indices, 0],
+        prot_pca[unmatched_prot_indices, 1],
+        c='yellow',
+        marker='x',
+        s=10,
+        label='Unmatched Protein'
+    )
+
+    # Matched vs. unmatched (RNA)
+    plt.scatter(
+        rna_pca[:, 0],
+        rna_pca[:, 1],
+        c='red',
+        s=5,
+        label='Matched RNA'
+    )
+    plt.scatter(
+        rna_pca[unmatched_rna_indices, 0],
+        rna_pca[unmatched_rna_indices, 1],
+        c='orange',
+        marker='D',
+        s=10,
+        label='Unmatched RNA'
+    )
+
+    plt.title("PCA (First Two PCs)")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.legend()
+    plt.show()
+
+    # -------------------- TSNE --------------------
+    tsne_model = TSNE(n_components=2)
+    tsne_result = tsne_model.fit_transform(pca_result)
+
+    prot_tsne = tsne_result[:len(prot_data)]
+    rna_tsne = tsne_result[len(prot_data):]
+
+    # -------------------- FIGURE A (Modality Colors) --------------------
+    plt.figure(figsize=(6, 5))
+
+    plt.scatter(
+        prot_tsne[:, 0],
+        prot_tsne[:, 1],
+        c='blue',
+        s=5,
+        label='Protein'
+    )
+    plt.scatter(
+        rna_tsne[:, 0],
+        rna_tsne[:, 1],
+        c='red',
+        s=5,
+        label='RNA'
+    )
+
+    plt.title("TSNE by Modality (Protein vs. RNA)")
+    plt.xlabel("TSNE 1")
+    plt.ylabel("TSNE 2")
+    plt.legend()
+    plt.show()
+
+    # -------------------- FIGURE B (Matched vs. Unmatched) --------------------
+    plt.figure(figsize=(6, 5))
+
+    # Matched Protein
+    plt.scatter(
+        prot_tsne[:, 0],
+        prot_tsne[:, 1],
+        c='red',
+        s=5,
+        label='Matched Protein'
+    )
+    # Unmatched Protein
+    plt.scatter(
+        prot_tsne[unmatched_prot_indices, 0],
+        prot_tsne[unmatched_prot_indices, 1],
+        c='yellow',
+        marker='x',
+        s=10,
+        label='Unmatched Protein'
+    )
+
+    # Matched RNA
+    plt.scatter(
+        rna_tsne[:, 0],
+        rna_tsne[:, 1],
+        c='red',
+        s=5,
+        label='Matched RNA'
+    )
+    # Unmatched RNA
+    plt.scatter(
+        rna_tsne[unmatched_rna_indices, 0],
+        rna_tsne[unmatched_rna_indices, 1],
+        c='yellow',
+        marker='x',
+        s=10,
+        label='Unmatched RNA'
+    )
+
+    plt.title("TSNE by Match Status")
+    plt.xlabel("TSNE 1")
+    plt.ylabel("TSNE 2")
+    plt.legend()
+    plt.show()
+
+def match_datasets(adata1, adata2, threshold=0.3,
+                   obs_key1='archetype_vec', obs_key2='archetype_vec',plot_flag=False):
+    # Compute pairwise distance matrix
+    dist_matrix = scipy.spatial.distance.cdist(
+        adata1.obsm[obs_key1],
+        adata2.obsm[obs_key2],
+        metric='cosine'
+    )
+    matching_distance_before = np.diag(dist_matrix).mean()
+
+
+    n1, n2 = len(adata1), len(adata2)
+
+    # Optimal initial matching using Hungarian algorithm
+    rows, cols = linear_sum_assignment(dist_matrix)
+
+    # Collect all potential matches
+    all_matches = []
+
+    # 1. Primary matching (one-to-one)
+    primary_matches = []
+    for r, c in zip(rows, cols):
+        if dist_matrix[r, c] <= threshold:
+            primary_matches.append((r, c))
+
+    # 2. Secondary matching for remaining adata1 cells
+    matched_adata1 = set(r for r, _ in primary_matches)
+    remaining_adata1 = [i for i in range(n1) if i not in matched_adata1]
+
+    # Find best remaining matches for unpaired adata1 cells
+    secondary_matches = []
+    for r in remaining_adata1:
+        c = np.argmin(dist_matrix[r])
+        if dist_matrix[r, c] <= threshold:
+            secondary_matches.append((r, c))
+
+    # Combine matches and remove duplicates
+    combined = primary_matches + secondary_matches
+    unique_adata2 = set(c for _, c in combined)
+
+    # Create final index arrays
+    adata1_indices = np.array([r for r, _ in combined])
+    adata2_indices = np.array([c for _, c in combined])
+    remaining_adata1 = [i for i in range(n1) if i not in adata1_indices]
+    remaining_adata2 = [i for i in range(n2) if i not in adata2_indices]
+
+    adata1.uns['ordered_matching_cells'] = True
+    adata2.uns['ordered_matching_cells'] = True
+    adata1.obs['index_col'] = np.arange(adata1.shape[0])
+    adata2.obs['index_col'] = np.arange(adata2.shape[0])
+
+
+    # Calculate statistics
+    stats = {
+        'total_adata1': n1,
+        'total_adata2': n2,
+        'matched_adata1': len(adata1_indices),
+        'unique_adata2_used': len(unique_adata2),
+        'adata1_unmatched': n1 - len(adata1_indices),
+        'adata2_unmatched': n2 - len(unique_adata2),
+        'adata2_reuses': len(adata2_indices) - len(unique_adata2),
+        'mean_distance': dist_matrix[adata1_indices, adata2_indices].mean()
+    }
+
+    # Print comprehensive report
+    print(f"Matching Report:\n"
+          f"- Matched {stats['matched_adata1']}/{n1} adata1 cells "
+          f"({stats['adata1_unmatched']} unmatched)\n"
+          f"- Used {stats['unique_adata2_used']}/{n2} adata2 cells "
+          f"({stats['adata2_unmatched']} never matched)\n"
+          f"- adata2 reuses: {stats['adata2_reuses']}\n"
+          f'- Average match distance before matching:{matching_distance_before:.3f}\n'
+          f"- Average match distance after matching: {stats['mean_distance']:.3f}")
+    if plot_flag:
+        plt.figure()
+        sns.histplot(dist_matrix[adata1_indices,adata2_indices],bins=int(100*np.max(dist_matrix[adata1_indices,adata2_indices])),color='yellow',label='final matches')
+        sns.histplot(dist_matrix[rows, cols],bins=int(100*np.max(dist_matrix[rows, cols])),color='red',label='raw matches of Hungarian algo')
+        # plt.title('distances used')
+        plt.legend()
+        plt.xlabel('cosine distance')
+
+        plt.show()
+
+        plot_merged_pca_tsne(
+            adata1,
+            adata2,
+            unmatched_prot_indices=remaining_adata2,
+            unmatched_rna_indices=remaining_adata1,
+            pca_components=5)
+    return adata1[adata1_indices], adata2[adata2_indices]
+
 
 def get_latest_file(prefix,folder):
     files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith('.h5ad')]
