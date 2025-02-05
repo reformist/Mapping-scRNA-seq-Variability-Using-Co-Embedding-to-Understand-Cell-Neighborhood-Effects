@@ -20,8 +20,37 @@ import matplotlib.pyplot as plt
 from scipy.optimize import nnls
 import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
-
+import scib
 # Function to get the latest file based on the timestamp
+def get_mixing_score(adata,batch_key="batch",label_key="cell_type"):
+
+    # Calculate iLISI (batch mixing)
+    ilisi_score = scib.metrics.ilisi_graph(
+        adata,
+        batch_key=batch_key,
+        type_="embed",  # 'embed' for embeddings, 'knn' for kNN graphs
+        use_rep="X_pca"  # embedding to use
+    )
+
+    # Calculate cLISI (cell-type separation)
+    clisi_score = scib.metrics.clisi_graph(
+        adata,
+        label_key=label_key,
+        type_="embed",
+        use_rep="X_pca"
+    )
+
+    # Calculate kBET
+    kBET_score = scib.metrics.kBET(
+        adata,
+        batch_key=batch_key,
+        label_key=label_key,
+        type_="full"
+        )
+
+    print(f"Median iLISI: {ilisi_score}, cLISI: {clisi_score}, kBET: {kBET_score}")
+    return {"ilisi": ilisi_score, "clisi": clisi_score, "kBET": kBET_score}
+
 def get_latest_file(prefix,folder):
     files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith('.h5ad')]
     if not files:
