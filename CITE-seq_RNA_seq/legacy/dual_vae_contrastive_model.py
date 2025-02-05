@@ -30,14 +30,14 @@ pd.options.display.max_columns = 10
 np.set_printoptions(threshold=100)
 np.random.seed(325)
 plot_flag = True
-save_dir = 'data/totalVI'
+save_dir = '../data/totalVI'
 
-file_path = "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_rna_subset.h5ad"
+file_path = "/CITE-seq_RNA_seq/adata_rna_subset.h5ad"
 
 adata_rna_subset = sc.read(
-    '/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_rna_subset.h5ad')
+    '/CITE-seq_RNA_seq/adata_rna_subset.h5ad')
 adata_prot_subset = sc.read(
-    '/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CITE-seq_RNA_seq/adata_prot_subset.h5ad')
+    '/CITE-seq_RNA_seq/adata_prot_subset.h5ad')
 
 
 #
