@@ -20,9 +20,102 @@ import matplotlib.pyplot as plt
 from scipy.optimize import nnls
 import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
-import scib
+# import scib
 import scipy
 # Function to get the latest file based on the timestamp
+
+def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors'):
+    """
+    Calculate cell-type Local Inverse Simpson's Index (LISI) using precomputed neighbors.
+    
+    The cLISI score measures how well cell types are separated in the embedding space.
+    Higher scores indicate better cell type separation, with a minimum value of 1 
+    (all neighbors same cell type) and maximum of k+1 (all neighbors different cell types),
+    where k is the number of neighbors used.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix with precomputed neighbors
+    label_key : str, default='cell_type'
+        Column in adata.obs containing cell type labels
+    neighbors_key : str, default='neighbors'
+        Key where neighbor information is stored in adata.uns
+        
+    Returns
+    -------
+    float
+        Median cLISI score across all cells. Higher values indicate better
+        cell type separation in the embedding space.
+    """
+
+    if neighbors_key not in adata.uns:
+        raise ValueError(f"Run sc.pp.neighbors with key='{neighbors_key}' first")
+    
+    connectivities = adata.obsp[f'connectivities']
+    n_cells = adata.n_obs
+    
+    lisi_scores = []
+    for i in range(n_cells):
+        neighbors = connectivities[i].indices
+        neighbors = np.append(neighbors, i)
+        
+        labels = adata.obs[label_key].iloc[neighbors].values
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        
+        proportions = counts / len(neighbors)
+        simpson = np.sum(proportions**2)
+        lisi = 1 / simpson if simpson > 0 else 0
+        lisi_scores.append(lisi)
+    
+    return np.median(lisi_scores)
+
+def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
+    """
+    Calculate integration Local Inverse Simpson's Index (LISI) using precomputed neighbors.
+    
+    The iLISI score measures how well different batches are mixed in the embedding space.
+    Higher scores indicate better batch mixing, with a minimum value of 1 
+    (all neighbors same batch) and maximum of k+1 (all neighbors different batches),
+    where k is the number of neighbors used.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix with precomputed neighbors
+    batch_key : str, default='batch'
+        Column in adata.obs containing batch labels
+    neighbors_key : str, default='neighbors'
+        Key where neighbor information is stored in adata.uns
+        
+    Returns
+    -------
+    float
+        Median iLISI score across all cells. Higher values indicate better
+        batch mixing in the embedding space.
+    """
+    
+    if neighbors_key not in adata.uns:
+        raise ValueError(f"Run sc.pp.neighbors with key='{neighbors_key}' first")
+    
+    connectivities = adata.obsp[f'connectivities']
+    n_cells = adata.n_obs
+    
+    lisi_scores = []
+    for i in range(n_cells):
+        neighbors = connectivities[i].indices
+        neighbors = np.append(neighbors, i)
+        
+        batches = adata.obs[batch_key].iloc[neighbors].values
+        unique_batches, counts = np.unique(batches, return_counts=True)
+        
+        proportions = counts / len(neighbors)
+        simpson = np.sum(proportions**2)
+        lisi = 1 / simpson if simpson > 0 else 0
+        lisi_scores.append(lisi)
+    
+    return np.median(lisi_scores)
+
 def get_mixing_score(adata,batch_key="batch",label_key="cell_type"):
 
     # Calculate iLISI (batch mixing)
