@@ -100,7 +100,10 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
     
     connectivities = adata.obsp[f'connectivities']
     n_cells = adata.n_obs
-    
+    plt.figure()
+    plt.title('neighbors, first half are RNA cells \nthe second half, protein cells')
+    sns.heatmap(connectivities.todense())
+    plt.show()
     lisi_scores = []
     for i in range(n_cells):
         neighbors = connectivities[i].indices
@@ -116,34 +119,6 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
     
     return np.median(lisi_scores)
 
-def get_mixing_score(adata,batch_key="batch",label_key="cell_type"):
-
-    # Calculate iLISI (batch mixing)
-    ilisi_score = scib.metrics.ilisi_graph(
-        adata,
-        batch_key=batch_key,
-        type_="embed",  # 'embed' for embeddings, 'knn' for kNN graphs
-        use_rep="X_pca"  # embedding to use
-    )
-
-    # Calculate cLISI (cell-type separation)
-    clisi_score = scib.metrics.clisi_graph(
-        adata,
-        label_key=label_key,
-        type_="embed",
-        use_rep="X_pca"
-    )
-
-    # Calculate kBET
-    kBET_score = scib.metrics.kBET(
-        adata,
-        batch_key=batch_key,
-        label_key=label_key,
-        type_="full"
-        )
-
-    print(f"Median iLISI: {ilisi_score}, cLISI: {clisi_score}, kBET: {kBET_score}")
-    return {"ilisi": ilisi_score, "clisi": clisi_score, "kBET": kBET_score}
 
 
 def plot_merged_pca_tsne(
@@ -205,10 +180,11 @@ def plot_merged_pca_tsne(
     plt.scatter(
         prot_pca[unmatched_prot_indices, 0],
         prot_pca[unmatched_prot_indices, 1],
-        c='yellow',
+        c='black',
         marker='x',
         s=10,
-        label='Unmatched Protein'
+        label='Unmatched Protein',
+        alpha=0.5
     )
 
     # Matched vs. unmatched (RNA)
@@ -217,15 +193,19 @@ def plot_merged_pca_tsne(
         rna_pca[:, 1],
         c='red',
         s=5,
-        label='Matched RNA'
+        label='Matched RNA',
+        alpha=0.5
+
     )
     plt.scatter(
         rna_pca[unmatched_rna_indices, 0],
         rna_pca[unmatched_rna_indices, 1],
-        c='orange',
+        c='green',
         marker='D',
         s=10,
-        label='Unmatched RNA'
+        label='Unmatched RNA',
+        alpha=0.5
+
     )
 
     plt.title("PCA (First Two PCs)")
@@ -256,7 +236,9 @@ def plot_merged_pca_tsne(
         rna_tsne[:, 1],
         c='red',
         s=5,
-        label='RNA'
+        label='RNA',
+                alpha=0.5
+
     )
 
     plt.title("TSNE by Modality (Protein vs. RNA)")
@@ -280,10 +262,12 @@ def plot_merged_pca_tsne(
     plt.scatter(
         prot_tsne[unmatched_prot_indices, 0],
         prot_tsne[unmatched_prot_indices, 1],
-        c='yellow',
+        c='green',
         marker='x',
         s=10,
-        label='Unmatched Protein'
+        label='Unmatched Protein',
+                alpha=0.5
+
     )
 
     # Matched RNA
@@ -292,16 +276,20 @@ def plot_merged_pca_tsne(
         rna_tsne[:, 1],
         c='red',
         s=5,
-        label='Matched RNA'
+        label='Matched RNA',
+                alpha=0.5
+
     )
     # Unmatched RNA
     plt.scatter(
         rna_tsne[unmatched_rna_indices, 0],
         rna_tsne[unmatched_rna_indices, 1],
-        c='yellow',
+        c='black',
         marker='x',
         s=10,
-        label='Unmatched RNA'
+        label='Unmatched RNA',
+                alpha=0.5
+
     )
 
     plt.title("TSNE by Match Status")
@@ -385,7 +373,7 @@ def match_datasets(adata1, adata2, threshold=0.3,
           f"- Average match distance after matching: {stats['mean_distance']:.3f}")
     if plot_flag:
         plt.figure()
-        sns.histplot(dist_matrix[adata1_indices,adata2_indices],bins=int(100*np.max(dist_matrix[adata1_indices,adata2_indices])),color='yellow',label='final matches')
+        sns.histplot(dist_matrix[adata1_indices,adata2_indices],bins=int(100*np.max(dist_matrix[adata1_indices,adata2_indices])),color='blue',label='final matches')
         sns.histplot(dist_matrix[rows, cols],bins=int(100*np.max(dist_matrix[rows, cols])),color='red',label='raw matches of Hungarian algo')
         # plt.title('distances used')
         plt.legend()
@@ -1368,10 +1356,12 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, protein')
 
+    # merge the two datasets
+
     plt.subplot(1, 3, 3)
     # plot merged RNA and protein
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c='red', label='RNA')
-    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c='blue', label='protein')
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c='blue', label='protein', alpha=0.5)
     plt.title('merged RNA and protein')
     plt.show()
 
