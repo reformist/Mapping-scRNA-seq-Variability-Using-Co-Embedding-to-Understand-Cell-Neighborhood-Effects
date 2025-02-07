@@ -8,6 +8,7 @@ from scipy.optimize import linear_sum_assignment
 import torch
 import scanpy as sc
 import seaborn as sns
+import anndata as ad
 from anndata import AnnData
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
@@ -69,6 +70,20 @@ def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors'):
         lisi_scores.append(lisi)
     
     return np.median(lisi_scores)
+
+
+def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, adata_rna_subset, adata_prot_subset,index):
+    latent_rna = rna_inference_outputs_mean.clone().detach().cpu().numpy()
+    latent_prot = protein_inference_outputs_mean.clone().detach().cpu().numpy()
+    combined_latent = ad.concat([AnnData(latent_rna), AnnData(latent_prot)], join='outer', label='modality', keys=['RNA', 'Protein'])
+    combined_major_cell_types=pd.concat((adata_rna_subset[index].obs['major_cell_types']
+    ,adata_prot_subset[index].obs['major_cell_types']),join='outer')
+    combined_latent.obs['major_cell_types']=combined_major_cell_types.values
+    sc.pp.pca(combined_latent)
+    sc.pp.neighbors(combined_latent,use_rep='X_pca')
+    iLISI = calculate_iLISI(combined_latent, 'modality')
+    cLISI = calculate_cLISI(combined_latent, 'major_cell_types')
+    return {'iLISI': iLISI, 'cLISI': cLISI}
 
 def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
     """
@@ -387,7 +402,18 @@ def match_datasets(adata1, adata2, threshold=0.3,
             unmatched_prot_indices=remaining_adata2,
             unmatched_rna_indices=remaining_adata1,
             pca_components=5)
-    return adata1[adata1_indices], adata2[adata2_indices]
+    # Create final matched AnnData objects
+    matched_adata1 = adata1[adata1_indices].copy()
+    matched_adata2 = adata2[adata2_indices].copy()
+
+    # For matched_adata2, mark duplicates (i.e. cells reused more than once)
+    # This creates a boolean array: True if the element appears more than once
+    dup_flags = pd.Series(adata1_indices).duplicated(keep='first').values
+    matched_adata1.obs['duplicate'] = dup_flags
+    dup_flags = pd.Series(adata2_indices).duplicated(keep='first').values
+    matched_adata2.obs['duplicate'] = dup_flags
+
+    return matched_adata1, matched_adata2
 
 
 def get_latest_file(prefix,folder):
@@ -637,7 +663,28 @@ def preprocess_protein(adata_prot):
 
     return adata_prot
 
+# wrap UMAP to filter duplicates to avoid UMAP distortion    
+def get_umap_filtered_fucntion():
+    # Save original UMAP function if not already wrapped
+    _original_umap = sc.tl.umap
 
+    def umap_filtered(adata, *args, **kwargs):
+        if "duplicate" in adata.obs.columns:
+            # Filter duplicates and remove the triggering column
+            adata_filtered = adata[~adata.obs["duplicate"]].copy()
+            adata_filtered.obs["duplicate_temp"] = adata_filtered.obs["duplicate"]
+            del adata_filtered.obs["duplicate"]
+            # Run original UMAP on filtered data
+            _original_umap(adata_filtered, *args, **kwargs)
+            adata_filtered.obs["duplicate"] = adata_filtered.obs["duplicate_temp"]
+            # Map results back to original adata
+            umap_results = np.full((adata.n_obs, adata_filtered.obsm["X_umap"].shape[1]), np.nan)
+            umap_results[~adata.obs["duplicate"].values] = adata_filtered.obsm["X_umap"]
+            adata.obsm["X_umap"] = umap_results
+        else:
+            _original_umap(adata, *args, **kwargs)
+    return umap_filtered
+            
 def select_gene_likelihood(adata):
     """
     Determines the appropriate gene likelihood distribution for the SCVI model
