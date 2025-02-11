@@ -1409,6 +1409,10 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     # plot merged RNA and protein
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c='red', label='RNA')
     plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c='blue', label='protein', alpha=0.5)
+    for rna_point, prot_point in zip(rna_pca, protein_pca):
+        plt.plot([rna_point[0], prot_point[0]], 
+                [rna_point[1], prot_point[1]], 
+                'k--', alpha=0.6, lw=0.5)
     plt.title('merged RNA and protein')
     plt.show()
 
