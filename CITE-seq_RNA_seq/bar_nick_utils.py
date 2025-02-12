@@ -393,8 +393,50 @@ def match_datasets(adata1, adata2, threshold=0.3,
         # plt.title('distances used')
         plt.legend()
         plt.xlabel('cosine distance')
+        plt.show()
+
+        # Calculate unified bin range
+        dist_matrix_data1 = dist_matrix[adata1_indices, adata2_indices].flatten()
+        dist_matrix_data2 = dist_matrix[rows, cols].flatten()
+        combined_min = min(dist_matrix_data1.min(), dist_matrix_data2.min())
+        combined_max = max(dist_matrix_data1.max(), dist_matrix_data2.max())
+        bins = np.linspace(combined_min, combined_max, 100)
+
+        # Create figure with dual y-axes
+        fig, ax1 = plt.subplots()
+        ax2 = ax1.twinx()
+
+        # Plot histograms with shared x-axis
+        hist1 = sns.histplot(dist_matrix_data1, bins=bins, color='blue', ax=ax1, 
+                            label='Final matches', alpha=0.6, kde=False)
+        hist2 = sns.histplot(dist_matrix_data2, bins=bins, color='red', ax=ax2, 
+                            label='Raw Hungarian matches', alpha=0.6, kde=False)
+
+        # Set common x-axis limits
+        ax1.set_xlim(combined_min, combined_max)
+
+        # Calculate and set y-axis limits
+        max_count = max(hist1.get_ylim()[1], hist2.get_ylim()[1])
+        ax1.set_ylim(0, max_count)
+        ax2.set_ylim(0, max_count)
+
+        # Configure axes labels and colors
+        ax1.set_xlabel('Cosine Distance')
+        ax1.set_ylabel('Final Matches Count', color='blue')
+        ax2.set_ylabel('Raw Matches Count', color='red')
+
+        # Style ticks to match colors
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax2.tick_params(axis='y', labelcolor='red')
+
+        # Combine legends
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
 
         plt.show()
+
+
 
         plot_merged_pca_tsne(
             adata1,
@@ -1109,10 +1151,11 @@ def plot_normalized_losses(history, figsize=(6, 8)):
         figsize (tuple): Tuple specifying the figure size (width, height).
     """
     fig, axes = plt.subplots(2, 1, figsize=figsize)  # Two subplots: one for training and one for validation
+    fig2, axes2 = plt.subplots(1, 1, figsize=figsize)  # Two subplots: one for training and one for validation
     train_ax, val_ax = axes
-
+    extra_metric_ax = axes2
     for key in history.keys():
-        if 'loss' in key:
+        if 'loss' in key or 'extra_metric' in key:
             # Extract the data and ensure it's numeric
             loss_data = history[key].to_numpy()
 
@@ -1134,17 +1177,35 @@ def plot_normalized_losses(history, figsize=(6, 8)):
                 train_ax.plot(norm_loss, label=label)
             elif 'val' in key:
                 val_ax.plot(norm_loss, label=label)
+            elif 'extra_metric' in key:
+                extra_metric_ax.plot(norm_loss, label=label)
 
     # Formatting subplots
     train_ax.set_title('Training Losses')
     train_ax.set_xlabel('Epoch')
     train_ax.set_ylabel('Normalized Loss')
-    train_ax.legend()
+    train_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
 
     val_ax.set_title('Validation Losses')
     val_ax.set_xlabel('Epoch')
     val_ax.set_ylabel('Normalized Loss')
-    val_ax.legend()
+    val_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
+    extra_metric_ax.set_title('Extra Metric')
+    extra_metric_ax.set_xlabel('Epoch')
+    extra_metric_ax.set_ylabel('Normalized Loss')
+    extra_metric_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
 
     plt.tight_layout()
     plt.show()
