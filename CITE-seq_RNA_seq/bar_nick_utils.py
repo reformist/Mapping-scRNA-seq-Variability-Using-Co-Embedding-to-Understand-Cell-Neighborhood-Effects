@@ -4,6 +4,7 @@ import re
 from typing import List, Dict, Any
 
 from scipy.optimize import linear_sum_assignment
+from mpl_toolkits.mplot3d import Axes3D # needed for 3D plotting
 
 import torch
 import scanpy as sc
@@ -25,7 +26,7 @@ from sklearn.linear_model import OrthogonalMatchingPursuit
 import scipy
 # Function to get the latest file based on the timestamp
 
-def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors'):
+def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors',plot_flag=False):
     """
     Calculate cell-type Local Inverse Simpson's Index (LISI) using precomputed neighbors.
     
@@ -72,7 +73,7 @@ def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors'):
     return np.median(lisi_scores)
 
 
-def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, adata_rna_subset, adata_prot_subset,index):
+def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, adata_rna_subset, adata_prot_subset,index,plot_flag=False):
     latent_rna = rna_inference_outputs_mean.clone().detach().cpu().numpy()
     latent_prot = protein_inference_outputs_mean.clone().detach().cpu().numpy()
     combined_latent = ad.concat([AnnData(latent_rna), AnnData(latent_prot)], join='outer', label='modality', keys=['RNA', 'Protein'])
@@ -81,11 +82,11 @@ def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, ada
     combined_latent.obs['major_cell_types']=combined_major_cell_types.values
     sc.pp.pca(combined_latent)
     sc.pp.neighbors(combined_latent,use_rep='X_pca')
-    iLISI = calculate_iLISI(combined_latent, 'modality')
-    cLISI = calculate_cLISI(combined_latent, 'major_cell_types')
+    iLISI = calculate_iLISI(combined_latent, 'modality',plot_flag=plot_flag)
+    cLISI = calculate_cLISI(combined_latent, 'major_cell_types',plot_flag=plot_flag)
     return {'iLISI': iLISI, 'cLISI': cLISI}
 
-def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
+def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors',plot_flag=False):
     """
     Calculate integration Local Inverse Simpson's Index (LISI) using precomputed neighbors.
     
@@ -115,10 +116,14 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
     
     connectivities = adata.obsp[f'connectivities']
     n_cells = adata.n_obs
-    plt.figure()
-    plt.title('neighbors, first half are RNA cells \nthe second half, protein cells')
-    sns.heatmap(connectivities.todense())
-    plt.show()
+    if plot_flag:
+        plt.figure()
+        plt.title('neighbors, first half are RNA cells \nthe second half, protein cells')
+        sns.heatmap(connectivities.todense())
+        mid_point = connectivities.shape[1] // 2
+        plt.axvline(x=mid_point, color='red', linestyle='--', linewidth=2)
+        plt.axhline(y=mid_point, color='red', linestyle='--', linewidth=2)
+        plt.show()
     lisi_scores = []
     for i in range(n_cells):
         neighbors = connectivities[i].indices
@@ -139,8 +144,8 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors'):
 def plot_merged_pca_tsne(
     adata1,
     adata2,
-    unmatched_prot_indices,
     unmatched_rna_indices,
+    unmatched_prot_indices,
     pca_components=5
 ):
     """
@@ -166,8 +171,8 @@ def plot_merged_pca_tsne(
     """
 
     # -------------------- MERGE DATA --------------------
-    prot_data = adata1.obsm['archetype_vec']
-    rna_data = adata2.obsm['archetype_vec']
+    rna_data = adata1.obsm['archetype_vec']
+    prot_data = adata2.obsm['archetype_vec']
     merged_data = np.vstack([prot_data, rna_data])
 
     max_valid_components = min(merged_data.shape[0], merged_data.shape[1])
@@ -313,6 +318,7 @@ def plot_merged_pca_tsne(
     plt.legend()
     plt.show()
 
+
 def match_datasets(adata1, adata2, threshold=0.3,
                    obs_key1='archetype_vec', obs_key2='archetype_vec',plot_flag=False):
     # Compute pairwise distance matrix
@@ -387,20 +393,55 @@ def match_datasets(adata1, adata2, threshold=0.3,
           f'- Average match distance before matching:{matching_distance_before:.3f}\n'
           f"- Average match distance after matching: {stats['mean_distance']:.3f}")
     if plot_flag:
-        plt.figure()
-        sns.histplot(dist_matrix[adata1_indices,adata2_indices],bins=int(100*np.max(dist_matrix[adata1_indices,adata2_indices])),color='blue',label='final matches')
-        sns.histplot(dist_matrix[rows, cols],bins=int(100*np.max(dist_matrix[rows, cols])),color='red',label='raw matches of Hungarian algo')
-        # plt.title('distances used')
-        plt.legend()
-        plt.xlabel('cosine distance')
+
+        # Calculate unified bin range
+        dist_matrix_data1 = dist_matrix[adata1_indices, adata2_indices].flatten()
+        dist_matrix_data2 = dist_matrix[rows, cols].flatten()
+        combined_min = min(dist_matrix_data1.min(), dist_matrix_data2.min())
+        combined_max = max(dist_matrix_data1.max(), dist_matrix_data2.max())
+        bins = np.linspace(combined_min, combined_max, 100)
+
+        # Create figure with dual y-axes
+        fig, ax1 = plt.subplots()
+        ax2 = ax1.twinx()
+
+        # Plot histograms with shared x-axis
+        hist1 = sns.histplot(dist_matrix_data1, bins=bins, color='blue', ax=ax1, 
+                            label='Final matches', alpha=0.6, kde=False)
+        hist2 = sns.histplot(dist_matrix_data2, bins=bins, color='red', ax=ax2, 
+                            label='Raw Hungarian matches', alpha=0.6, kde=False)
+
+        # Set common x-axis limits
+        ax1.set_xlim(combined_min, combined_max)
+
+        # Calculate and set y-axis limits
+        max_count = max(hist1.get_ylim()[1], hist2.get_ylim()[1])
+        ax1.set_ylim(0, max_count)
+        ax2.set_ylim(0, max_count)
+
+        # Configure axes labels and colors
+        ax1.set_xlabel('Cosine Distance')
+        ax1.set_ylabel('Final Matches Count', color='blue')
+        ax2.set_ylabel('Raw Matches Count', color='red')
+
+        # Style ticks to match colors
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax2.tick_params(axis='y', labelcolor='red')
+
+        # Combine legends
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
 
         plt.show()
+
+
 
         plot_merged_pca_tsne(
             adata1,
             adata2,
-            unmatched_prot_indices=remaining_adata2,
             unmatched_rna_indices=remaining_adata1,
+            unmatched_prot_indices=remaining_adata2,
             pca_components=5)
     # Create final matched AnnData objects
     matched_adata1 = adata1[adata1_indices].copy()
@@ -1109,10 +1150,11 @@ def plot_normalized_losses(history, figsize=(6, 8)):
         figsize (tuple): Tuple specifying the figure size (width, height).
     """
     fig, axes = plt.subplots(2, 1, figsize=figsize)  # Two subplots: one for training and one for validation
+    fig2, axes2 = plt.subplots(1, 1, figsize=figsize)  # Two subplots: one for training and one for validation
     train_ax, val_ax = axes
-
+    extra_metric_ax = axes2
     for key in history.keys():
-        if 'loss' in key:
+        if 'loss' in key or 'extra_metric' in key:
             # Extract the data and ensure it's numeric
             loss_data = history[key].to_numpy()
 
@@ -1134,17 +1176,35 @@ def plot_normalized_losses(history, figsize=(6, 8)):
                 train_ax.plot(norm_loss, label=label)
             elif 'val' in key:
                 val_ax.plot(norm_loss, label=label)
+            elif 'extra_metric' in key:
+                extra_metric_ax.plot(norm_loss, label=label)
 
     # Formatting subplots
     train_ax.set_title('Training Losses')
     train_ax.set_xlabel('Epoch')
     train_ax.set_ylabel('Normalized Loss')
-    train_ax.legend()
+    train_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
 
     val_ax.set_title('Validation Losses')
     val_ax.set_xlabel('Epoch')
     val_ax.set_ylabel('Normalized Loss')
-    val_ax.legend()
+    val_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
+    extra_metric_ax.set_title('Extra Metric')
+    extra_metric_ax.set_xlabel('Epoch')
+    extra_metric_ax.set_ylabel('Normalized Loss')
+    extra_metric_ax.legend(   fontsize='x-small',
+    frameon=False,  # Remove box border
+    handletextpad=0.2,
+    borderaxespad=0.1) 
+    
 
     plt.tight_layout()
     plt.show()
@@ -1389,7 +1449,7 @@ def match_rows(rna, protein, metric='correlation'):
 
 def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index):
     plt.figure(figsize=(10, 5))
-    pca = PCA(n_components=2)
+    pca = PCA(n_components=3)
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
     plt.subplot(1, 3, 1)
@@ -1405,11 +1465,19 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
 
     # merge the two datasets
 
-    plt.subplot(1, 3, 3)
-    # plot merged RNA and protein
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c='red', label='RNA')
-    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c='blue', label='protein', alpha=0.5)
-    plt.title('merged RNA and protein')
+    ax = plt.subplot(1, 3, 3, projection='3d')
+    ax.scatter(rna_pca[:, 0], rna_pca[:, 1], rna_pca[:, 2], c='red', label='RNA')
+    ax.scatter(protein_pca[:, 0], protein_pca[:, 1], protein_pca[:, 2], c='blue', label='protein', alpha=0.5)
+    for rna_point, prot_point in zip(rna_pca, protein_pca):
+        ax.plot([rna_point[0], prot_point[0]], 
+                [rna_point[1], prot_point[1]], 
+                [rna_point[2], prot_point[2]], 
+                'k--', alpha=0.6, lw=0.5)
+    ax.set_title('merged RNA and protein')
+    ax.set_xlabel('PC1')
+    ax.set_ylabel('PC2')
+    ax.set_zlabel('PC3')
+    ax.legend()
     plt.show()
 
 
