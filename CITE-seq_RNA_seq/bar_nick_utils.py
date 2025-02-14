@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 
 from scipy.optimize import linear_sum_assignment
 from mpl_toolkits.mplot3d import Axes3D # needed for 3D plotting
+from umap import UMAP                                    
 
 import torch
 import scanpy as sc
@@ -25,7 +26,151 @@ from sklearn.linear_model import OrthogonalMatchingPursuit
 # import scib
 import scipy
 # Function to get the latest file based on the timestamp
+            # plot the mean and std of each in subplots
+def archetype_vs_latent_distances_plot(archetype_dis_tensor,latent_distances,threshold):
+    archetype_dis_tensor_ = archetype_dis_tensor.detach().cpu().numpy()
+    all_distances = np.sort(archetype_dis_tensor_.flatten())
+    below_threshold_distances = np.sort(archetype_dis_tensor_)[latent_distances.detach().cpu().numpy() < threshold].flatten()
 
+    fig, ax1 = plt.subplots()
+    counts_all, bins_all, _ = ax1.hist(all_distances, bins=100, alpha=0.5, label='All Distances', color='blue')
+    ax1.set_ylabel('Count (All Distances)', color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
+    ax2 = ax1.twinx()
+    counts_below, bins_below, _ = ax2.hist(below_threshold_distances, bins=bins_all, alpha=0.5, label='Below Threshold', color='green')
+    ax2.set_ylabel('Count (Below Threshold)', color='green')
+    ax2.tick_params(axis='y', labelcolor='green')
+    plt.title(f'Number Below Threshold: {np.sum(latent_distances.detach().cpu().numpy() < threshold)}')
+    plt.show()
+    
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    sns.heatmap(latent_distances.detach().cpu().numpy())
+    plt.title(f'latent_distances')
+    plt.subplot(1, 2, 2)
+    sns.heatmap(archetype_dis_tensor.detach().cpu().numpy())
+    plt.title('archetype_distances')
+    plt.show()
+    
+def compare_distance_distributions(rand_distances, rna_latent,prot_latent,distances):
+    # Randomize RNA cells within cell types
+    rand_rna_latent = rna_latent.copy()
+    for cell_type in rand_rna_latent.obs['major_cell_types'].unique():
+        cell_type_indices = rand_rna_latent.obs['major_cell_types'] == cell_type
+        shuffled_indices = np.random.permutation(rand_rna_latent[cell_type_indices].obs.index)
+        rand_rna_latent.X[cell_type_indices] = rand_rna_latent[cell_type_indices][shuffled_indices].copy().X
+
+    rand_distances_cell_type = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
+
+    # Filter distances using 95th percentile
+    rand_dist_filtered = rand_distances[rand_distances < np.percentile(rand_distances, 95)]
+    rand_dist_cell_filtered = rand_distances_cell_type[rand_distances_cell_type < np.percentile(rand_distances_cell_type, 95)]
+    true_dist_filtered = distances[distances < np.percentile(distances, 95)]
+    
+    # Create figure and primary axis
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    
+    # Calculate common bins based on all data
+    all_data = np.concatenate([rand_dist_filtered, rand_dist_cell_filtered, true_dist_filtered])
+    bins = np.linspace(all_data.min(), all_data.max(), 200)
+    
+    # Plot random distances on first y-axis
+    counts_rand, bins_rand, _ = ax1.hist(rand_dist_filtered, bins=bins, alpha=0.5, 
+                                        color='green', label='Randomized distances')
+    ax1.set_ylabel('Count (Random)', color='green')
+    ax1.tick_params(axis='y', labelcolor='green')
+    
+    # Create second y-axis for cell type distances
+    ax2 = ax1.twinx()
+    counts_cell, bins_cell, _ = ax2.hist(rand_dist_cell_filtered, bins=bins, alpha=0.5,
+                                        color='red', label='Within cell types')
+    ax2.set_ylabel('Count (Cell Types)', color='red')
+    ax2.tick_params(axis='y', labelcolor='red')
+    
+    # Create third y-axis for true distances
+    ax3 = ax1.twinx()
+    ax3.spines["right"].set_position(("axes", 1.2))
+    counts_true, bins_true, _ = ax3.hist(true_dist_filtered, bins=bins, alpha=0.5,
+                                        color='blue', label='True distances')
+    ax3.set_ylabel('Count (True)', color='blue')
+    ax3.tick_params(axis='y', labelcolor='blue')
+    
+    # Add legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    lines3, labels3 = ax3.get_legend_handles_labels()
+    ax3.legend(lines1 + lines2 + lines3, labels1 + labels2 + labels3, loc='upper right')
+    
+    plt.title('Distribution of Distances (95th percentile)')
+    plt.show()
+def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inference_outputs):
+    rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
+    rna_scales = rna_inference_outputs["qz"].scale.detach().cpu().numpy()
+    protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()
+    protein_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()
+
+    # Combine means for PCA
+    combined_means = np.concatenate([rna_means, protein_means], axis=0)
+
+    # Fit PCA on means
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(combined_means)
+
+    # Transform scales using the same PCA transformation
+    combined_scales = np.concatenate([rna_scales, protein_scales], axis=0)
+    scales_transformed = pca.transform(combined_scales)
+
+    # Plot with halos
+    plt.figure(figsize=(8, 6))
+
+    # Plot RNA points and halos
+    for i in range(rna_means.shape[0]):
+        # Add halo using scale information
+        circle = plt.Circle((pca_result[i, 0], pca_result[i, 1]), 
+                        radius=np.linalg.norm(scales_transformed[i])*0.05,
+                        color='blue', alpha=0.1)
+        plt.gca().add_patch(circle)
+    # Plot Protein points and halos
+    for i in range(protein_means.shape[0]):
+        # Add halo using scale information
+        circle = plt.Circle((pca_result[rna_means.shape[0] + i, 0], 
+                            pca_result[rna_means.shape[0] + i, 1]),
+                        radius=np.linalg.norm(scales_transformed[rna_means.shape[0] + i])*0.05,
+                        color='orange', alpha=0.1)
+        plt.gca().add_patch(circle)
+
+    # Add connecting lines
+    for i in range(rna_means.shape[0]):
+        color = 'red' if (i % 2 == 0) else 'green'
+        plt.plot([pca_result[i, 0], pca_result[rna_means.shape[0] + i, 0]],
+                [pca_result[i, 1], pca_result[rna_means.shape[0] + i, 1]], 
+                'k-', alpha=0.2,color=color)
+
+    plt.xlabel('PCA Component 1')
+    plt.ylabel('PCA Component 2')
+    plt.title('PCA of RNA and Protein with Scale Halos')
+    plt.legend()
+    plt.gca().set_aspect('equal')
+    plt.show()
+    
+def plot_latent_mean_std(rna_inference_outputs,protein_inference_outputs):
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy())
+    plt.title(f'heatmap of RNA')
+    plt.subplot(1, 2, 2)
+    sns.heatmap(protein_inference_outputs["qz"].mean.detach().cpu().numpy())
+    plt.title(f'heatmap of protein mean')
+    plt.show()
+    # plot the mean and std of each in subplots
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    sns.heatmap(rna_inference_outputs["qz"].scale.detach().cpu().numpy())
+    plt.title(f'heatmap of RNA std')
+    plt.subplot(1, 2, 2)
+    sns.heatmap(protein_inference_outputs["qz"].scale.detach().cpu().numpy())
+    plt.title(f'heatmap of protein std')
+    plt.show()
 def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors',plot_flag=False):
     """
     Calculate cell-type Local Inverse Simpson's Index (LISI) using precomputed neighbors.
@@ -74,8 +219,12 @@ def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors',plot
 
 
 def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, adata_rna_subset, adata_prot_subset,index,plot_flag=False):
-    latent_rna = rna_inference_outputs_mean.clone().detach().cpu().numpy()
-    latent_prot = protein_inference_outputs_mean.clone().detach().cpu().numpy()
+    if isinstance(rna_inference_outputs_mean, torch.Tensor):
+        latent_rna = rna_inference_outputs_mean.clone().detach().cpu().numpy()
+        latent_prot = protein_inference_outputs_mean.clone().detach().cpu().numpy()
+    else:
+        latent_rna = rna_inference_outputs_mean
+        latent_prot = protein_inference_outputs_mean
     combined_latent = ad.concat([AnnData(latent_rna), AnnData(latent_prot)], join='outer', label='modality', keys=['RNA', 'Protein'])
     combined_major_cell_types=pd.concat((adata_rna_subset[index].obs['major_cell_types']
     ,adata_prot_subset[index].obs['major_cell_types']),join='outer')
@@ -317,7 +466,37 @@ def plot_merged_pca_tsne(
     plt.ylabel("TSNE 2")
     plt.legend()
     plt.show()
+def plot_cosine_distance(rna_batch,protein_batch):
+    umap_model = UMAP(n_components=2, random_state=42).fit(rna_batch['archetype_vec'], min_dist=5)
+    # Transform both modalities using the same UMAP model
+    rna_archetype_2pc = umap_model.transform(rna_batch['archetype_vec'])
+    prot_archetype_2pc = umap_model.transform(protein_batch['archetype_vec'])            
 
+    rna_norm = rna_archetype_2pc / np.linalg.norm(rna_archetype_2pc, axis=1)[:, None]
+    scale = 1.2
+    prot_norm = scale*prot_archetype_2pc / np.linalg.norm(prot_archetype_2pc, axis=1)[:, None]
+    plt.figure()
+    plt.scatter(rna_norm[:,0], rna_norm[:,1], label='RNA', alpha=0.7)
+    plt.scatter(prot_norm[:,0], prot_norm[:,1], label='Protein', alpha=0.7)
+
+    for rna, prot in zip(rna_norm, prot_norm):
+        plt.plot([rna[0], prot[0]], [rna[1], prot[1]], 
+                'k--', alpha=0.6, lw=0.5)
+        
+    # Add unit circle for reference
+    theta = np.linspace(0, 2*np.pi, 100)
+
+    plt.plot(np.cos(theta), np.sin(theta), 'grey', linestyle='--', alpha=0.3)
+    plt.axis('equal')
+    theta = np.linspace(0, 2*np.pi, 100)
+    plt.plot(scale*np.cos(theta), scale*np.sin(theta), 'grey', linestyle='--', alpha=0.3)
+    plt.axis('equal')
+
+    plt.title('Normalized Vector Alignment\n(Euclidean Distance ∝ Cosine Distance)')
+    plt.xlabel('PC1 (Normalized)')
+    plt.ylabel('PC2 (Normalized)')
+    plt.legend()
+    plt.show()
 
 def match_datasets(adata1, adata2, threshold=0.3,
                    obs_key1='archetype_vec', obs_key2='archetype_vec',plot_flag=False):
@@ -393,47 +572,82 @@ def match_datasets(adata1, adata2, threshold=0.3,
           f'- Average match distance before matching:{matching_distance_before:.3f}\n'
           f"- Average match distance after matching: {stats['mean_distance']:.3f}")
     if plot_flag:
-
-        # Calculate unified bin range
+        # Calculate unified bin range for both datasets
         dist_matrix_data1 = dist_matrix[adata1_indices, adata2_indices].flatten()
         dist_matrix_data2 = dist_matrix[rows, cols].flatten()
+
         combined_min = min(dist_matrix_data1.min(), dist_matrix_data2.min())
         combined_max = max(dist_matrix_data1.max(), dist_matrix_data2.max())
         bins = np.linspace(combined_min, combined_max, 100)
 
         # Create figure with dual y-axes
-        fig, ax1 = plt.subplots()
+        fig, ax1 = plt.subplots(figsize=(10, 6))
         ax2 = ax1.twinx()
 
-        # Plot histograms with shared x-axis
-        hist1 = sns.histplot(dist_matrix_data1, bins=bins, color='blue', ax=ax1, 
-                            label='Final matches', alpha=0.6, kde=False)
-        hist2 = sns.histplot(dist_matrix_data2, bins=bins, color='red', ax=ax2, 
-                            label='Raw Hungarian matches', alpha=0.6, kde=False)
-
-        # Set common x-axis limits
-        ax1.set_xlim(combined_min, combined_max)
-
-        # Calculate and set y-axis limits
-        max_count = max(hist1.get_ylim()[1], hist2.get_ylim()[1])
-        ax1.set_ylim(0, max_count)
-        ax2.set_ylim(0, max_count)
-
-        # Configure axes labels and colors
-        ax1.set_xlabel('Cosine Distance')
-        ax1.set_ylabel('Final Matches Count', color='blue')
-        ax2.set_ylabel('Raw Matches Count', color='red')
-
-        # Style ticks to match colors
+        # Plot first histogram
+        counts1, bins1, _ = ax1.hist(dist_matrix_data1, bins=bins, alpha=0.5, 
+                                    color='blue', label='Final matches')
+        ax1.set_ylabel('Count (Final Matches)', color='blue')
         ax1.tick_params(axis='y', labelcolor='blue')
+
+        # Plot second histogram using same bins
+        counts2, bins2, _ = ax2.hist(dist_matrix_data2, bins=bins, alpha=0.5,
+                                    color='red', label='Raw Hungarian matches')
+        ax2.set_ylabel('Count (Raw Matches)', color='red')
         ax2.tick_params(axis='y', labelcolor='red')
+
+        # Set common x-axis label and limits
+        ax1.set_xlabel('Cosine Distance')
+        ax1.set_xlim(combined_min, combined_max)
 
         # Combine legends
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
         ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
 
+        plt.title('Distribution of Matching Distances')
         plt.show()
+
+        # # Calculate unified bin range
+        # dist_matrix_data1 = dist_matrix[adata1_indices, adata2_indices].flatten()
+        # dist_matrix_data2 = dist_matrix[rows, cols].flatten()
+        # combined_min = min(dist_matrix_data1.min(), dist_matrix_data2.min())
+        # combined_max = max(dist_matrix_data1.max(), dist_matrix_data2.max())
+        # bins = np.linspace(combined_min, combined_max, 100)
+
+        # # Create figure with dual y-axes
+        # fig, ax1 = plt.subplots()
+        # ax2 = ax1.twinx()
+
+        # # Plot histograms with shared x-axis
+        # hist1 = sns.histplot(dist_matrix_data1, bins=bins, color='blue', ax=ax1, 
+        #                     label='Final matches', alpha=0.6, kde=False)
+        # hist2 = sns.histplot(dist_matrix_data2, bins=bins, color='red', ax=ax2, 
+        #                     label='Raw Hungarian matches', alpha=0.6, kde=False)
+
+        # # Set common x-axis limits
+        # ax1.set_xlim(combined_min, combined_max)
+
+        # # Calculate and set y-axis limits
+        # max_count = max(hist1.get_ylim()[1], hist2.get_ylim()[1])
+        # ax1.set_ylim(0, max_count)
+        # ax2.set_ylim(0, max_count)
+
+        # # Configure axes labels and colors
+        # ax1.set_xlabel('Cosine Distance')
+        # ax1.set_ylabel('Final Matches Count', color='blue')
+        # ax2.set_ylabel('Raw Matches Count', color='red')
+
+        # # Style ticks to match colors
+        # ax1.tick_params(axis='y', labelcolor='blue')
+        # ax2.tick_params(axis='y', labelcolor='red')
+
+        # # Combine legends
+        # lines1, labels1 = ax1.get_legend_handles_labels()
+        # lines2, labels2 = ax2.get_legend_handles_labels()
+        # ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+        # plt.show()
 
 
 
@@ -662,7 +876,8 @@ def preprocess_rna(adata_rna):
     adata_rna.var["hb"] = adata_rna.var_names.str.contains("^HB[^(P)]", regex=True)
 
     # Calculate QC metrics
-    sc.pp.calculate_qc_metrics(adata_rna, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=True)
+    # todo cause crash in archetype generation real for some resean?!!?
+    # sc.pp.calculate_qc_metrics(adata_rna, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=True)
 
     # Add raw counts to layers for future reference
     adata_rna.layers["counts"] = adata_rna.X.copy()
