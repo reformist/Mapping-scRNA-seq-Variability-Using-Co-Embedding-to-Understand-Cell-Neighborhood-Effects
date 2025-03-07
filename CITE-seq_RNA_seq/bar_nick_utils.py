@@ -883,7 +883,9 @@ def preprocess_rna(adata_rna):
     adata_rna.layers["counts"] = adata_rna.X.copy()
 
     # Log-transform the data
-    sc.pp.log1p(adata_rna)
+    # only log transform the data if it is not already log transformed
+    if not adata_rna.X.max() < 100:  
+        sc.pp.log1p(adata_rna)
     sc.pp.pca(adata_rna)
     print(
         f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
@@ -1475,8 +1477,16 @@ def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[st
 
 
 def plot_archetypes_matching(data1, data2, rows=5):
+    """
+    Plot the matching archetypes from two different modalities.
+    
+    Parameters:
+    - data1: pd.Series containing the archetype values for modality 1
+    - data2: pd.Series containing the archetype values for modality 2
+    - rows: Number of archetypes to plot (default: 5)
+    """
     offset = 1
-
+    rows = min(rows, len(data1), len(data2))
     for i in range(rows):
         y1 = data1.iloc[i] + i * offset
         y2 = data2.iloc[i] + i * offset
@@ -1541,7 +1551,6 @@ def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) 
         print(f"MRR: {mrr:.4f} (Random: {expected_mrr:.4f})")
         print(f"Improvement over random (Rank): {rank_improvement * 100:.2f}%")
         print(f"Improvement over random (MRR): {mrr_improvement * 100:.2f}%\n")
-
         results[metric] = {
             'mean_rank': mean_rank,
             'expected_mean_rank': expected_mean_rank,
@@ -1626,7 +1635,7 @@ def compare_matchings(archetype_proportion_list_rna, archetype_proportion_list_p
     plt.figure(figsize=(10, 6))
     plt.plot(indices, np.sort(optimal_distances), label='Optimal Matching', marker='o')
     plt.plot(indices, np.sort(random_distances), label='Random Matching', marker='x')
-    plt.xlabel('Sample Index (sorted by distance)')
+    plt.xlabel('Sample/Archtype Index (sorted by distance)')
     plt.ylabel('Distance')
     plt.title('Comparison of Distances between Matched Rows')
     plt.legend()
