@@ -27,11 +27,22 @@ from sklearn.linear_model import OrthogonalMatchingPursuit
 import scipy
 # Function to get the latest file based on the timestamp
             # plot the mean and std of each in subplots
-def archetype_vs_latent_distances_plot(archetype_dis_tensor,latent_distances,threshold):
-    archetype_dis_tensor_ = archetype_dis_tensor.detach().cpu().numpy()
-    all_distances = np.sort(archetype_dis_tensor_.flatten())
-    below_threshold_distances = np.sort(archetype_dis_tensor_)[latent_distances.detach().cpu().numpy() < threshold].flatten()
-
+def archetype_vs_latent_distances_plot(archetype_dis_tensor,latent_distances,threshold,use_subsample=True):
+    if use_subsample:
+        # subsample_indexes = torch.tensor(np.random.choice(archetype_dis_tensor.shape[0], 300, replace=False))
+        subsample_indexes = torch.tensor(np.arange(min(300,archetype_dis_tensor.shape[0])))
+    else:
+        subsample_indexes = torch.tensor(np.arange(archetype_dis_tensor.shape[0]))
+    archetype_dis_tensor_ = archetype_dis_tensor.detach().cpu()
+    archetype_dis_tensor_ = torch.index_select(archetype_dis_tensor_, 0, subsample_indexes)  # Select rows
+    archetype_dis_tensor_ = torch.index_select(archetype_dis_tensor_, 1, subsample_indexes)  # Select columns
+    latent_distances_ = latent_distances.detach().cpu()
+    latent_distances_ = torch.index_select(latent_distances_, 0, subsample_indexes)
+    latent_distances_ = torch.index_select(latent_distances_, 1, subsample_indexes)
+    latent_distances_ = latent_distances_.numpy()
+    archetype_dis = archetype_dis_tensor_.numpy()
+    all_distances = np.sort(archetype_dis.flatten())
+    below_threshold_distances = np.sort(archetype_dis)[latent_distances_< threshold].flatten()
     fig, ax1 = plt.subplots()
     counts_all, bins_all, _ = ax1.hist(all_distances, bins=100, alpha=0.5, label='All Distances', color='blue')
     ax1.set_ylabel('Count (All Distances)', color='blue')
@@ -45,10 +56,10 @@ def archetype_vs_latent_distances_plot(archetype_dis_tensor,latent_distances,thr
     
     plt.figure()
     plt.subplot(1, 2, 1)
-    sns.heatmap(latent_distances.detach().cpu().numpy())
+    sns.heatmap(latent_distances_)
     plt.title(f'latent_distances')
     plt.subplot(1, 2, 2)
-    sns.heatmap(archetype_dis_tensor.detach().cpu().numpy())
+    sns.heatmap(archetype_dis)
     plt.title('archetype_distances')
     plt.show()
     
@@ -103,11 +114,15 @@ def compare_distance_distributions(rand_distances, rna_latent,prot_latent,distan
     
     plt.title('Distribution of Distances (95th percentile)')
     plt.show()
-def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inference_outputs):
-    rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
-    rna_scales = rna_inference_outputs["qz"].scale.detach().cpu().numpy()
-    protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()
-    protein_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()
+def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inference_outputs,use_subsample=True):
+    if use_subsample:
+        subsample_indexes = np.random.choice(rna_inference_outputs["qz"].mean.shape[0], 300, replace=False)
+    else:
+        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
+    rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
+    rna_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
+    protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
+    protein_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
 
     # Combine means for PCA
     combined_means = np.concatenate([rna_means, protein_means], axis=0)
@@ -153,23 +168,34 @@ def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inf
     plt.gca().set_aspect('equal')
     plt.show()
     
-def plot_latent_mean_std(rna_inference_outputs,protein_inference_outputs):
+def plot_latent_mean_std(rna_inference_outputs,protein_inference_outputs, use_subsample=True):
     plt.figure()
     plt.subplot(1, 2, 1)
-    sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy())
+    if use_subsample:
+        subsample_indexes = np.random.choice(rna_inference_outputs["qz"].mean.shape[0], 300, replace=False) 
+    else:
+        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
+    sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
     plt.title(f'heatmap of RNA')
     plt.subplot(1, 2, 2)
-    sns.heatmap(protein_inference_outputs["qz"].mean.detach().cpu().numpy())
-    plt.title(f'heatmap of protein mean')
+        
+    sns.heatmap(protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
+    if use_subsample:   
+        plt.title(f'heatmap of protein - subsampled')
+    else:
+        plt.title(f'heatmap of protein mean')
     plt.show()
     # plot the mean and std of each in subplots
     plt.figure()
     plt.subplot(1, 2, 1)
-    sns.heatmap(rna_inference_outputs["qz"].scale.detach().cpu().numpy())
+    sns.heatmap(rna_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes])
     plt.title(f'heatmap of RNA std')
     plt.subplot(1, 2, 2)
-    sns.heatmap(protein_inference_outputs["qz"].scale.detach().cpu().numpy())
-    plt.title(f'heatmap of protein std')
+    sns.heatmap(protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes])
+    if use_subsample:
+        plt.title(f'heatmap of protein std - subsampled')
+    else:
+        plt.title(f'heatmap of protein std')
     plt.show()
 def calculate_cLISI(adata, label_key='cell_type', neighbors_key='neighbors',plot_flag=False):
     """
@@ -226,8 +252,7 @@ def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, ada
         latent_rna = rna_inference_outputs_mean
         latent_prot = protein_inference_outputs_mean
     combined_latent = ad.concat([AnnData(latent_rna), AnnData(latent_prot)], join='outer', label='modality', keys=['RNA', 'Protein'])
-    combined_major_cell_types=pd.concat((adata_rna_subset[index].obs['major_cell_types']
-    ,adata_prot_subset[index].obs['major_cell_types']),join='outer')
+    combined_major_cell_types=pd.concat((adata_rna_subset[index].obs['major_cell_types'],adata_prot_subset[index].obs['major_cell_types']),join='outer')
     combined_latent.obs['major_cell_types']=combined_major_cell_types.values
     sc.pp.pca(combined_latent)
     sc.pp.neighbors(combined_latent,use_rep='X_pca')
@@ -235,7 +260,7 @@ def mixing_score(rna_inference_outputs_mean, protein_inference_outputs_mean, ada
     cLISI = calculate_cLISI(combined_latent, 'major_cell_types',plot_flag=plot_flag)
     return {'iLISI': iLISI, 'cLISI': cLISI}
 
-def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors',plot_flag=False):
+def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors',plot_flag=False,use_subsample=True):
     """
     Calculate integration Local Inverse Simpson's Index (LISI) using precomputed neighbors.
     
@@ -252,6 +277,8 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors',plot_fla
         Column in adata.obs containing batch labels
     neighbors_key : str, default='neighbors'
         Key where neighbor information is stored in adata.uns
+    use_subsample: bool:
+        for ploting part of the batch
         
     Returns
     -------
@@ -266,10 +293,15 @@ def calculate_iLISI(adata, batch_key='batch', neighbors_key='neighbors',plot_fla
     connectivities = adata.obsp[f'connectivities']
     n_cells = adata.n_obs
     if plot_flag:
+        if use_subsample:
+            subset_indices = np.random.choice(n_cells, 300, replace=False)
+            subset_connectivities = connectivities[subset_indices][:, subset_indices]
+        else:
+            subset_connectivities = connectivities
         plt.figure()
-        plt.title('neighbors, first half are RNA cells \nthe second half, protein cells')
-        sns.heatmap(connectivities.todense())
-        mid_point = connectivities.shape[1] // 2
+        plt.title('neighbors, first half are RNA cells \nthe second half, protein cells (subset of 300)')
+        sns.heatmap(subset_connectivities.todense())
+        mid_point = subset_connectivities.shape[1] // 2
         plt.axvline(x=mid_point, color='red', linestyle='--', linewidth=2)
         plt.axhline(y=mid_point, color='red', linestyle='--', linewidth=2)
         plt.show()
@@ -1677,8 +1709,7 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
     plt.subplot(1, 3, 1)
-    # plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], cmap='jet')
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
     plt.title('during training, RNA')
 
     pca.fit(protein_mean)
