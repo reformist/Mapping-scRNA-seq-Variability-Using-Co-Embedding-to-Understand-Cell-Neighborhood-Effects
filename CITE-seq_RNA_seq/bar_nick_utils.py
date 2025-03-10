@@ -1,7 +1,7 @@
 import copy
 import os
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 
 from scipy.optimize import linear_sum_assignment
 from mpl_toolkits.mplot3d import Axes3D # needed for 3D plotting
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from itertools import product, zip_longest
 import matplotlib.pyplot as plt
-
+from kneed import KneeLocator
 from scipy.optimize import nnls
 import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
@@ -530,14 +530,15 @@ def plot_cosine_distance(rna_batch,protein_batch):
     plt.legend()
     plt.show()
 
-def match_datasets(adata1, adata2, threshold=0.3,
-                   obs_key1='archetype_vec', obs_key2='archetype_vec',plot_flag=False):
+def match_datasets(adata1:AnnData, adata2:AnnData, threshold:Union[float,str]='auto',
+                   obs_key1: str='archetype_vec', obs_key2='archetype_vec',plot_flag=False):
     # Compute pairwise distance matrix
     dist_matrix = scipy.spatial.distance.cdist(
         adata1.obsm[obs_key1],
         adata2.obsm[obs_key2],
         metric='cosine'
     )
+
     matching_distance_before = np.diag(dist_matrix).mean()
 
 
@@ -549,12 +550,30 @@ def match_datasets(adata1, adata2, threshold=0.3,
     # Collect all potential matches
     all_matches = []
 
+
+    if threshold =='auto':
+        num_bins = len(rows)//20
+        hist,bin_edges= np.histogram(dist_matrix[rows, cols].flatten(),bins=num_bins)
+        num_cutoffs = num_bins//2
+        bin_edges,hist = bin_edges[num_cutoffs+1:], hist[num_cutoffs:]
+        # smooth the histogram using a moving average
+        window_size = max(num_bins//40,3)
+        hist = np.convolve(hist, np.ones(window_size), mode='same') /window_size
+        
+        kneedle = KneeLocator(bin_edges,hist, S=2.0, 
+                            curve="convex", direction="decreasing")
+        threshold = kneedle.knee
+        if plot_flag:
+            kneedle.plot_knee()
+            plt.xlabel('Cosine Distance')
+            plt.ylabel('Count')
+            plt.title('Knee Point Detection to set acceptable threshold for RNA to Protein matching')
+            plt.show()
     # 1. Primary matching (one-to-one)
     primary_matches = []
     for r, c in zip(rows, cols):
         if dist_matrix[r, c] <= threshold:
             primary_matches.append((r, c))
-
     # 2. Secondary matching for remaining adata1 cells
     matched_adata1 = set(r for r, _ in primary_matches)
     remaining_adata1 = [i for i in range(n1) if i not in matched_adata1]
@@ -617,16 +636,16 @@ def match_datasets(adata1, adata2, threshold=0.3,
         ax2 = ax1.twinx()
 
         # Plot first histogram
-        counts1, bins1, _ = ax1.hist(dist_matrix_data1, bins=bins, alpha=0.5, 
-                                    color='blue', label='Final matches')
-        ax1.set_ylabel('Count (Final Matches)', color='blue')
-        ax1.tick_params(axis='y', labelcolor='blue')
-
-        # Plot second histogram using same bins
         counts2, bins2, _ = ax2.hist(dist_matrix_data2, bins=bins, alpha=0.5,
                                     color='red', label='Raw Hungarian matches')
         ax2.set_ylabel('Count (Raw Matches)', color='red')
         ax2.tick_params(axis='y', labelcolor='red')
+        
+        # Plot second histogram using same bins
+        counts1, bins1, _ = ax1.hist(dist_matrix_data1, bins=bins, alpha=0.5, 
+                                    color='blue', label='Final matches')
+        ax1.set_ylabel('Count (Final Matches)', color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
 
         # Set common x-axis label and limits
         ax1.set_xlabel('Cosine Distance')
