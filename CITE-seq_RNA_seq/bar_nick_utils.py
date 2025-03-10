@@ -632,8 +632,8 @@ def match_datasets(adata1:AnnData, adata2:AnnData, threshold:Union[float,str]='a
         bins = np.linspace(combined_min, combined_max, 100)
 
         # Create figure with dual y-axes
-        fig, ax1 = plt.subplots(figsize=(10, 6))
-        ax2 = ax1.twinx()
+        fig, ax2 = plt.subplots(figsize=(10, 6))
+        ax1 = ax2.twinx()
 
         # Plot first histogram
         counts2, bins2, _ = ax2.hist(dist_matrix_data2, bins=bins, alpha=0.5,
@@ -644,6 +644,8 @@ def match_datasets(adata1:AnnData, adata2:AnnData, threshold:Union[float,str]='a
         # Plot second histogram using same bins
         counts1, bins1, _ = ax1.hist(dist_matrix_data1, bins=bins, alpha=0.5, 
                                     color='blue', label='Final matches')
+        
+        
         ax1.set_ylabel('Count (Final Matches)', color='blue')
         ax1.tick_params(axis='y', labelcolor='blue')
 
