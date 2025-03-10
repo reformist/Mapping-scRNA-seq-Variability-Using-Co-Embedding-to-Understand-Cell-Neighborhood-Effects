@@ -1420,9 +1420,9 @@ def plot_normalized_losses(history, figsize=(6, 8)):
         figsize (tuple): Tuple specifying the figure size (width, height).
     """
     fig, axes = plt.subplots(2, 1, figsize=figsize)  # Two subplots: one for training and one for validation
-    fig2, axes2 = plt.subplots(1, 1, figsize=figsize)  # Two subplots: one for training and one for validation
+    # fig2, axes2 = plt.subplots(1, 1, figsize=figsize)  # Two subplots: one for training and one for validation
     train_ax, val_ax = axes
-    extra_metric_ax = axes2
+    # extra_metric_ax = axes2
     for key in history.keys():
         if 'loss' in key or 'extra_metric' in key:
             # Extract the data and ensure it's numeric
@@ -1446,8 +1446,8 @@ def plot_normalized_losses(history, figsize=(6, 8)):
                 train_ax.plot(norm_loss, label=label)
             elif 'val' in key:
                 val_ax.plot(norm_loss, label=label)
-            elif 'extra_metric' in key:
-                extra_metric_ax.plot(norm_loss, label=label)
+            # elif 'extra_metric' in key:
+            #     extra_metric_ax.plot(norm_loss, label=label)
 
     # Formatting subplots
     train_ax.set_title('Training Losses')
@@ -1467,13 +1467,13 @@ def plot_normalized_losses(history, figsize=(6, 8)):
     handletextpad=0.2,
     borderaxespad=0.1) 
     
-    extra_metric_ax.set_title('Extra Metric')
-    extra_metric_ax.set_xlabel('Epoch')
-    extra_metric_ax.set_ylabel('Normalized Loss')
-    extra_metric_ax.legend(   fontsize='x-small',
-    frameon=False,  # Remove box border
-    handletextpad=0.2,
-    borderaxespad=0.1) 
+    # extra_metric_ax.set_title('Extra Metric')
+    # extra_metric_ax.set_xlabel('Epoch')
+    # extra_metric_ax.set_ylabel('Normalized Loss')
+    # extra_metric_ax.legend(   fontsize='x-small',
+    # frameon=False,  # Remove box border
+    # handletextpad=0.2,
+    # borderaxespad=0.1) 
     
 
     plt.tight_layout()
@@ -1731,15 +1731,14 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     rna_pca = pca.transform(rna_mean)
     plt.subplot(1, 3, 1)
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
-    plt.title('during training, RNA')
+    plt.title('RNA')
 
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
     plt.subplot(1, 3, 2)
     plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
-    plt.title('during training, protein')
-
-    # merge the two datasets
+    plt.title('protein')
+    plt.suptitle('PCA of latent space during training\nColor by CN lable')
 
     ax = plt.subplot(1, 3, 3, projection='3d')
     ax.scatter(rna_pca[:, 0], rna_pca[:, 1], rna_pca[:, 2], c='red', label='RNA')
