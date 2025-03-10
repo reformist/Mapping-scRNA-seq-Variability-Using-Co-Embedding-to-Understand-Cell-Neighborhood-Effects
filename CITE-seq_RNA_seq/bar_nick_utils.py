@@ -25,6 +25,33 @@ import cvxpy as cp
 from sklearn.linear_model import OrthogonalMatchingPursuit
 # import scib
 import scipy
+# wrap UMAP to filter duplicates to avoid UMAP distortion    
+def get_umap_filtered_fucntion():
+    # Save original UMAP function if not already wrapped
+    _original_umap = sc.tl.umap
+
+    def umap_filtered(adata, *args, **kwargs):
+        if "duplicate" in adata.obs.columns:
+            # Filter duplicates and remove the triggering column
+            adata_filtered = adata[~adata.obs["duplicate"]].copy()
+            adata_filtered.obs["duplicate_temp"] = adata_filtered.obs["duplicate"]
+            del adata_filtered.obs["duplicate"]
+            # Run original UMAP on filtered data
+            _original_umap(adata_filtered, *args, **kwargs)
+            adata_filtered.obs["duplicate"] = adata_filtered.obs["duplicate_temp"]
+            # Map results back to original adata
+            umap_results = np.full((adata.n_obs, adata_filtered.obsm["X_umap"].shape[1]), np.nan)
+            umap_results[~adata.obs["duplicate"].values] = adata_filtered.obsm["X_umap"]
+            adata.obsm["X_umap"] = umap_results
+        else:
+            _original_umap(adata, *args, **kwargs)
+    return umap_filtered
+
+if not hasattr(sc.tl.umap, '_is_wrapped'):
+    sc.tl.umap = get_umap_filtered_fucntion()
+    sc.tl.umap._is_wrapped = True
+    
+    
 # Function to get the latest file based on the timestamp
             # plot the mean and std of each in subplots
 def archetype_vs_latent_distances_plot(archetype_dis_tensor,latent_distances,threshold,use_subsample=True):
@@ -974,27 +1001,7 @@ def preprocess_protein(adata_prot):
 
     return adata_prot
 
-# wrap UMAP to filter duplicates to avoid UMAP distortion    
-def get_umap_filtered_fucntion():
-    # Save original UMAP function if not already wrapped
-    _original_umap = sc.tl.umap
 
-    def umap_filtered(adata, *args, **kwargs):
-        if "duplicate" in adata.obs.columns:
-            # Filter duplicates and remove the triggering column
-            adata_filtered = adata[~adata.obs["duplicate"]].copy()
-            adata_filtered.obs["duplicate_temp"] = adata_filtered.obs["duplicate"]
-            del adata_filtered.obs["duplicate"]
-            # Run original UMAP on filtered data
-            _original_umap(adata_filtered, *args, **kwargs)
-            adata_filtered.obs["duplicate"] = adata_filtered.obs["duplicate_temp"]
-            # Map results back to original adata
-            umap_results = np.full((adata.n_obs, adata_filtered.obsm["X_umap"].shape[1]), np.nan)
-            umap_results[~adata.obs["duplicate"].values] = adata_filtered.obsm["X_umap"]
-            adata.obsm["X_umap"] = umap_results
-        else:
-            _original_umap(adata, *args, **kwargs)
-    return umap_filtered
             
 def select_gene_likelihood(adata):
     """
