@@ -1758,13 +1758,13 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     pca.fit(rna_mean)
     rna_pca = pca.transform(rna_mean)
     plt.subplot(1, 3, 1)
-    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=adata_rna_subset[index].obs['CN'], cmap='jet')
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=pd.Categorical(adata_rna_subset[index].obs['CN'].values).codes, cmap='jet')
     plt.title('RNA')
 
     pca.fit(protein_mean)
     protein_pca = pca.transform(protein_mean)
     plt.subplot(1, 3, 2)
-    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=adata_prot_subset[index].obs['CN'], cmap='jet')
+    plt.scatter(protein_pca[:, 0], protein_pca[:, 1], c=pd.Categorical(adata_prot_subset[index].obs['CN']).codes, cmap='jet')
     plt.title('protein')
     plt.suptitle('PCA of latent space during training\nColor by CN lable')
 

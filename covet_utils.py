@@ -2,6 +2,7 @@
 import numpy as np
 import scanpy as sc
 import sklearn.neighbors
+import scipy
 
 def MatSqrt(Mats):
     """
@@ -44,7 +45,7 @@ def CalcCovMats(spatial_data, kNN, genes, spatial_key="spatial", batch_key=-1):
     :meta private:
     """
 
-    ExpData = np.log(spatial_data[:, genes].X + 1)
+    ExpData = np.log(spatial_data[:, genes].X.toarray() + 1) if scipy.sparse.issparse(spatial_data[:, genes].X) else np.log(spatial_data[:, genes].X + 1)
 
     if batch_key == -1:
         kNNGraph = sklearn.neighbors.kneighbors_graph(
@@ -104,7 +105,7 @@ def compute_covet(
             elif(spatial_data.X.min() < 0):
                 sc.pp.highly_variable_genes(spatial_data, n_top_genes=g)
             else:
-                spatial_data.layers["log"] = np.log(spatial_data.X + 1)
+                spatial_data.layers["log"] = np.log(spatial_data.X.toarray() + 1) if scipy.sparse.issparse(spatial_data.X) else np.log(spatial_data.X + 1)
                 sc.pp.highly_variable_genes(spatial_data, n_top_genes=g, layer="log")
 
         CovGenes = np.asarray(spatial_data.var_names[spatial_data.var.highly_variable])
