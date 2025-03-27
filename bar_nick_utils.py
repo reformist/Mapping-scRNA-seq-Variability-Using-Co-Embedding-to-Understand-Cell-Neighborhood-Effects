@@ -1783,7 +1783,17 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     ax.legend()
     plt.show()
 
-
+def plot_latent_single(means, adata, index,color_label='CN',title=''):
+    plt.figure(figsize=(10, 5))
+    pca = PCA(n_components=3)
+    means_cpu = means.detach().cpu().numpy()
+    index_cpu = index.detach().cpu().numpy().flatten()
+    pca.fit(means_cpu)
+    rna_pca = pca.transform(means_cpu)
+    plt.subplot(1, 1, 1)
+    plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c=pd.Categorical(adata[index_cpu].obs[color_label].values).codes, cmap='jet')
+    plt.title(title)
+    plt.show()
 def find_best_pair_by_row_matching(archetype_proportion_list_rna, archetype_proportion_list_protein,
                                    metric='correlation'):
     """
