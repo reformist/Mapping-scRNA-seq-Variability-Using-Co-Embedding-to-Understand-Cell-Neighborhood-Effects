@@ -967,14 +967,20 @@ def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     return weights
 
 
-def preprocess_rna(adata_rna):
+def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
     """
     Preprocess RNA data for downstream analysis with PCA and variance tracking.
     """
-    sc.pp.filter_cells(adata_rna, min_genes=100)
-    sc.pp.filter_genes(adata_rna, min_cells=20)
+    sc.pp.filter_cells(adata_rna, min_genes=min_genes)
+    sc.pp.filter_genes(adata_rna, min_cells=min_cells)
     # Identify highly variable genes (for further analysis, could narrow down)
-    sc.pp.highly_variable_genes(adata_rna, n_top_genes=2000, flavor='seurat_v3')
+    sc.pp.highly_variable_genes(adata_rna, n_top_genes=n_top_genes, flavor='seurat_v3')
+    adata_rna = adata_rna[:, adata_rna.var['highly_variable']]
+    print(f"Selected {adata_rna.shape[1]} highly variable genes.")
+    # PCA after selecting highly variable genes
+    sc.pp.pca(adata_rna)
+    print(
+        f"Variance ratio after highly variable gene selection PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
     # Annotate mitochondrial, ribosomal, and hemoglobin genes
     adata_rna.var["mt"] = adata_rna.var_names.str.startswith("Mt-")  # Mouse data
