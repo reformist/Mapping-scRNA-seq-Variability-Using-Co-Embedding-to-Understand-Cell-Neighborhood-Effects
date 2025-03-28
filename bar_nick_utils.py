@@ -1595,7 +1595,6 @@ def plot_archetypes_matching(data1, data2, rows=5):
     plt.xlabel('Columns')
     plt.ylabel('proportion of cell types accounted for an archetype')
     plt.title('Show that the archetypes are aligned by using')
-    plt.legend()
     # rotate x labels
     plt.xticks(rotation=45)
     plt.grid(True)
