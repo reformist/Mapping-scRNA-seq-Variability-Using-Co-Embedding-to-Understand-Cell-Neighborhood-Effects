@@ -966,6 +966,14 @@ def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     weights /= weights.sum(axis=1, keepdims=True)  # Normalize rows
     return weights
 
+def preprocess_rna_maxfuse(adata_1):
+    sc.pp.normalize_total(adata_1)
+    sc.pp.log1p(adata_1)
+    sc.pp.highly_variable_genes(adata_1, n_top_genes=5000)
+    # only retain highly variable genes
+    adata_1 = adata_1[:, adata_1.var.highly_variable].copy()
+    sc.pp.scale(adata_1)
+    return adata_1
 
 def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
     """
@@ -974,8 +982,17 @@ def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
     sc.pp.filter_cells(adata_rna, min_genes=min_genes)
     sc.pp.filter_genes(adata_rna, min_cells=min_cells)
     # Identify highly variable genes (for further analysis, could narrow down)
+
+    # maxfuse addition
+    sc.pp.normalize_total(adata_rna)
+    if not adata_rna.X.max() < 100:  
+        sc.pp.log1p(adata_rna)
+    #maxfuse end addition
     sc.pp.highly_variable_genes(adata_rna, n_top_genes=n_top_genes, flavor='seurat_v3')
+    # sc.pp.scale(adata_rna)
     adata_rna = adata_rna[:, adata_rna.var['highly_variable']]
+    #maxfuse scale additoin
+    sc.pp.scale(adata_rna)
     print(f"Selected {adata_rna.shape[1]} highly variable genes.")
     # PCA after selecting highly variable genes
     sc.pp.pca(adata_rna)
@@ -996,13 +1013,13 @@ def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
 
     # Log-transform the data
     # only log transform the data if it is not already log transformed
-    if not adata_rna.X.max() < 100:  
-        sc.pp.log1p(adata_rna)
+
     sc.pp.pca(adata_rna)
     print(
         f"Variance ratio after log transformation PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
+   
     # Normalize total counts
-    sc.pp.normalize_total(adata_rna, target_sum=5e3)
+    # sc.pp.normalize_total(adata_rna, target_sum=5e3)
     sc.pp.pca(adata_rna)
     print(f"Variance ratio after normalization PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
