@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Union
 from scipy.optimize import linear_sum_assignment
 from mpl_toolkits.mplot3d import Axes3D # needed for 3D plotting
 from umap import UMAP                                    
+import scipy.sparse as sp
 
 import torch
 import scanpy as sc
@@ -966,16 +967,26 @@ def get_cell_representations_as_archetypes(count_matrix, archetype_matrix):
     return weights
 
 
-def preprocess_rna(adata_rna):
+def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
     """
     Preprocess RNA data for downstream analysis with PCA and variance tracking.
     """
+    sc.pp.filter_cells(adata_rna, min_genes=min_genes)
+    sc.pp.filter_genes(adata_rna, min_cells=min_cells)
+    # Identify highly variable genes (for further analysis, could narrow down)
+    sc.pp.highly_variable_genes(adata_rna, n_top_genes=n_top_genes, flavor='seurat_v3')
+    adata_rna = adata_rna[:, adata_rna.var['highly_variable']]
+    print(f"Selected {adata_rna.shape[1]} highly variable genes.")
+    # PCA after selecting highly variable genes
+    sc.pp.pca(adata_rna)
+    print(
+        f"Variance ratio after highly variable gene selection PCA (10 PCs): {adata_rna.uns['pca']['variance_ratio'][:10].sum():.4f}")
 
     # Annotate mitochondrial, ribosomal, and hemoglobin genes
     adata_rna.var["mt"] = adata_rna.var_names.str.startswith("Mt-")  # Mouse data
     adata_rna.var["ribo"] = adata_rna.var_names.str.startswith(("RPS", "RPL"))
     adata_rna.var["hb"] = adata_rna.var_names.str.contains("^HB[^(P)]", regex=True)
-
+    # Filter cells and genes (different sample)
     # Calculate QC metrics
     # todo cause crash in archetype generation real for some resean?!!?
     # sc.pp.calculate_qc_metrics(adata_rna, qc_vars=["mt", "ribo", "hb"], inplace=True, log1p=True)
@@ -1004,6 +1015,9 @@ def preprocess_rna(adata_rna):
 
 
 def preprocess_protein(adata_prot):
+    sc.pp.filter_cells(adata_prot, min_genes=30)
+    sc.pp.filter_genes(adata_prot, min_cells=50)
+
     sc.pp.pca(adata_prot)
     print(f"Variance ratio after PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
     print()
@@ -1015,6 +1029,33 @@ def preprocess_protein(adata_prot):
     sc.pp.pca(adata_prot)
     print(
         f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    # matrix = adata_prot.X
+    # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
+    # adata_prot.X = matrix
+    # sc.pp.scale(adata_prot, max_value=10)
+
+    return adata_prot
+
+def preprocess_protein_new_bad(adata_prot):
+    sc.pp.filter_cells(adata_prot, min_genes=25)
+    sc.pp.filter_genes(adata_prot, min_cells=50)
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    adata_prot.X = adata_prot.X.toarray() if sp.issparse(adata_prot.X) else adata_prot.X
+    for marker in adata_prot.var_names:
+        mask = ~np.isnan(adata_prot[:, marker].X.todense() if sp.issparse(adata_prot.X) else adata_prot[:, marker].X)
+        mean_val = np.mean(adata_prot[:, marker].X[mask])
+        std_val = np.std(adata_prot[:, marker].X[mask])
+        adata_prot[:, marker].X = (adata_prot[:, marker].X - mean_val) / std_val
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after normalization PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    sc.pp.scale(adata_prot, zero_center=True, max_value=10.0)
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after scaling PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    # sc.pp.log1p(adata_prot)
+    # sc.pp.pca(adata_prot)
+    # print(
+    #     f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
     # matrix = adata_prot.X
     # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
     # adata_prot.X = matrix
@@ -1576,7 +1617,6 @@ def plot_archetypes_matching(data1, data2, rows=5):
     plt.xlabel('Columns')
     plt.ylabel('proportion of cell types accounted for an archetype')
     plt.title('Show that the archetypes are aligned by using')
-    plt.legend()
     # rotate x labels
     plt.xticks(rotation=45)
     plt.grid(True)
@@ -1782,6 +1822,7 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     ax.set_zlabel('PC3')
     ax.legend()
     plt.show()
+    
 
 def plot_latent_single(means, adata, index,color_label='CN',title=''):
     plt.figure(figsize=(10, 5))
