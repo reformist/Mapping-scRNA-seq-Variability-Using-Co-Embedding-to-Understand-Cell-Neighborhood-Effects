@@ -1015,6 +1015,28 @@ def preprocess_rna(adata_rna, min_genes=100, min_cells=20, n_top_genes=2000):
 
 
 def preprocess_protein(adata_prot):
+    sc.pp.filter_cells(adata_prot, min_genes=30)
+    sc.pp.filter_genes(adata_prot, min_cells=50)
+
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print()
+    sc.pp.normalize_total(adata_prot)
+    sc.pp.pca(adata_prot)
+    print(f"Variance ratio after normalization PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    print()
+    sc.pp.log1p(adata_prot)
+    sc.pp.pca(adata_prot)
+    print(
+        f"Variance ratio after log transformation PCA (10 PCs): {adata_prot.uns['pca']['variance_ratio'][:10].sum():.4f}")
+    # matrix = adata_prot.X
+    # np.log1p(matrix / np.exp(np.mean(np.log1p(matrix + 1), axis=1, keepdims=True)))
+    # adata_prot.X = matrix
+    # sc.pp.scale(adata_prot, max_value=10)
+
+    return adata_prot
+
+def preprocess_protein_new_bad(adata_prot):
     sc.pp.filter_cells(adata_prot, min_genes=25)
     sc.pp.filter_genes(adata_prot, min_cells=50)
     sc.pp.pca(adata_prot)
