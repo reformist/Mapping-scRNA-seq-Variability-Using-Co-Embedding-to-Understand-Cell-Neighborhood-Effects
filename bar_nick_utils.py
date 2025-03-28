@@ -1801,6 +1801,7 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     ax.set_zlabel('PC3')
     ax.legend()
     plt.show()
+    
 
 def plot_latent_single(means, adata, index,color_label='CN',title=''):
     plt.figure(figsize=(10, 5))
