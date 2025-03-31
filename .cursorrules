@@ -1,0 +1,49 @@
+{
+    "conda": {
+        "environment": "scvi",
+        "channels": [
+            "conda-forge",
+            "bioconda",
+            "defaults"
+        ]
+    },
+    "formatting": {
+        "indentSize": 4,
+        "lineWidth": 100
+    },
+    "linting": {
+        "enabled": true,
+        "python": {
+            "pylint": true,
+            "flake8": true,
+            "black": true
+        }
+    },
+    "editor": {
+        "rulers": [100],
+        "wordWrap": "off",
+        "trimTrailingWhitespace": true,
+        "insertFinalNewline": true
+    },
+    "terminal": {
+        "shell": "/bin/bash",
+        "cwd": "${workspaceFolder}"
+    },
+    "git": {
+        "enabled": true,
+        "autofetch": true
+    },
+    "search": {
+        "exclude": [
+            "**/.git",
+            "**/node_modules",
+            "**/__pycache__",
+            "**/.pytest_cache",
+            "**/.ipynb_checkpoints",
+            "**/data",
+            "**/results",
+            "**/logs",
+            "**/legacy"
+        ]
+    }
+} 
