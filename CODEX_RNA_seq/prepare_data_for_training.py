@@ -112,53 +112,78 @@ file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_arc
 
 
 # Load the latest files
+print("Loading data files...")
 latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
 print(latest_files)
 adata_rna = sc.read(latest_files["adata_rna_"])
+print("Loaded RNA data:", adata_rna.shape)
 adata_prot = sc.read(latest_files["adata_prot_"])
+print("Loaded protein data:", adata_prot.shape)
 adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
+print("Loaded RNA archetypes:", adata_archetype_rna.shape)
 adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
+print("Loaded protein archetypes:", adata_archetype_prot.shape)
 
 # %%
-
-# %%
+print("\nSubsampling data...")
 sample_size = min(len(adata_prot), len(adata_rna), 2000)
 adata_rna_subset = sc.pp.subsample(adata_rna, n_obs=sample_size, copy=True)
 adata_prot_subset = sc.pp.subsample(adata_prot, n_obs=int(sample_size) - 1, copy=True)
-del adata_prot, adata_rna
+print(f"Subsampled to {sample_size} cells")
+del adata_prot, adata_rnaz
 if plot_flag:
+    print("\nGenerating UMAP visualizations...")
     # making sure that the archetypes make sense in original data context
     sc.pp.neighbors(adata_rna_subset)
     sc.pp.neighbors(adata_prot_subset)
     sc.tl.umap(adata_rna_subset)
     sc.tl.umap(adata_prot_subset)
+
+    # Create separate plots for RNA and protein data
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
     sc.pl.umap(
         adata_rna_subset,
         color="archetype_label",
-        title=["Original RNA cells associated Archetypes"],
+        title="Original RNA cells associated Archetypes",
+        show=False,
     )
+
+    plt.subplot(1, 2, 2)
     sc.pl.umap(
         adata_prot_subset,
         color="archetype_label",
-        title=["Original Protein cells associated Archetypes"],
+        title="Original Protein cells associated Archetypes",
+        show=False,
     )
 
-# %%
-# order cells by major and minor cell type for easy visualization
+    plt.tight_layout()
+    plt.show()
+
+print("\nOrdering cells by major and minor cell types...")
+# Ensure unique indices
+adata_rna_subset.obs_names_make_unique()
+adata_prot_subset.obs_names_make_unique()
+
 new_order_rna = adata_rna_subset.obs.sort_values(by=["major_cell_types", "cell_types"]).index
 new_order_prot = adata_prot_subset.obs.sort_values(by=["major_cell_types", "cell_types"]).index
 adata_rna_subset = adata_rna_subset[new_order_rna]
 adata_prot_subset = adata_prot_subset[new_order_prot]
+
+print("Computing archetype distances...")
 archetype_distances = scipy.spatial.distance.cdist(
     adata_rna_subset.obsm["archetype_vec"].values,
     adata_prot_subset.obsm["archetype_vec"].values,
     metric="cosine",
 )
 matching_distance_before = np.diag(archetype_distances).mean()
+print(f"Initial matching distance: {matching_distance_before:.3f}")
 
 if plot_flag:
     plt.figure(figsize=(10, 5))
-    plt.suptitle("Heatmap of archetype coor before matching\nordered by cell types only")
+    plt.subplot(1, 2, 1)
+    plt.title("Heatmap of archetype coor before matching\nordered by cell types only")
     plt.subplot(1, 2, 1)
     sns.heatmap(np.log1p(adata_rna_subset.obsm["archetype_vec"].values), cbar=False)
     plt.title("RNA Archetype Vectors")
@@ -228,10 +253,6 @@ if plot_flag:
     # plt.title('If this looks like a line, then the matching ARE THE SAME AND NOT ACROSS MODALITIES')
     plt.show()
 
-
-# %%
-adata_rna_subset
-
 # %%
 sc.pp.pca(adata_rna_subset)
 sc.pp.pca(adata_prot_subset)
@@ -254,9 +275,6 @@ if plot_flag:
 
 
 # %%
-adata_rna_subset.obs["major_cell_types"][0]
-
-# %%
 if plot_flag:
     adata_B_cells = adata_rna_subset[
         adata_rna_subset.obs["major_cell_types"] == adata_rna_subset.obs["major_cell_types"][0]
@@ -275,9 +293,6 @@ if plot_flag:
 
 
 # %%
-adata_prot_subset.obs.columns
-
-# %%
 
 sc.pp.neighbors(adata_prot_subset, use_rep="X_pca", key_added="X_neighborhood")
 sc.tl.umap(adata_prot_subset, neighbors_key="X_neighborhood")
@@ -294,7 +309,7 @@ sc.pl.umap(
     color="cell_types",
     title="Protein UMAP of CN vectors colored by minor cell type label",
 )
-adata_prot_subset
+
 
 # %%
 if plot_flag:
@@ -351,8 +366,8 @@ clean_uns_for_h5ad(adata_prot_subset)
 clean_uns_for_h5ad(adata_rna_subset)
 save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
 
-sc.write(Path(f"{save_dir}/adata_rna_subset"), adata_rna_subset)
-sc.write(Path(f"{save_dir}/adata_prot_subset"), adata_prot_subset)
+sc.write(Path(f"{save_dir}/adata_rna_subset_prepared_for_training.h5ad"), adata_rna_subset)
+sc.write(Path(f"{save_dir}/adata_prot_subset_prepared_for_training.h5ad"), adata_prot_subset)
 
 
 # %%

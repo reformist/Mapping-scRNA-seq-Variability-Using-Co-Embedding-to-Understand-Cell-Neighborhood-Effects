@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import time
 from itertools import product, zip_longest
 from typing import Any, Dict, List, Union
 
@@ -222,12 +223,14 @@ def plot_rna_protein_matching_means_and_scale(
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 1)
     plt.title("RNA Mean vs Protein Mean\nCorrelation Distribution")
+
+    n_samples = rna_inference_outputs["qz"].mean.shape[0]
     if use_subsample:
-        subsample_indexes = np.random.choice(
-            rna_inference_outputs["qz"].mean.shape[0], 300, replace=False
-        )
+        n_subsample = min(1000, n_samples)  # Changed from 300 to 1000 to match batch size
+        subsample_indexes = np.random.choice(n_samples, n_subsample, replace=False)
     else:
-        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
+        subsample_indexes = np.arange(n_samples)
+
     rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
     rna_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
     protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
@@ -307,12 +310,14 @@ def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs, use_s
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.title("RNA Latent Space: Mean vs Standard Deviation")
+
+    n_samples = rna_inference_outputs["qz"].mean.shape[0]
     if use_subsample:
-        subsample_indexes = np.random.choice(
-            rna_inference_outputs["qz"].mean.shape[0], 300, replace=False
-        )
+        n_subsample = min(300, n_samples)  # Changed from 300 to 1000 to match batch size
+        subsample_indexes = np.random.choice(n_samples, n_subsample, replace=False)
     else:
-        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
+        subsample_indexes = np.arange(n_samples)
+
     sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
     plt.subplot(1, 2, 2)
     plt.title("Protein Latent Space: Mean vs Standard Deviation")
@@ -456,7 +461,8 @@ def calculate_iLISI(
     n_cells = adata.n_obs
     if plot_flag:
         if use_subsample:
-            subset_indices = np.random.choice(n_cells, 300, replace=False)
+            sample_size = min(300, n_cells)  # Use smaller of 300 or total cells
+            subset_indices = np.random.choice(n_cells, sample_size, replace=False)
             subset_connectivities = connectivities[subset_indices][:, subset_indices]
         else:
             subset_connectivities = connectivities
@@ -807,9 +813,17 @@ def get_latest_file(folder, prefix):
     files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith(".h5ad")]
     if not files:
         return None
-    files.sort(
-        key=lambda x: re.search(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", x).group(), reverse=True
-    )
+
+    # Try to sort by timestamp if present, otherwise use file modification time
+    def get_sort_key(x):
+        timestamp_match = re.search(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", x)
+        if timestamp_match:
+            return timestamp_match.group()
+        # Convert modification time to timestamp string format for consistent comparison
+        mtime = os.path.getmtime(os.path.join(folder, x))
+        return time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(mtime))
+
+    files.sort(key=get_sort_key, reverse=True)
     return os.path.join(folder, files[0])
 
 
@@ -1613,68 +1627,33 @@ def plot_aligned_normalized_losses(history):
     plt.show()
 
 
-def plot_normalized_losses(history, figsize=(6, 8)):
-    """
-    Plot normalized loss values from a training history dictionary.
+def plot_normalized_losses(history):
+    """Plot normalized training losses over time."""
+    plt.figure(figsize=(15, 5))
 
-    Parameters:
-        history (dict): Dictionary containing loss values for training and validation.
-        figsize (tuple): Tuple specifying the figure size (width, height).
-    """
-    fig, axes = plt.subplots(
-        2, 1, figsize=figsize
-    )  # Two subplots: one for training and one for validation
-    # fig2, axes2 = plt.subplots(1, 1, figsize=figsize)  # Two subplots: one for training and one for validation
-    train_ax, val_ax = axes
-    # extra_metric_ax = axes2
-    for key in history.keys():
-        if "loss" in key or "extra_metric" in key:
-            # Extract the data and ensure it's numeric
-            loss_data = history[key].to_numpy()
+    # Get all train keys from history
+    train_keys = [key for key in history.keys() if key.startswith("train_")]
 
-            # Calculate min, max, and range
+    # Plot all losses on one plot
+    for key in train_keys:
+        loss_data = np.array(history[key])  # Convert list to numpy array
+        if len(loss_data) > 0:  # Check if we have any data
+            # Normalize the loss data
             min_val = loss_data.min()
             max_val = loss_data.max()
-            range_val = max_val - min_val
+            normalized_loss = (loss_data - min_val) / (max_val - min_val + 1e-8)
 
-            # Safeguard against division by zero
-            if range_val == 0:
-                norm_loss = loss_data * 0  # Normalize to zero if no range
-            else:
-                norm_loss = (loss_data - min_val) / range_val
+            # Plot normalized loss
+            plt.plot(normalized_loss, label=f"{key} (min: {min_val:.2f}, max: {max_val:.2f})")
 
-            label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
+            # Plot zero line for reference
+            plt.axhline(y=0, color="k", linestyle="--", alpha=0.3)
 
-            # Plot on the respective subplot
-            if "train" in key:
-                train_ax.plot(norm_loss, label=label)
-            elif "val" in key:
-                val_ax.plot(norm_loss, label=label)
-            # elif 'extra_metric' in key:
-            #     extra_metric_ax.plot(norm_loss, label=label)
-
-    # Formatting subplots
-    train_ax.set_title("Training Losses")
-    train_ax.set_xlabel("Epoch")
-    train_ax.set_ylabel("Normalized Loss")
-    train_ax.legend(
-        fontsize="x-small", frameon=False, handletextpad=0.2, borderaxespad=0.1  # Remove box border
-    )
-
-    val_ax.set_title("Validation Losses")
-    val_ax.set_xlabel("Epoch")
-    val_ax.set_ylabel("Normalized Loss")
-    val_ax.legend(
-        fontsize="x-small", frameon=False, handletextpad=0.2, borderaxespad=0.1  # Remove box border
-    )
-
-    # extra_metric_ax.set_title('Extra Metric')
-    # extra_metric_ax.set_xlabel('Epoch')
-    # extra_metric_ax.set_ylabel('Normalized Loss')
-    # extra_metric_ax.legend(   fontsize='x-small',
-    # frameon=False,  # Remove box border
-    # handletextpad=0.2,
-    # borderaxespad=0.1)
+    plt.title("All Normalized Training Losses")
+    plt.xlabel("Training Step")
+    plt.ylabel("Normalized Loss Value")
+    plt.grid(True)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
     plt.tight_layout()
     plt.show()
@@ -1923,6 +1902,50 @@ def compare_matchings(
     plt.ylabel("Normalized Matching Cost")
     plt.title("Optimal vs. Random Row Matching Costs")
     plt.show()
+
+
+def compute_random_matching_cost(rna, protein, metric="correlation"):
+    """Compute normalized cost and distances for a random row assignment."""
+    n_samples = rna.shape[0]
+    random_indices = np.random.permutation(n_samples)
+    protein_random = protein[random_indices]
+
+    if metric == "euclidean":
+        distances = np.linalg.norm(rna - protein_random, axis=1)
+    elif metric == "cosine":
+        # Normalize rows to compute cosine similarity
+        rna_norm = rna / np.linalg.norm(rna, axis=1, keepdims=True)
+        protein_random_norm = protein_random / np.linalg.norm(protein_random, axis=1, keepdims=True)
+        cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
+        distances = 1 - cosine_similarity  # Cosine distance
+        for i in range(100):
+            random_indices = np.random.permutation(n_samples)
+            protein_random = protein[random_indices]
+            protein_random_norm = protein_random / np.linalg.norm(
+                protein_random, axis=1, keepdims=True
+            )
+            cosine_similarity = np.sum(rna_norm * protein_random_norm, axis=1)
+            distances = np.vstack((distances, 1 - cosine_similarity))
+        distances = np.mean(distances, axis=0)
+    elif metric == "correlation":
+        # Compute Pearson correlation distance
+        rna_mean = np.mean(rna, axis=1, keepdims=True)
+        protein_random_mean = np.mean(protein_random, axis=1, keepdims=True)
+        rna_centered = rna - rna_mean
+        protein_random_centered = protein_random - protein_random_mean
+
+        numerator = np.sum(rna_centered * protein_random_centered, axis=1)
+        denominator = np.sqrt(np.sum(rna_centered**2, axis=1)) * np.sqrt(
+            np.sum(protein_random_centered**2, axis=1)
+        )
+        pearson_correlation = numerator / denominator
+        distances = 1 - pearson_correlation  # Correlation distance
+
+    else:
+        raise ValueError("Unsupported metric. Use 'euclidean' or 'cosine'.")
+
+    normalized_cost = np.sum(distances) / n_samples
+    return normalized_cost, distances
 
 
 def find_best_pair_by_row_matching(
