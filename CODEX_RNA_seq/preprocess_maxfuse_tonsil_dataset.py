@@ -19,6 +19,9 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Set working directory to project root
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import copy
 import importlib
 import re
@@ -65,12 +68,13 @@ np.random.seed(8)
 # %%
 # importing data from upenn site
 import requests, zipfile, io
-r = requests.get("http://stat.wharton.upenn.edu/~zongming/maxfuse/data.zip")
-z = zipfile.ZipFile(io.BytesIO(r.content))
-z.extractall("../")
+if not os.path.exists("CODEX_RNA_seq/data/raw_data/tonsil"):
+    r = requests.get("http://stat.wharton.upenn.edu/~zongming/maxfuse/data.zip")
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall("../")
 
 # %%
-protein = pd.read_csv("../data/tonsil/tonsil_codex.csv") # ~178,000 codex cells
+protein = pd.read_csv("CODEX_RNA_seq/data/raw_data/tonsil/tonsil_codex.csv") # ~178,000 codex cells
 
 # %%
 
@@ -95,8 +99,8 @@ protein_adata.obsm["spatial"] = protein[protein_locations].to_numpy()
 # read in RNA data
 from scipy.io import mmread
 
-rna = mmread("../data/tonsil/tonsil_rna_counts.txt") # rna count as sparse matrix, 10k cells (RNA)
-rna_names = pd.read_csv('../data/tonsil/tonsil_rna_names.csv')['names'].to_numpy()
+rna = mmread("CODEX_RNA_seq/data/raw_data/tonsil/tonsil_rna_counts.txt") # rna count as sparse matrix, 10k cells (RNA)
+rna_names = pd.read_csv('CODEX_RNA_seq/data/raw_data/tonsil/tonsil_rna_names.csv')['names'].to_numpy()
 # convert to AnnData
 rna_adata = anndata.AnnData(
     rna.tocsr(), dtype=np.float32
@@ -106,7 +110,7 @@ rna_adata.var_names = rna_names
 # %%
 # read in celltyle labels (used for evaluation of integration results for maxfuse, but we need them
 # for our own analyses)
-metadata_rna = pd.read_csv('../data/tonsil/tonsil_rna_meta.csv')
+metadata_rna = pd.read_csv("CODEX_RNA_seq/data/raw_data/tonsil/tonsil_rna_meta.csv")
 labels_rna = metadata_rna['cluster.info'].to_numpy()
 labels_codex = protein['cluster.term'].to_numpy()
 
