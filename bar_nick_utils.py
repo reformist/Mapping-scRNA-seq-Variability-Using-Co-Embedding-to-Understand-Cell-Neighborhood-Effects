@@ -509,6 +509,7 @@ def plot_merged_pca_tsne(
     pca_components : int
         Requested number of principal components before TSNE.
     """
+
     # -------------------- MERGE DATA --------------------
     rna_data = adata1.obsm["archetype_vec"]
     prot_data = adata2.obsm["archetype_vec"]
@@ -528,9 +529,7 @@ def plot_merged_pca_tsne(
     # -------------------- PCA PLOT --------------------
     plt.figure(figsize=(6, 5))
 
-    plt.subplot(133)
-    plt.title("RNA-Protein Joint PCA\nHighlighting Unmatched Cells")
-    plt.suptitle("Cross-Modal Integration Analysis using PCA")
+    # Matched vs. unmatched (Protein)
     plt.scatter(prot_pca[:, 0], prot_pca[:, 1], c="blue", s=5, label="Matched Protein")
     plt.scatter(
         prot_pca[unmatched_prot_indices, 0],
@@ -542,6 +541,7 @@ def plot_merged_pca_tsne(
         alpha=0.5,
     )
 
+    # Matched vs. unmatched (RNA)
     plt.scatter(rna_pca[:, 0], rna_pca[:, 1], c="red", s=5, label="Matched RNA", alpha=0.5)
     plt.scatter(
         rna_pca[unmatched_rna_indices, 0],
@@ -553,9 +553,11 @@ def plot_merged_pca_tsne(
         alpha=0.5,
     )
 
+    plt.title("PCA (First Two PCs)")
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.legend()
+    plt.show()
 
     # -------------------- TSNE --------------------
     tsne_model = TSNE(n_components=2)
@@ -801,7 +803,7 @@ def match_datasets(
     return matched_adata1, matched_adata2
 
 
-def get_latest_file(prefix, folder):
+def get_latest_file(folder, prefix):
     files = [f for f in os.listdir(folder) if f.startswith(prefix) and f.endswith(".h5ad")]
     if not files:
         return None
@@ -1678,7 +1680,7 @@ def plot_normalized_losses(history, figsize=(6, 8)):
     plt.show()
 
 
-def evaluate_distance_metrics_old(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
+def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
     """
     Evaluates multiple distance metrics to determine which one best captures the similarity
     between matching rows in matrices A and B.
@@ -1768,10 +1770,22 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.title("RNA Latent Space\nColored by Cell Types")
+    # Get the correct subset of cell types for the points being plotted
+    cell_types = adata_rna_subset.obs["cell_types"].astype("category").cat.codes
+    if len(cell_types) > len(rna_mean):
+        cell_types = cell_types[: len(rna_mean)]
+    # Run PCA on RNA latent space
+    pca = PCA(n_components=2)
+    rna_mean_pca = pca.fit(rna_mean)
+    rna_mean_pca = pca.transform(rna_mean)
     plt.scatter(
-        rna_mean[:, index[0]],
-        rna_mean[:, index[1]],
-        c=adata_rna_subset.obs["cell_types"].astype("category").cat.codes,
+        rna_mean_pca[:, 0],
+        rna_mean_pca[:, 1],
+        c=cell_types,
+        cmap="tab10",
+        alpha=0.5,
+        s=1,
+        rasterized=True,
     )
     plt.xlabel(f"Latent Dimension {index[0]}")
     plt.ylabel(f"Latent Dimension {index[1]}")
@@ -1779,16 +1793,21 @@ def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, ind
 
     plt.subplot(1, 2, 2)
     plt.title("Protein Latent Space\nColored by Cell Types")
+    # Get the correct subset of cell types for the points being plotted
+    cell_types = adata_prot_subset.obs["cell_types"].astype("category").cat.codes
+    if len(cell_types) > len(protein_mean):
+        cell_types = cell_types[: len(protein_mean)]
+    protein_mean_pca = pca.transform(protein_mean)
     plt.scatter(
-        protein_mean[:, index[0]],
-        protein_mean[:, index[1]],
-        c=adata_prot_subset.obs["cell_types"].astype("category").cat.codes,
+        protein_mean_pca[:, 0],
+        protein_mean_pca[:, 1],
+        c=cell_types,
     )
     plt.xlabel(f"Latent Dimension {index[0]}")
     plt.ylabel(f"Latent Dimension {index[1]}")
     plt.colorbar(label="Cell Type")
-    plt.suptitle("Latent Space Visualization of RNA and Protein Data")
     plt.tight_layout()
+    plt.show()
 
 
 def plot_latent_single(means, adata, index, color_label="CN", title=""):
@@ -1842,6 +1861,68 @@ def plot_inference_outputs(
 
     plt.suptitle("Distance Distribution Analysis Across Modalities")
     plt.tight_layout()
+
+
+def compare_matchings(
+    archetype_proportion_list_rna,
+    archetype_proportion_list_protein,
+    metric="correlation",
+    num_trials=100,
+):
+    """Compare optimal matching cost with average random matching cost and plot norms."""
+    # Extract the best pair based on optimal matching
+    best_cost = float("inf")
+    for i, (rna, protein) in enumerate(
+        zip(archetype_proportion_list_rna, archetype_proportion_list_protein)
+    ):
+        rna = rna.values if hasattr(rna, "values") else rna
+        protein = protein.values if hasattr(protein, "values") else protein
+        row_ind, col_ind, cost, cost_matrix = match_rows(rna, protein, metric)
+        if cost < best_cost:
+            best_cost = cost
+            best_rna, best_protein = rna, protein
+            best_rna_archetype_order, best_protein_archetype_order = row_ind, col_ind
+            best_cost_matrix = cost_matrix
+    print(f"Optimal normalized matching cost: {best_cost:.4f}")
+
+    # Compute distances for the optimal matching
+    optimal_distances = best_cost_matrix[best_rna_archetype_order, best_protein_archetype_order]
+
+    # Compute distances for a single random matching
+    random_cost, random_distances = compute_random_matching_cost(best_rna, best_protein, metric)
+
+    # Visualization of distances
+    n_samples = best_rna.shape[0]
+    indices = np.arange(n_samples)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(indices, np.sort(optimal_distances), label="Optimal Matching", marker="o")
+    plt.plot(indices, np.sort(random_distances), label="Random Matching", marker="x")
+    plt.xlabel("Sample/Archtype Index (sorted by distance)")
+    plt.ylabel("Distance")
+    plt.title("Comparison of Distances between Matched Rows")
+    plt.legend()
+    plt.show()
+
+    # Compute average random matching cost over multiple trials
+    random_costs = []
+    for _ in range(num_trials):
+        cost, _ = compute_random_matching_cost(best_rna, best_protein, metric)
+        random_costs.append(cost)
+    avg_random_cost = np.mean(random_costs)
+    std_random_cost = np.std(random_costs)
+    print(f"Average random matching cost over {num_trials} trials: {avg_random_cost:.4f}")
+    print(f"Standard deviation: {std_random_cost:.4f}")
+
+    # Bar plot of normalized matching costs
+    labels = ["Optimal Matching", "Random Matching"]
+    costs = [best_cost, avg_random_cost]
+    errors = [0, std_random_cost]
+    plt.figure(figsize=(8, 6))
+    plt.bar(labels, costs, yerr=errors, capsize=5, color=["skyblue", "lightgreen"])
+    plt.ylabel("Normalized Matching Cost")
+    plt.title("Optimal vs. Random Row Matching Costs")
+    plt.show()
 
 
 def find_best_pair_by_row_matching(
