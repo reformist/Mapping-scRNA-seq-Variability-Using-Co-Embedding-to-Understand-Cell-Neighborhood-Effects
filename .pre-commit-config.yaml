@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: clear-notebook-outputs
+        name: Clear Notebook Outputs with nbconvert
+        entry: jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace
+        language: system
+        files: \.ipynb$
+
+
