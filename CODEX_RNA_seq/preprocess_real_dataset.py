@@ -21,50 +21,31 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import copy
 import importlib
-import os
 import re
-import sys
-import os
-
-import scipy.sparse as sp
-import warnings
+import anndata
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import anndata as ad
-from anndata import AnnData
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
+from sklearn.metrics import silhouette_score
 import scvi
-import torch
-from scvi.model import SCVI
-from scvi.train import TrainingPlan
-from pytorch_lightning.loggers import TensorBoardLogger
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+import seaborn as sns
+from anndata import AnnData
+from matplotlib import pyplot as plt
+from py_pcha import PCHA
 from scipy.sparse import issparse
-import scipy
-from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
-import re
-from datetime import datetime
-import importlib
-
-# Set up the working directory and Python path
-from setup_paths import setup_working_directory
-setup_working_directory()
+from scipy.stats import zscore
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sympy.physics.units import current
+from tqdm import tqdm
+from kneed import KneeLocator
 
 import bar_nick_utils
-importlib.reload(bar_nick_utils)
-
-from bar_nick_utils import plot_latent, \
-    compute_pairwise_kl, select_gene_likelihood, \
-    clean_uns_for_h5ad, plot_normalized_losses, compute_pairwise_kl_two_items, get_latest_file, \
-    match_datasets, calculate_cLISI, calculate_iLISI,get_umap_filtered_fucntion,mixing_score,plot_cosine_distance,plot_latent_mean_std,\
-    plot_rna_protein_matching_means_and_scale,archetype_vs_latent_distances_plot,plot_inference_outputs,verify_gradients,compare_distance_distributions,plot_similarity_loss_history
+import covet_utils
 
 importlib.reload(bar_nick_utils)
+importlib.reload(covet_utils)
 from covet_utils import compute_covet
 
 from bar_nick_utils import preprocess_rna, preprocess_protein, plot_archetypes, \
@@ -72,7 +53,7 @@ from bar_nick_utils import preprocess_rna, preprocess_protein, plot_archetypes, 
     plot_archetypes_matching, compare_matchings, find_best_pair_by_row_matching, add_spatial_data_to_prot, \
     clean_uns_for_h5ad, get_latest_file
 
-plot_flag = False
+plot_flag = True
 # computationally figure out which ones are best
 np.random.seed(8)
 
@@ -83,58 +64,44 @@ np.random.seed(8)
 
 # %%
 
-adata_rna = sc.read("../rna_umap.h5ad") # 5546 × 13447 
-adata_prot = sc.read("../codex_cn_tumor.h5ad") # 893987 × 30
+# Load data from the correct location
 
-# filter out all tumor type cells
-adata_prot = adata_prot[adata_prot.obs['cell_type'] != 'tumor']
-adata_prot = adata_prot[adata_prot.obs['cell_type'] != 'dead']
+adata_rna = sc.read("CODEX_RNA_seq/data/raw_data/rna_umap.h5ad") # 5546 × 13447 
+adata_prot = sc.read("CODEX_RNA_seq/data/raw_data/codex_cn_tumor.h5ad") # 893987 × 30
 
-num_rna_cells = 6000
-num_protein_cells = 20000
-num_rna_cells = num_protein_cells= 2000
-subsample_n_obs_rna = min(adata_rna.shape[0],num_rna_cells)
-subsample_n_obs_protein = min(adata_prot.shape[0],num_protein_cells)
+
+# filter out any dead or tumor cells if they exist
+if 'cell_type' in adata_prot.obs.columns:
+    adata_prot = adata_prot[adata_prot.obs['cell_type'] != 'tumor']
+    adata_prot = adata_prot[adata_prot.obs['cell_type'] != 'dead']
+
+num_rna_cells = 2000
+num_protein_cells = 2000
+subsample_n_obs_rna = min(adata_rna.shape[0], num_rna_cells)
+subsample_n_obs_protein = min(adata_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_rna, n_obs=subsample_n_obs_rna)
 sc.pp.subsample(adata_prot, n_obs=subsample_n_obs_protein)
 
-adata_rna.obs['cell_types'] = adata_rna.obs['new_annotation']
-adata_prot.obs['cell_types'] = adata_prot.obs['cell_type']
+# Set cell types
+# Check RNA data columns and set cell types
+if 'cell_type' in adata_rna.obs.columns:
+    adata_rna.obs['cell_types'] = adata_rna.obs['cell_type']
+elif 'new_annotation' in adata_rna.obs.columns:
+    adata_rna.obs['cell_types'] = adata_rna.obs['new_annotation']
+else:
+    print("Warning: No cell type annotation found for RNA data")
 
-# nk cells seems to mess up the archetype matching, for now remove them
-adata_rna = adata_rna[adata_rna.obs['cell_types'] != 'nk cells'] 
-adata_prot = adata_prot[adata_prot.obs['cell_types'] != 'nk cells']
-
-
-adata_rna = adata_rna[adata_rna.obs['cell_types'].argsort(), :]  # sort by cell types for easier visualization
-# adata_prot = adata_prot[adata_prot.obs['cell_types'].argsort(), :]  # sort by cell types for easier visualization
-adata_prot = adata_prot[adata_prot.obs['cell_types'].argsort(), :]  # sort by cell types for easier visualization
-
-# initial_adata_rna = adata[adata.obs['batch'] == f'SLN111-D1']
-# initial_adata_protein = adata[adata.obs['batch'] == f'SLN208-D1'] 
-# get rna from one patient, protein from the other then run the whole archetype analysis
-# cell type protein, cell type rna, see which one's 
-# plot data before preprocessing with a subsample of 1000 cells
-if plot_flag:
-    subsample_n_obs_rna_plot = min(adata_rna.shape[0], 1000)
-    subsample_n_obs_protein_plot = min(adata_prot.shape[0], 1000)
+# Check protein data columns and set cell types separately
+if 'cell_type' in adata_prot.obs.columns:
+    adata_prot.obs['cell_types'] = adata_prot.obs['cell_type']
+elif 'new_annotation' in adata_prot.obs.columns:
+    adata_prot.obs['cell_types'] = adata_prot.obs['new_annotation']
+else:
+    print("Warning: No cell type annotation found for protein data")
     
-    adata_rna_plot = adata_rna[np.random.choice(adata_rna.shape[0], subsample_n_obs_rna_plot, replace=False), :]
-    adata_prot_plot = adata_prot[np.random.choice(adata_prot.shape[0], subsample_n_obs_protein_plot, replace=False), :]
-    
-    # same for RNA
-    sc.pp.pca(adata_rna_plot, n_comps=10)
-    sc.pp.neighbors(adata_rna_plot)  # Compute the neighbors needed for UMAP
-    sc.tl.umap(adata_rna_plot)  # Calculate UMAP coordinates
-    sc.pl.umap(adata_rna_plot, color='cell_types', title='RNA data (1000 subsample)')
-    
-    # same for Protein
-    sc.pp.pca(adata_prot_plot, n_comps=10)
-    sc.pp.neighbors(adata_prot_plot)  # Compute the neighbors needed for UMAP
-    sc.tl.umap(adata_prot_plot)  # Calculate UMAP coordinates
-    sc.pl.umap(adata_prot_plot, color='cell_types', title='Protein data (1000 subsample)')
-
-    
+# Sort by cell types for easier visualization
+adata_rna = adata_rna[adata_rna.obs['cell_types'].argsort(), :]
+adata_prot = adata_prot[adata_prot.obs['cell_types'].argsort(), :]
 
 # %%
 # make sure we dont have gene column in var if it is equal to the index
@@ -144,15 +111,34 @@ if 'gene' in adata_prot.var.columns and np.array_equal(adata_prot.var['gene'].va
     adata_prot.var.drop(columns='gene', inplace=True)
 
 # %%
-set(adata_rna.obs['new_annotation']), set(adata_prot.obs['cell_type'])
+# Get mutual cell types between datasets
+mutual_cell_types = set(adata_rna.obs['cell_types']).intersection(set(adata_prot.obs['cell_types']))
+adata_rna = adata_rna[adata_rna.obs['cell_types'].isin(mutual_cell_types)]
+adata_prot = adata_prot[adata_prot.obs['cell_types'].isin(mutual_cell_types)]
+
+# Set major cell types
+adata_rna.obs['major_cell_types'] = adata_rna.obs['cell_types'].values
+adata_prot.obs['major_cell_types'] = adata_prot.obs['cell_types'].values
 
 # %%
-# filer out the cell types that are not in the other dataset
-mutual_cell_types = set(adata_rna.obs['new_annotation']).intersection(set(adata_prot.obs['cell_type']))
-adata_rna = adata_rna[adata_rna.obs['new_annotation'].isin(mutual_cell_types)]
-adata_prot = adata_prot[adata_prot.obs['cell_type'].isin(mutual_cell_types)]
-adata_rna.obs['major_cell_types'] = adata_rna.obs['new_annotation'].values
-adata_prot.obs['major_cell_types'] = adata_prot.obs['cell_type'].values
+# Save preprocessed data
+adata_rna.write("data/adata_rna_subset.h5ad")
+adata_prot.write("data/adata_prot_subset.h5ad")
+
+# %%
+# Plot data if requested
+if plot_flag:
+    # Plot RNA data
+    sc.pp.pca(adata_rna, n_comps=10)
+    sc.pp.neighbors(adata_rna)
+    sc.tl.umap(adata_rna)
+    sc.pl.umap(adata_rna, color='cell_types', title='RNA data')
+    
+    # Plot Protein data
+    sc.pp.pca(adata_prot, n_comps=10)
+    sc.pp.neighbors(adata_prot)
+    sc.tl.umap(adata_prot)
+    sc.pl.umap(adata_prot, color='cell_types', title='Protein data')
 
 # %%
 

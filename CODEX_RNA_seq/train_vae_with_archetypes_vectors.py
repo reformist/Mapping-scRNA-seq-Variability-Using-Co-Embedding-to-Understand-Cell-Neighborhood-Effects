@@ -83,7 +83,7 @@ plot_flag = True
 
 
 # %%
-folder = 'CODEX_RNA_seq/data/'
+folder = 'data/'
 file_prefixes = ['adata_rna_', 'adata_prot_', 'adata_archetype_rna_', 'adata_archetype_prot_']
 
 
@@ -474,7 +474,7 @@ class DualVAETrainingPlan(TrainingPlan):
         latent_distances = torch.clamp(latent_distances, max=torch.quantile(latent_distances, 0.90))
 
 
-        if self.global_step > -1 and self.global_step % int(self.total_steps / self.plot_x_times) == 0:
+        if self.global_step > -1 and self.global_step % (1+int(self.total_steps /(self.plot_x_times)))== 0:
             latent_distances_temp = torch.cdist(rna_inference_outputs["qz"].mean,
                                 protein_inference_outputs["qz"].mean,
                                 p=2)
@@ -518,7 +518,7 @@ class DualVAETrainingPlan(TrainingPlan):
             plot_inference_outputs(rna_inference_outputs, protein_inference_outputs,
                                    latent_distances, rna_distances, prot_distances)
             self.first_step = False
-        if self.global_step > -1 and self.global_step % int(self.total_steps / self.plot_x_times) == 0:
+        if self.global_step > -1 and self.global_step %( 1+int(self.total_steps /(self.plot_x_times))) == 0:
             print('mean prot distances is ',round(prot_distances.mean().item(),3))
             print('mean rna distances is ',round(rna_distances.mean().item(),3))
             print('after I multiply the prot distances by 5')
@@ -693,7 +693,7 @@ class DualVAETrainingPlan(TrainingPlan):
         similarity_loss = current_similarity_weight * similarity_loss_raw
         self.active_similarity_loss_active_history.append( self.similarity_active)
         self.similarity_loss_all_history.append(similarity_loss.item())
-        if self.global_step > -1 and self.global_step % int(self.total_steps / self.plot_x_times) == 0:
+        if self.global_step > -1 and self.global_step %( 1+int(self.total_steps /(self.plot_x_times))) == 0:
             plot_similarity_loss_history(self.similarity_loss_all_history, self.active_similarity_loss_active_history)
 
 
@@ -732,7 +732,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.log("train_diversity_loss", diversity_loss, on_epoch=False, on_step=True)
         
         
-        if (self.global_step > -1 and self.global_step % max(int(self.total_steps / self.plot_x_times), 100) == 0):
+        if (self.global_step > -1 and self.global_step % (1+max(int(self.total_steps / self.plot_x_times)), 100) == 0):
             print(
                 f'losses are:\n reconstruction_loss:{reconstruction_loss}, contrastive_loss:{contrastive_loss},\n', 
                 f'matching_loss:{matching_loss}, similarity_loss:{similarity_loss},total_loss:{total_loss}\n'
