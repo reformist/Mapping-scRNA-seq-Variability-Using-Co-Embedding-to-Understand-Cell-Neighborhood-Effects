@@ -151,8 +151,11 @@ class DualVAETrainingPlan(TrainingPlan):
         self.active_similarity_loss_active_history = []
         self.similarity_loss_all_history = []
 
-        # Initialize history tracking
+        # Initialize history dictionary with step tracking
         self.history = {
+            "step": [],  # Track step number
+            "timestamp": [],  # Track timestamp for each step
+            "epoch": [],  # Track current epoch
             "train_total_loss": [],
             "train_rna_reconstruction_loss": [],
             "train_protein_reconstruction_loss": [],
@@ -170,6 +173,9 @@ class DualVAETrainingPlan(TrainingPlan):
             "validation_protein_loss": [],
             "validation_contrastive_loss": [],
             "validation_matching_latent_distances": [],
+            "learning_rate": [],  # Track learning rate
+            "batch_size": [],  # Track batch size
+            "gradient_norm": [],  # Track gradient norm
         }
         print("Initialized history dictionary with keys:", self.history.keys())
 
@@ -853,19 +859,17 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
         save_dir="my_logs", name=f"experiment_name_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
 
-    # Set up training parameters with minimal training
+    # Set up training parameters
     train_kwargs = {
-        "max_epochs": 1,  # Just 1 epoch
+        "max_epochs": n_epochs,
         "batch_size": batch_size,
         "train_size": 0.9,
         "validation_size": 0.1,
-        "early_stopping": False,  # Disable early stopping
+        "early_stopping": False,
         "check_val_every_n_epoch": 1,
         "logger": logger,
         "accelerator": "gpu" if use_gpu and torch.cuda.is_available() else "cpu",
         "devices": 1,
-        "limit_train_batches": 2,  # Limit to just 2 batches
-        "limit_val_batches": 1,  # Limit to just 1 validation batch
     }
 
     # Create training plan with both VAEs
@@ -875,7 +879,7 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
         "contrastive_weight": kwargs.pop("contrastive_weight", 1.0),
         "plot_x_times": kwargs.pop("plot_x_times", 5),
         "batch_size": batch_size,
-        "n_epochs": 1,  # Just 1 epoch
+        "n_epochs": n_epochs,
     }
 
     # Create training plan instance to access history
@@ -891,7 +895,7 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
     rna_vae_new.is_trained_ = True
     protein_vae_new.is_trained_ = True
 
-    return rna_vae_new
+    return rna_vae_new, protein_vae_new
 
 
 # %%
@@ -933,7 +937,7 @@ training_kwargs = {
 # %%
 # Train the model
 print("\nStarting training...")
-rna_vae_new = train_vae(
+rna_vae_new, protein_vae_new = train_vae(
     rna_vae=rna_vae,
     protein_vae=protein_vae,
     n_epochs=1,  # You can modify these parameters as needed
@@ -953,6 +957,7 @@ print("Available metrics:", list(rna_vae_new.__dict__["history"].keys()))
 print("Number of training steps:", len(rna_vae_new.__dict__["history"]["train_total_loss"]))
 # Compare rna_vae_new and rna_vae
 print("\nComparing RNA VAE models:")
+
 
 # Check if models are identical
 models_identical = all(
@@ -1015,10 +1020,30 @@ protein_vae.adata.obsm[SCVI_LATENT_KEY] = latent_prot
 sc.pp.neighbors(rna_vae_new.adata, key_added="latent_space_neighbors", use_rep=SCVI_LATENT_KEY)
 rna_vae_new.adata.obsm["X_scVI"] = rna_vae_new.adata.obsm["X_scVI"]
 sc.tl.umap(rna_vae_new.adata, neighbors_key="latent_space_neighbors")
+rna_vae_new.adata.obsm["X_umap_scVI"] = rna_vae_new.adata.obsm["X_umap"]
+rna_vae_new.adata.obsm.pop("X_umap")
+
+# Plot the scVI UMAP embedding
+sc.pl.embedding(
+    rna_vae_new.adata,
+    basis="X_umap_scVI",
+    color=["cell_types", "CN"],
+)
 
 sc.pp.neighbors(protein_vae.adata, key_added="latent_space_neighbors", use_rep=SCVI_LATENT_KEY)
 sc.tl.umap(protein_vae.adata, neighbors_key="latent_space_neighbors")
 protein_vae.adata.obsm["X_umap_scVI"] = protein_vae.adata.obsm["X_umap"]
+# renmove umap from adata
+protein_vae.adata.obsm.pop("X_umap")
+
+
+clean_uns_for_h5ad(rna_vae_new.adata)
+clean_uns_for_h5ad(protein_vae.adata)
+save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
+
+sc.write(Path(f"{save_dir}/rna_vae_trained.h5ad"), rna_vae_new.adata)
+sc.write(Path(f"{save_dir}/protein_vae_trained.h5ad"), protein_vae.adata)
+
 
 # PCA and UMAP for latent representations
 rna_latent = AnnData(rna_vae_new.adata.obsm[SCVI_LATENT_KEY].copy())
