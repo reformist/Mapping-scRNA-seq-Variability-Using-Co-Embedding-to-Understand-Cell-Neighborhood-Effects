@@ -2,7 +2,7 @@
 
 This repository explores methods to understand and align scRNA-seq and protein-based single-cell modalities
 (e.g., from CITE-seq) by jointly embedding them. The approach aims to capture and preserve cell
-neighborhood structures and archetype representations, helping to reveal how local cell neighborhoods 
+neighborhood structures and archetype representations, helping to reveal how local cell neighborhoods
 affect variability and relationships between transcriptomic and proteomic data.
 
 ## Contents
@@ -26,10 +26,10 @@ To reproduce the provided results:
 ## Overview
 
 This project involves:
-1. **Preprocessing RNA and Protein Data:**  
+1. **Preprocessing RNA and Protein Data:**
    - Selecting highly variable genes and normalizing/scaling the data.
    - Generating synthetic spatial coordinates for cells if needed.
-   
+
 2. **Archetype Analysis:**
    - Using Principal Convex Hull Analysis (PCHA) to identify "archetypes" that represent distinct biological or compositional extremes in the data.
    - Matching RNA and protein archetypes to ensure both modalities align around shared biological extremes.
@@ -65,29 +65,29 @@ This project involves:
 
 ### Key Files and Parameters
 
-- **archetype_generation.ipynb:**  
+- **archetype_generation.ipynb:**
   Jupyter notebook that:
   - Preprocesses RNA and protein data.
   - Identifies archetypes using PCHA.
   - Aligns archetypes between RNA and protein modalities.
   - Saves processed `adata_rna_*.h5ad` and `adata_prot_*.h5ad` files.
 
-- **train_vae_with_archetypes_vectors.ipynb:**  
+- **train_vae_with_archetypes_vectors.ipynb:**
   Jupyter notebook that:
   - Loads the preprocessed and archetype-annotated data.
   - Sets up and trains dual VAEs on RNA and protein.
   - Incorporates contrastive losses and saves trained VAEs.
 
-- **bar_nick_utils.py:**  
+- **bar_nick_utils.py:**
   Python utilities for:
   - Data preprocessing (e.g., `preprocess_rna`, `preprocess_protein`).
   - Archetype fitting and visualization (e.g., `plot_archetypes`, `compute_pairwise_kl`).
   - Saving/loading models, cleaning AnnData objects, and plotting training curves.
 
-- **environment.yaml:**  
+- **environment.yaml:**
   Conda dependencies environment needed to run the analysis.
 
-- **data/ directory:**  
+- **data/ directory:**
   Contains:
   - Input data files (e.g., `spleen_lymph_cite_seq.h5ad`).
   - Processed outputs (e.g., `adata_rna_*.h5ad`, `adata_prot_*.h5ad`).
@@ -96,16 +96,16 @@ This project involves:
 ### Parameters Within the Code
 
 Inside the notebooks, you will find parameters controlling:
-- **Number of archetypes (k):**  
+- **Number of archetypes (k):**
   Set in `archetype_generation.ipynb` to define how many archetypes to extract.
-- **Training parameters like n_epochs Batch size, learning rate, and kl_weight...**  
+- **Training parameters like n_epochs Batch size, learning rate, and kl_weight...**
   Set in `train_vae_with_archetypes_vectors.ipynb` when calling `rna_vae.train(...)`.
-- **Contrastive weights and other loss-related parameters:**  
+- **Contrastive weights and other loss-related parameters:**
   Adjusted in `DualVAETrainingPlan` class inside the code.
 
 ## System Requirements and Dependencies
 
-- **Operating System:** Linux/Unix. 
+- **Operating System:** Linux/Unix.
 - **Conda**
 - **Python Version:** Python 3.10.
 - **CPU/GPU:** GPU recommended for VAE training.
@@ -133,7 +133,7 @@ Inside the notebooks, you will find parameters controlling:
   - Preprocess the data.
   - Identify archetypes.
   - Save processed AnnData objects (RNA and Protein).
-  
+
 The resulting files (e.g., `adata_rna_YYYY-MM-DD-HH-MM-SS.h5ad` and `adata_prot_YYYY-MM-DD-HH-MM-SS.h5ad`) will be saved in `data/`.
 
 ## Running Model
@@ -155,5 +155,3 @@ The resulting files (e.g., `adata_rna_YYYY-MM-DD-HH-MM-SS.h5ad` and `adata_prot_
      - Define a custom dual training plan that includes contrastive and alignment losses.
      - Train the dual VAE model.
      - Save the trained model.
-
-    

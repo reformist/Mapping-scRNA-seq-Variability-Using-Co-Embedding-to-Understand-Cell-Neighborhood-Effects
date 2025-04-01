@@ -26,7 +26,13 @@ with g.subgraph(name="cluster_cells") as c:
 
     # Coupling factor between z_RNA_i and z_Protein_i
     # This can represent the contrastive alignment or a joint prior/factor.
-    c.node("Factor_align", label="Contrastive\nAlignment", shape="diamond", style="rounded,filled", fillcolor="#ffd57f")
+    c.node(
+        "Factor_align",
+        label="Contrastive\nAlignment",
+        shape="diamond",
+        style="rounded,filled",
+        fillcolor="#ffd57f",
+    )
     c.edge("zRNA_i", "Factor_align")
     c.edge("zProt_i", "Factor_align")
 
