@@ -1,8 +1,11 @@
 # %%
 # Setup paths
 # %%
+import json
 import os
 import sys
+from datetime import datetime
+from pathlib import Path
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,144 +18,24 @@ import torch
 import torch.nn.functional as F
 
 
-def log_training_metrics(
-    self,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    matching_loss,
-    similarity_loss,
-    total_loss,
-    adv_loss,
-    diversity_loss,
-):
-    """Log training metrics"""
-    self.history_["train_total_loss"].append(total_loss.item())
-    self.history_["train_rna_reconstruction_loss"].append(rna_loss_output.loss.item())
-    self.history_["train_protein_reconstruction_loss"].append(protein_loss_output.loss.item())
-    self.history_["train_contrastive_loss"].append(contrastive_loss.item())
-    self.history_["train_matching_rna_protein_loss"].append(matching_loss.item())
-    self.history_["train_similarity_loss"].append(similarity_loss.item())
-    self.history_["train_adv_loss"].append(adv_loss.item())
-    self.history_["train_diversity_loss"].append(diversity_loss.item())
+def setup_logging(log_dir="logs"):
+    """Initialize logging directory and return log file path"""
+    print("Setting up logging...")
+    # Get the directory of the current file
+    current_dir = Path(__file__).parent
+    print(f"Current directory: {current_dir}")
+    log_dir = current_dir / log_dir
+    print(f"Log directory: {log_dir}")
+    log_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"training_log_{timestamp}.json"
+    print(f"Log file path: {log_file}")
 
-
-def log_validation_metrics(
-    self,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    validation_total_loss,
-    matching_rna_protein_latent_distances,
-):
-    """Log validation metrics"""
-    self.history_["validation_total_loss"].append(validation_total_loss.item())
-    self.history_["validation_rna_loss"].append(rna_loss_output.loss.item())
-    self.history_["validation_protein_loss"].append(protein_loss_output.loss.item())
-    self.history_["validation_contrastive_loss"].append(contrastive_loss.item())
-    self.history_["validation_matching_latent_distances"].append(
-        matching_rna_protein_latent_distances.mean().item()
-    )
-
-
-def log_batch_metrics(
-    self,
-    batch_idx,
-    validation_total_loss,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-):
-    """Log batch metrics"""
-    if batch_idx == 0:
-        self.history_["batch_total_loss"].append(validation_total_loss.item())
-        self.history_["batch_rna_loss"].append(rna_loss_output.loss.item())
-        self.history_["batch_protein_loss"].append(protein_loss_output.loss.item())
-        self.history_["batch_contrastive_loss"].append(contrastive_loss.item())
-
-
-def log_step_metrics(
-    self,
-    global_step,
-    total_loss,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    matching_loss,
-    similarity_loss,
-):
-    """Log step metrics"""
-    if global_step % 10 == 0:
-        self.history_["step"].append(global_step)
-        self.history_["step_total_loss"].append(total_loss.item())
-        self.history_["step_rna_loss"].append(rna_loss_output.loss.item())
-        self.history_["step_protein_loss"].append(protein_loss_output.loss.item())
-        self.history_["step_contrastive_loss"].append(contrastive_loss.item())
-        self.history_["step_matching_loss"].append(matching_loss.item())
-        self.history_["step_similarity_loss"].append(similarity_loss.item())
-
-
-def print_distance_metrics(
-    self, prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
-):
-    """Log distance metrics during training"""
-    self.history_["distance_metrics/mean_protein_distances"].append(prot_distances.mean().item())
-    self.history_["distance_metrics/mean_rna_distances"].append(rna_distances.mean().item())
-    self.history_["distance_metrics/acceptable_ratio"].append(
-        num_acceptable.float().item() / num_cells
-    )
-    self.history_["distance_metrics/stress_loss"].append(stress_loss.item())
-    self.history_["distance_metrics/matching_loss"].append(matching_loss.item())
-
-
-def log_extra_metrics(
-    self,
-    num_acceptable,
-    num_cells,
-    stress_loss,
-    reward,
-    exact_pairs,
-    mixing_score_,
-    batch_pred,
-    batch_labels,
-):
-    """Log extra metrics during training."""
-    self.history_["extra_metrics/acceptable_ratio"].append(
-        num_acceptable.float().item() / num_cells
-    )
-    self.history_["extra_metrics/stress_loss"].append(stress_loss.item())
-    self.history_["extra_metrics/reward"].append(reward.item())
-    self.history_["extra_metrics/exact_pairs_loss"].append(exact_pairs.item())
-    self.history_["extra_metrics/iLISI"].append(mixing_score_["iLISI"])
-    self.history_["extra_metrics/cLISI"].append(mixing_score_["cLISI"])
-
-    # Log accuracy
-    accuracy = (batch_pred.argmax(dim=1) == batch_labels).float().mean()
-    self.history_["extra_metrics/accuracy"].append(accuracy.item())
-
-
-def log_epoch_end_(self):
-    """Log epoch end metrics"""
-    # if the mean is nan print the last 10 values
-    if np.isnan(np.mean(self.history_["train_total_loss"][-len(self.history_["step"]) :])):
-        self.history_["epoch_nan_detected"].append(True)
-
-    epoch_avg_train_loss = np.mean(self.history_["train_total_loss"][-len(self.history_["step"]) :])
-    epoch_avg_val_loss = np.mean(
-        self.history_["validation_total_loss"][-len(self.history_["step"]) :]
-    )
-
-    self.history_["epoch"].append(self.current_epoch)
-    self.history_["epoch_avg_train_loss"].append(epoch_avg_train_loss)
-    self.history_["epoch_avg_val_loss"].append(epoch_avg_val_loss)
-
-
-def setup_history(self):
-    """Initialize history dictionary with all metric keys"""
-    self.history_ = {
-        "step": [],  # Track step number
-        "timestamp": [],  # Track timestamp for each step
-        "epoch": [],  # Track current epoch
+    # Initialize empty history dictionary
+    history = {
+        "step": [],
+        "timestamp": [],
+        "epoch": [],
         "train_total_loss": [],
         "train_rna_reconstruction_loss": [],
         "train_protein_reconstruction_loss": [],
@@ -170,9 +53,9 @@ def setup_history(self):
         "validation_protein_loss": [],
         "validation_contrastive_loss": [],
         "validation_matching_latent_distances": [],
-        "learning_rate": [],  # Track learning rate
-        "batch_size": [],  # Track batch size
-        "gradient_norm": [],  # Track gradient norm
+        "learning_rate": [],
+        "batch_size": [],
+        "gradient_norm": [],
         "batch_total_loss": [],
         "batch_rna_loss": [],
         "batch_protein_loss": [],
@@ -199,3 +82,160 @@ def setup_history(self):
         "epoch_avg_train_loss": [],
         "epoch_avg_val_loss": [],
     }
+
+    # Save initial history
+    print("Saving initial history...")
+    with open(log_file, "w") as f:
+        json.dump(history, f)
+    print("Logging setup complete")
+
+    return log_file
+
+
+def update_log(log_file, key, value):
+    """Update log file with new value for given key"""
+    with open(log_file, "r") as f:
+        history = json.load(f)
+
+    if key not in history:
+        history[key] = []
+
+    history[key].append(value)
+
+    with open(log_file, "w") as f:
+        json.dump(history, f)
+
+
+def log_training_metrics(
+    log_file,
+    rna_loss_output,
+    protein_loss_output,
+    contrastive_loss,
+    matching_loss,
+    similarity_loss,
+    total_loss,
+    adv_loss,
+    diversity_loss,
+):
+    """Log training metrics"""
+    update_log(log_file, "train_total_loss", total_loss.item())
+    update_log(log_file, "train_rna_reconstruction_loss", rna_loss_output.loss.item())
+    update_log(log_file, "train_protein_reconstruction_loss", protein_loss_output.loss.item())
+    update_log(log_file, "train_contrastive_loss", contrastive_loss.item())
+    update_log(log_file, "train_matching_rna_protein_loss", matching_loss.item())
+    update_log(log_file, "train_similarity_loss", similarity_loss.item())
+    update_log(log_file, "train_adv_loss", adv_loss.item())
+    update_log(log_file, "train_diversity_loss", diversity_loss.item())
+
+
+def log_validation_metrics(
+    log_file,
+    rna_loss_output,
+    protein_loss_output,
+    contrastive_loss,
+    validation_total_loss,
+    matching_rna_protein_latent_distances,
+):
+    """Log validation metrics"""
+    update_log(log_file, "validation_total_loss", validation_total_loss.item())
+    update_log(log_file, "validation_rna_loss", rna_loss_output.loss.item())
+    update_log(log_file, "validation_protein_loss", protein_loss_output.loss.item())
+    update_log(log_file, "validation_contrastive_loss", contrastive_loss.item())
+    update_log(
+        log_file,
+        "validation_matching_latent_distances",
+        matching_rna_protein_latent_distances.mean().item(),
+    )
+
+
+def log_batch_metrics(
+    log_file,
+    batch_idx,
+    validation_total_loss,
+    rna_loss_output,
+    protein_loss_output,
+    contrastive_loss,
+):
+    """Log batch metrics"""
+    if batch_idx == 0:
+        update_log(log_file, "batch_total_loss", validation_total_loss.item())
+        update_log(log_file, "batch_rna_loss", rna_loss_output.loss.item())
+        update_log(log_file, "batch_protein_loss", protein_loss_output.loss.item())
+        update_log(log_file, "batch_contrastive_loss", contrastive_loss.item())
+
+
+def log_step_metrics(
+    log_file,
+    global_step,
+    total_loss,
+    rna_loss_output,
+    protein_loss_output,
+    contrastive_loss,
+    matching_loss,
+    similarity_loss,
+):
+    """Log step metrics"""
+    if global_step % 10 == 0:
+        update_log(log_file, "step", global_step)
+        update_log(log_file, "step_total_loss", total_loss.item())
+        update_log(log_file, "step_rna_loss", rna_loss_output.loss.item())
+        update_log(log_file, "step_protein_loss", protein_loss_output.loss.item())
+        update_log(log_file, "step_contrastive_loss", contrastive_loss.item())
+        update_log(log_file, "step_matching_loss", matching_loss.item())
+        update_log(log_file, "step_similarity_loss", similarity_loss.item())
+
+
+def print_distance_metrics(
+    log_file, prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
+):
+    """Log distance metrics during training"""
+    update_log(log_file, "distance_metrics/mean_protein_distances", prot_distances.mean().item())
+    update_log(log_file, "distance_metrics/mean_rna_distances", rna_distances.mean().item())
+    update_log(
+        log_file, "distance_metrics/acceptable_ratio", num_acceptable.float().item() / num_cells
+    )
+    update_log(log_file, "distance_metrics/stress_loss", stress_loss.item())
+    update_log(log_file, "distance_metrics/matching_loss", matching_loss.item())
+
+
+def log_extra_metrics(
+    log_file,
+    num_acceptable,
+    num_cells,
+    stress_loss,
+    reward,
+    exact_pairs,
+    mixing_score_,
+    batch_pred,
+    batch_labels,
+):
+    """Log extra metrics during training."""
+    update_log(
+        log_file, "extra_metrics/acceptable_ratio", num_acceptable.float().item() / num_cells
+    )
+    update_log(log_file, "extra_metrics/stress_loss", stress_loss.item())
+    update_log(log_file, "extra_metrics/reward", reward.item())
+    update_log(log_file, "extra_metrics/exact_pairs_loss", exact_pairs.item())
+    update_log(log_file, "extra_metrics/iLISI", mixing_score_["iLISI"])
+    update_log(log_file, "extra_metrics/cLISI", mixing_score_["cLISI"])
+
+    # Log accuracy
+    accuracy = (batch_pred.argmax(dim=1) == batch_labels).float().mean()
+    update_log(log_file, "extra_metrics/accuracy", accuracy.item())
+
+
+def log_epoch_end(log_file, current_epoch, train_losses, val_losses):
+    """Log epoch end metrics"""
+    # Calculate epoch averages
+    epoch_avg_train_loss = sum(train_losses) / len(train_losses)
+    epoch_avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else float("nan")
+
+    update_log(log_file, "epoch", current_epoch)
+    update_log(log_file, "epoch_avg_train_loss", epoch_avg_train_loss)
+    update_log(log_file, "epoch_avg_val_loss", epoch_avg_val_loss)
+
+
+def load_history(log_file):
+    """Load history from log file"""
+    with open(log_file, "r") as f:
+        return json.load(f)

@@ -254,41 +254,35 @@ def plot_similarity_loss_history(similarity_loss_history, active_history):
 
 
 def plot_normalized_losses(history):
-    """Plot normalized training and validation losses"""
+    """Plot normalized training losses."""
     plt.figure(figsize=(15, 5))
 
-    # Plot training losses
-    plt.subplot(121)
-    train_keys = [key for key in history.keys() if key.startswith("train_")]
-    for key in train_keys:
-        loss_data = np.array(history[key])
-        if len(loss_data) > 0:
-            min_val = loss_data.min()
-            max_val = loss_data.max()
-            normalized_loss = (loss_data - min_val) / (max_val - min_val + 1e-8)
-            plt.plot(normalized_loss, label=f"{key} (min: {min_val:.2f}, max: {max_val:.2f})")
+    # Get all loss keys from history
+    loss_keys = [k for k in history.keys() if "loss" in k.lower() and len(history[k]) > 0]
+
+    # Normalize each loss
+    normalized_losses = {}
+    for key in loss_keys:
+        values = history[key]
+        if len(values) > 0:  # Only process non-empty lists
+            values = np.array(values)
+            # Remove inf and nan
+            values = values[~np.isinf(values) & ~np.isnan(values)]
+            if len(values) > 0:  # Check again after filtering
+                min_val = np.min(values)
+                max_val = np.max(values)
+                if max_val > min_val:  # Avoid division by zero
+                    normalized_losses[key] = (values - min_val) / (max_val - min_val)
+
+    # Plot each normalized loss
+    for key, values in normalized_losses.items():
+        plt.plot(values, label=key, alpha=0.7)
+
     plt.title("Normalized Training Losses")
-    plt.xlabel("Training Step")
-    plt.ylabel("Normalized Loss Value")
-    plt.grid(True)
+    plt.xlabel("Step")
+    plt.ylabel("Normalized Loss")
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-
-    # Plot validation losses
-    plt.subplot(122)
-    val_keys = [key for key in history.keys() if key.startswith("validation_")]
-    for key in val_keys:
-        loss_data = np.array(history[key])
-        if len(loss_data) > 0:
-            min_val = loss_data.min()
-            max_val = loss_data.max()
-            normalized_loss = (loss_data - min_val) / (max_val - min_val + 1e-8)
-            plt.plot(normalized_loss, label=f"{key} (min: {min_val:.2f}, max: {max_val:.2f})")
-    plt.title("Normalized Validation Losses")
-    plt.xlabel("Validation Step")
-    plt.ylabel("Normalized Loss Value")
     plt.grid(True)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-
     plt.tight_layout()
     plt.show()
 

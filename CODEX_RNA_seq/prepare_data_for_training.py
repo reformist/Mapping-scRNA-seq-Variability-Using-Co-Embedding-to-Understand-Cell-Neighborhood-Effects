@@ -65,7 +65,7 @@ from plotting_functions import (
     plot_original_data_visualizations,
     plot_pca_and_umap,
     plot_protein_umap,
-    plot_umap_visualizations,
+    plot_umap_visualizations_original_data,
 )
 
 from bar_nick_utils import (
@@ -203,9 +203,6 @@ def load_and_subsample_data(folder, file_prefixes, sample_size=2000):
     return adata_rna_subset, adata_prot_subset
 
 
-# %%
-# Setup and imports
-# %%
 # Load and subsample data
 # %%
 folder = "CODEX_RNA_seq/data/processed_data"
@@ -218,10 +215,14 @@ adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefi
 # Process and visualize data
 # %%
 plot_flag = True  # Set to False to skip all visualizations
+sc.pp.pca(adata_rna_subset)
+sc.pp.pca(adata_prot_subset)
+sc.pp.neighbors(adata_rna_subset)
+sc.pp.neighbors(adata_prot_subset)
 
 # Plot UMAP visualizations
 if plot_flag:
-    plot_umap_visualizations(adata_rna_subset, adata_prot_subset)
+    plot_umap_visualizations_original_data(adata_rna_subset, adata_prot_subset)
 
 # Order cells by type
 adata_rna_subset, adata_prot_subset = order_cells_by_type(adata_rna_subset, adata_prot_subset)

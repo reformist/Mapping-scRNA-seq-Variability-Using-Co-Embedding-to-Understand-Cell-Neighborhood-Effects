@@ -18,14 +18,11 @@ import seaborn as sns
 from matplotlib.patches import Arc
 
 
-def plot_umap_visualizations(adata_rna_subset, adata_prot_subset):
-    """Generate UMAP visualizations for RNA and protein data"""
+def plot_umap_visualizations_original_data(adata_rna_subset, adata_prot_subset):
+    """Generate UMAP visualizations for original RNA and protein data"""
     print("\nGenerating UMAP visualizations...")
-    sc.pp.neighbors(adata_rna_subset)
-    sc.pp.neighbors(adata_prot_subset)
     sc.tl.umap(adata_rna_subset)
     sc.tl.umap(adata_prot_subset)
-
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     sc.pl.umap(
@@ -60,8 +57,9 @@ def plot_archetype_heatmaps(adata_rna_subset, adata_prot_subset, archetype_dista
     plt.ylabel("Protein cell index")
     plt.title("Protein Archetype Vectors")
     plt.show()
-
+    # this is the heatmap of the archetype distances
     plt.figure(figsize=(10, 5))
+    plt.title("Archetype Distances")
     plt.subplot(1, 2, 1)
     sns.heatmap(np.log1p(archetype_distances[::5, ::5].T))
     plt.xlabel("RNA cell index")
@@ -69,6 +67,7 @@ def plot_archetype_heatmaps(adata_rna_subset, adata_prot_subset, archetype_dista
     plt.gca().invert_yaxis()
 
     plt.subplot(1, 2, 2)
+    plt.title("minimum Archetype Distances between RNA and Protein cells")
     plt.scatter(
         np.arange(len(archetype_distances.argmin(axis=1))),
         archetype_distances.argmin(axis=1),
