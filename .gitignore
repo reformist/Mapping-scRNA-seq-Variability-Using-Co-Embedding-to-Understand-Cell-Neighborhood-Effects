@@ -30,3 +30,10 @@ CODEX_RNA_seq/archetype_generation_real_old.ipynb
 CODEX_RNA_seq/archetype_generation_real too far ahead).ipynb
 CODEX_RNA_seq/archetype_generation_real_covet_old.ipynb
 my_logs/*
+history_test.log
+*.log
+*.log.*
+*.log.*.*
+*.log.*.*.*
+*.log.*.*.*.*
+*.log.*.*.*.*.*
