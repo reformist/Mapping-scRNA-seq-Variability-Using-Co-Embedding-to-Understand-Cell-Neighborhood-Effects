@@ -19,52 +19,78 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.spatial
+import scipy.spatial.distance as scipy
 import seaborn as sns
+import torch
+import torch.nn.functional as F
 from anndata import AnnData
+from scipy.spatial.distance import cdist
+from sklearn.manifold import TSNE
 
 
-def plot_latent(rna_latent, protein_latent, rna_adata, protein_adata, index=None):
+def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index=None):
     """Plot latent space visualization"""
-    print("\nPlotting latent space...")
+    if index is None:
+        index = range(len(adata_prot.obs.index))
+
+    # Create AnnData objects for visualization
+    rna_ann = AnnData(X=latent_rna)
+    prot_ann = AnnData(X=latent_prot)
+
+    # Add metadata
+    rna_ann.obs = adata_rna.obs.iloc[index].copy()
+    prot_ann.obs = adata_prot.obs.iloc[index].copy()
+
+    # Compute PCA
+    sc.pp.pca(rna_ann)
+    sc.pp.pca(prot_ann)
+
+    # Plot PCA
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
-    # Create AnnData objects and compute PCA for RNA data
-    rna_ann = AnnData(rna_latent)
-    if index is not None:
-        rna_ann.obs_names = [f"RNA_{i}" for i in range(len(rna_latent))]
-        rna_ann.obs["cell_types"] = rna_adata.obs["cell_types"].iloc[index].values
-    else:
-        rna_ann.obs_names = [f"RNA_{i}" for i in range(len(rna_latent))]
-        rna_ann.obs["cell_types"] = rna_adata.obs["cell_types"].values
-    sc.pp.pca(rna_ann)
-    sc.pl.pca(rna_ann, color="cell_types", show=False, ax=axes[0])
-    axes[0].set_title("RNA Latent Space")
+    # RNA PCA
+    axes[0].scatter(
+        rna_ann.obsm["X_pca"][:, 0],
+        rna_ann.obsm["X_pca"][:, 1],
+        c=rna_ann.obs["CN"],
+        cmap="tab10",
+        alpha=0.6,
+    )
+    axes[0].set_title("RNA Latent Space PCA")
+    axes[0].set_xlabel("PC1")
+    axes[0].set_ylabel("PC2")
 
-    # Create AnnData objects and compute PCA for protein data
-    protein_ann = AnnData(protein_latent)
-    if index is not None:
-        protein_ann.obs_names = [f"Protein_{i}" for i in range(len(protein_latent))]
-        protein_ann.obs["cell_types"] = protein_adata.obs["cell_types"].iloc[index].values
-    else:
-        protein_ann.obs_names = [f"Protein_{i}" for i in range(len(protein_latent))]
-        protein_ann.obs["cell_types"] = protein_adata.obs["cell_types"].values
-    sc.pp.pca(protein_ann)
-    sc.pl.pca(protein_ann, color="cell_types", show=False, ax=axes[1])
-    axes[1].set_title("Protein Latent Space")
+    # Protein PCA
+    axes[1].scatter(
+        prot_ann.obsm["X_pca"][:, 0],
+        prot_ann.obsm["X_pca"][:, 1],
+        c=prot_ann.obs["CN"],
+        cmap="tab10",
+        alpha=0.6,
+    )
+    axes[1].set_title("Protein Latent Space PCA")
+    axes[1].set_xlabel("PC1")
+    axes[1].set_ylabel("PC2")
 
     plt.tight_layout()
     plt.show()
 
 
-def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs):
+def plot_latent_mean_std(
+    rna_inference_outputs, protein_inference_outputs, adata_rna, adata_prot, index=None
+):
+    """Plot latent space visualization"""
+    if index is None:
+        index = range(len(adata_prot.obs.index))
+
     """Plot mean and standard deviation of latent space."""
     # Extract latent means and convert to numpy arrays
     rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
     protein_latent = protein_inference_outputs["qz"].mean.detach().cpu().numpy()
 
     # Create AnnData objects with proper initialization
-    rna_ann = AnnData(X=rna_latent)
-    protein_ann = AnnData(X=protein_latent)
+    rna_ann = AnnData(X=rna_latent, obs=adata_rna.obs.iloc[index].copy())
+    protein_ann = AnnData(X=protein_latent, obs=adata_prot.obs.iloc[index].copy())
 
     # Compute PCA for both datasets
     sc.pp.pca(rna_ann)
@@ -75,7 +101,7 @@ def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs):
     plt.subplot(131)
     pca = PCA(n_components=2)
     pca_result = pca.fit_transform(rna_ann.X)
-    plt.scatter(pca_result[:, 0], pca_result[:, 1])
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], c=rna_ann.obs["CN"])
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.title("RNA Latent Space PCA")
@@ -84,7 +110,7 @@ def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs):
     plt.subplot(132)
     pca = PCA(n_components=2)
     pca_result = pca.fit_transform(protein_ann.X)
-    plt.scatter(pca_result[:, 0], pca_result[:, 1])
+    plt.scatter(pca_result[:, 0], pca_result[:, 1], c=protein_ann.obs["CN"])
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.title("Protein Latent Space PCA")
@@ -105,78 +131,52 @@ def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs):
     plt.show()
 
 
-def plot_rna_protein_matching_means_and_scale(
-    rna_inference_outputs, protein_inference_outputs, use_subsample=True
-):
-    if use_subsample:
-        n_samples = min(
-            300,
-            min(
-                rna_inference_outputs["qz"].mean.shape[0],
-                protein_inference_outputs["qz"].mean.shape[0],
-            ),
-        )
-        subsample_indexes = np.random.choice(
-            rna_inference_outputs["qz"].mean.shape[0], n_samples, replace=False
-        )
-    else:
-        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
-    rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
-    rna_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
-    protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
-    protein_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
+def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inference_outputs):
+    """Plot RNA and protein matching means and scales"""
+    plt.figure(figsize=(15, 5))
 
-    # Combine means for PCA
-    combined_means = np.concatenate([rna_means, protein_means], axis=0)
+    # Plot means
+    plt.subplot(131)
+    plt.scatter(
+        rna_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
+        protein_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
+        alpha=0.1,
+    )
+    plt.xlabel("RNA Latent Mean")
+    plt.ylabel("Protein Latent Mean")
+    plt.title("Latent Means Comparison")
 
-    # Fit PCA on means
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(combined_means)
+    # Plot scales
+    plt.subplot(132)
+    plt.scatter(
+        rna_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
+        protein_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
+        alpha=0.1,
+    )
+    plt.xlabel("RNA Latent Scale")
+    plt.ylabel("Protein Latent Scale")
+    plt.title("Latent Scales Comparison")
 
-    # Transform scales using the same PCA transformation
-    combined_scales = np.concatenate([rna_scales, protein_scales], axis=0)
-    scales_transformed = pca.transform(combined_scales)
-
-    # Plot with halos
-    plt.figure(figsize=(8, 6))
-
-    # Plot RNA points and halos
-    for i in range(rna_means.shape[0]):
-        # Add halo using scale information
-        circle = plt.Circle(
-            (pca_result[i, 0], pca_result[i, 1]),
-            radius=np.linalg.norm(scales_transformed[i]) * 0.05,
-            color="blue",
-            alpha=0.1,
-        )
-        plt.gca().add_patch(circle)
-    # Plot Protein points and halos
-    for i in range(protein_means.shape[0]):
-        # Add halo using scale information
-        circle = plt.Circle(
-            (pca_result[rna_means.shape[0] + i, 0], pca_result[rna_means.shape[0] + i, 1]),
-            radius=np.linalg.norm(scales_transformed[rna_means.shape[0] + i]) * 0.05,
-            color="orange",
-            alpha=0.1,
-        )
-        plt.gca().add_patch(circle)
-
-    # Add connecting lines
-    for i in range(rna_means.shape[0]):
-        color = "red" if (i % 2 == 0) else "green"
-        plt.plot(
-            [pca_result[i, 0], pca_result[rna_means.shape[0] + i, 0]],
-            [pca_result[i, 1], pca_result[rna_means.shape[0] + i, 1]],
-            "k-",
-            alpha=0.2,
-            color=color,
-        )
-
-    plt.xlabel("PCA Component 1")
-    plt.ylabel("PCA Component 2")
-    plt.title("PCA of RNA and Protein with Scale Halos")
+    # Plot mean vs scale
+    plt.subplot(133)
+    plt.scatter(
+        rna_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
+        rna_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
+        alpha=0.1,
+        label="RNA",
+    )
+    plt.scatter(
+        protein_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
+        protein_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
+        alpha=0.1,
+        label="Protein",
+    )
+    plt.xlabel("Latent Mean")
+    plt.ylabel("Latent Scale")
+    plt.title("Mean vs Scale")
     plt.legend()
-    plt.gca().set_aspect("equal")
+
+    plt.tight_layout()
     plt.show()
 
 
@@ -231,56 +231,66 @@ def plot_inference_outputs(
     plt.show()
 
 
-def plot_similarity_loss_history(similarity_loss_history, active_similarity_loss_active_history):
-    """Plot similarity loss history"""
-    print("\nPlotting similarity loss history...")
-    plt.figure(figsize=(12, 6))
+def plot_similarity_loss_history(similarity_loss_history, active_history):
+    """Plot similarity loss history and active state"""
+    plt.figure(figsize=(15, 5))
 
-    # Plot loss values
-    plt.plot(similarity_loss_history, label="Similarity Loss")
-
-    # Plot active/inactive periods
-    active_periods = np.array(active_similarity_loss_active_history)
-    plt.fill_between(
-        range(len(active_periods)),
-        min(similarity_loss_history),
-        max(similarity_loss_history),
-        where=active_periods,
-        alpha=0.3,
-        color="green",
-        label="Active Periods",
-    )
-
+    # Plot similarity loss
+    plt.subplot(121)
+    plt.plot(similarity_loss_history)
     plt.title("Similarity Loss History")
     plt.xlabel("Step")
     plt.ylabel("Loss")
-    plt.legend()
+
+    # Plot active state
+    plt.subplot(122)
+    plt.plot(active_history)
+    plt.title("Similarity Loss Active State")
+    plt.xlabel("Step")
+    plt.ylabel("Active (1) / Inactive (0)")
+
     plt.tight_layout()
     plt.show()
 
 
 def plot_normalized_losses(history):
     """Plot normalized training losses"""
-    print("\nPlotting normalized losses...")
-    fig, axes = plt.subplots(2, 2, figsize=(15, 15))
-
-    # Plot reconstruction losses
-    axes[0, 0].plot(history["train_rna_reconstruction_loss"], label="RNA")
-    axes[0, 0].plot(history["train_protein_reconstruction_loss"], label="Protein")
-    axes[0, 0].set_title("Reconstruction Losses")
-    axes[0, 0].legend()
-
-    # Plot contrastive loss
-    axes[0, 1].plot(history["train_contrastive_loss"])
-    axes[0, 1].set_title("Contrastive Loss")
-
-    # Plot matching loss
-    axes[1, 0].plot(history["train_matching_rna_protein_loss"])
-    axes[1, 0].set_title("Matching Loss")
+    plt.figure(figsize=(15, 10))
 
     # Plot total loss
-    axes[1, 1].plot(history["train_total_loss"])
-    axes[1, 1].set_title("Total Loss")
+    plt.subplot(2, 2, 1)
+    plt.plot(history["train_total_loss"], label="Total Loss")
+    plt.title("Total Loss")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    # Plot reconstruction losses
+    plt.subplot(2, 2, 2)
+    plt.plot(history["train_rna_reconstruction_loss"], label="RNA Reconstruction")
+    plt.plot(history["train_protein_reconstruction_loss"], label="Protein Reconstruction")
+    plt.title("Reconstruction Losses")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    # Plot contrastive and matching losses
+    plt.subplot(2, 2, 3)
+    plt.plot(history["train_contrastive_loss"], label="Contrastive Loss")
+    plt.plot(history["train_matching_rna_protein_loss"], label="Matching Loss")
+    plt.title("Contrastive and Matching Losses")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    # Plot similarity and diversity losses
+    plt.subplot(2, 2, 4)
+    plt.plot(history["train_similarity_loss"], label="Similarity Loss")
+    plt.plot(history["train_diversity_loss"], label="Diversity Loss")
+    plt.title("Similarity and Diversity Losses")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.legend()
 
     plt.tight_layout()
     plt.show()
@@ -289,7 +299,7 @@ def plot_normalized_losses(history):
 def plot_cosine_distance(rna_batch, protein_batch):
     """Plot cosine distance between archetype vectors"""
     print("\nPlotting cosine distances...")
-    archetype_dis = scipy.spatial.distance.cdist(
+    archetype_dis = scipy.cdist(
         rna_batch["archetype_vec"].detach().cpu().numpy(),
         protein_batch["archetype_vec"].detach().cpu().numpy(),
         metric="cosine",
@@ -323,6 +333,178 @@ def plot_archetype_vs_latent_distances(archetype_dis_tensor, latent_distances, t
 
     plt.tight_layout()
     plt.show()
+
+
+def plot_spatial_data(adata_rna, adata_prot):
+    """Plot spatial data with cell types and CN"""
+    plt.figure(figsize=(12, 6))
+
+    # Plot with cell type as color
+    plt.subplot(1, 2, 1)
+    sns.scatterplot(
+        x=adata_prot.obs["X"],
+        y=adata_prot.obs["Y"],
+        hue=adata_prot.obs["cell_types"],
+        palette="tab10",
+        s=10,
+    )
+    plt.title("Protein cells colored by cell type")
+    plt.legend(loc="upper right", fontsize="small", title_fontsize="small")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+
+    plt.title("RNA cells colored by cell types")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.legend([], [], frameon=False)
+
+    # Plot with CN as color
+    plt.subplot(1, 2, 2)
+    sns.scatterplot(
+        x=adata_prot.obs["X"],
+        y=adata_prot.obs["Y"],
+        hue=adata_prot.obs["CN"],
+        s=10,
+    )
+    plt.title("Protein cells colored by CN")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_combined_latent_space(combined_latent):
+    """Plot combined latent space visualizations"""
+    # Plot UMAP
+    sc.tl.umap(combined_latent, min_dist=0.1)
+    sc.pl.umap(
+        combined_latent,
+        color=["CN", "modality"],
+        title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
+        alpha=0.5,
+    )
+    sc.pl.umap(
+        combined_latent,
+        color=["CN", "modality", "cell_types"],
+        title=[
+            "UMAP Combined Latent space CN",
+            "UMAP Combined Latent space modality",
+            "UMAP Combined Latent space cell types",
+        ],
+        alpha=0.5,
+    )
+
+    # Plot PCA
+    sc.pl.pca(
+        combined_latent,
+        color=["CN", "modality"],
+        title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
+        alpha=0.5,
+    )
+
+
+def plot_cell_type_distributions(combined_latent, top_n=3):
+    """Plot UMAP for top N most common cell types"""
+    top_cell_types = combined_latent.obs["cell_types"].value_counts().index[:top_n]
+
+    for cell_type in top_cell_types:
+        cell_type_data = combined_latent[combined_latent.obs["cell_types"] == cell_type]
+        sc.pl.umap(
+            cell_type_data,
+            color=["CN", "modality", "cell_types"],
+            title=[
+                f"UMAP {cell_type} CN",
+                f"UMAP {cell_type} modality",
+                f"UMAP {cell_type} cell types",
+            ],
+            alpha=0.5,
+        )
+
+
+def plot_latent_distances(rna_latent, prot_latent, distances):
+    """Plot latent space distances between modalities"""
+    # Randomize RNA latent space to compare distances
+    rand_rna_latent = rna_latent.copy()
+    shuffled_indices = np.random.permutation(rand_rna_latent.obs.index)
+    rand_rna_latent = rand_rna_latent[shuffled_indices].copy()
+    rand_distances = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
+
+    # Plot randomized latent space distances
+    rand_rna_latent.obs["latent_dis"] = np.log(distances)
+
+    sc.tl.umap(rand_rna_latent)
+    sc.pl.umap(
+        rand_rna_latent,
+        cmap="coolwarm",
+        color="latent_dis",
+        title="Latent space distances between RNA and Protein cells",
+    )
+
+    return rand_distances
+
+
+def plot_rna_protein_embeddings(rna_vae_new, protein_vae):
+    """Plot RNA and protein embeddings"""
+    sc.pl.embedding(
+        rna_vae_new.adata,
+        color=["CN", "cell_types"],
+        basis="X_scVI",
+        title=["Latent space, CN RNA", "Latent space, minor cell types RNA"],
+    )
+    sc.pl.embedding(
+        protein_vae.adata,
+        color=["CN", "cell_types"],
+        basis="X_scVI",
+        title=["Latent space, CN Protein", "Latent space, minor cell types Protein"],
+    )
+
+
+def plot_combined_latent_space_umap(combined_latent):
+    """Plot UMAP of combined latent space"""
+    sc.tl.umap(combined_latent, min_dist=0.1)
+    sc.pl.umap(
+        combined_latent,
+        color=["CN", "modality"],
+        title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
+        alpha=0.5,
+    )
+    sc.pl.umap(
+        combined_latent,
+        color=["CN", "modality", "cell_types"],
+        title=[
+            "UMAP Combined Latent space CN",
+            "UMAP Combined Latent space modality",
+            "UMAP Combined Latent space cell types",
+        ],
+        alpha=0.5,
+    )
+
+
+def plot_archetype_vectors(rna_vae_new, protein_vae):
+    """Plot archetype vectors"""
+    # Process archetype vectors
+    rna_archtype = AnnData(rna_vae_new.adata.obsm["archetype_vec"])
+    rna_archtype.obs = rna_vae_new.adata.obs
+    sc.pp.neighbors(rna_archtype)
+    sc.tl.umap(rna_archtype)
+
+    prot_archtype = AnnData(protein_vae.adata.obsm["archetype_vec"])
+    prot_archtype.obs = protein_vae.adata.obs
+    sc.pp.neighbors(prot_archtype)
+    sc.tl.umap(prot_archtype)
+
+    # Plot archetype vectors
+    sc.pl.umap(
+        rna_archtype,
+        color=["CN", "cell_types"],
+        title=["RNA Archetype UMAP CN", "RNA Archetype UMAP cell types"],
+    )
+    sc.pl.umap(
+        prot_archtype,
+        color=["CN", "cell_types"],
+        title=["Protein Archetype UMAP CN", "Protein Archetype UMAP cell types"],
+    )
 
 
 # %%
