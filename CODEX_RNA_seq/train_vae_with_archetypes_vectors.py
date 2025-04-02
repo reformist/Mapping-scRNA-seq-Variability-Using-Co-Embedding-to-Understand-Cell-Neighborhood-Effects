@@ -44,6 +44,9 @@ from scipy.sparse import issparse
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
+# import torch F
+from torch.nn.functional import normalize
+
 # Add repository root to Python path without changing working directory
 
 importlib.reload(scvi)
@@ -63,8 +66,9 @@ import bar_nick_utils
 
 importlib.reload(bar_nick_utils)
 
+# Import plotting functions
+import CODEX_RNA_seq.plotting_functions_vae
 from bar_nick_utils import (
-    archetype_vs_latent_distances_plot,
     calculate_cLISI,
     calculate_iLISI,
     clean_uns_for_h5ad,
@@ -75,6 +79,14 @@ from bar_nick_utils import (
     get_umap_filtered_fucntion,
     match_datasets,
     mixing_score,
+    verify_gradients,
+)
+
+importlib.reload(CODEX_RNA_seq.plotting_functions_vae)
+# Import logging functions
+import CODEX_RNA_seq.logging_functions
+from CODEX_RNA_seq.plotting_functions_vae import (
+    plot_archetype_vs_latent_distances,
     plot_cosine_distance,
     plot_inference_outputs,
     plot_latent,
@@ -82,9 +94,18 @@ from bar_nick_utils import (
     plot_normalized_losses,
     plot_rna_protein_matching_means_and_scale,
     plot_similarity_loss_history,
-    select_gene_likelihood,
-    verify_gradients,
 )
+
+importlib.reload(CODEX_RNA_seq.logging_functions)
+from CODEX_RNA_seq.logging_functions import (
+    log_batch_metrics,
+    log_epoch_end,
+    log_step_metrics,
+    log_training_metrics,
+    log_validation_metrics,
+)
+
+# reimport the two above too
 
 if not hasattr(sc.tl.umap, "_is_wrapped"):
     sc.tl.umap = get_umap_filtered_fucntion()
@@ -109,6 +130,20 @@ save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
 
 adata_rna_subset = sc.read_h5ad(f"{save_dir}/adata_rna_subset_prepared_for_training.h5ad")
 adata_prot_subset = sc.read_h5ad(f"{save_dir}/adata_prot_subset_prepared_for_training.h5ad")
+
+# Subsample the data for faster testing
+print(f"Original RNA dataset shape: {adata_rna_subset.shape}")
+print(f"Original protein dataset shape: {adata_prot_subset.shape}")
+
+# Subsample to 20% of the cells for testing
+np.random.seed(42)  # For reproducibility
+frac = 1
+sc.pp.subsample(adata_rna_subset, fraction=frac)
+sc.pp.subsample(adata_prot_subset, fraction=frac)
+
+print(f"Subsampled RNA dataset shape: {adata_rna_subset.shape}")
+print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
+
 adata_rna_subset.X = adata_rna_subset.X.astype(np.float32)
 adata_prot_subset.X = adata_prot_subset.X.astype(np.float32)
 adata_prot_subset.obs["CN"] = adata_prot_subset.obs["CN"].astype(int)
@@ -201,150 +236,46 @@ class DualVAETrainingPlan(TrainingPlan):
             protein_batch, loss_kwargs=self.loss_kwargs
         )
 
-        # Inference outputs
+        # Compute losses
         rna_inference_outputs = self.rna_vae.module.inference(
             rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
         )
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
-
-        # Compute latent distances
-        matching_rna_protein_latent_distances = torch.distributions.kl_divergence(
-            rna_inference_outputs["qz"], protein_inference_outputs["qz"]
+        matching_rna_protein_latent_distances = compute_pairwise_kl_two_items(
+            rna_inference_outputs["qz"].mean,
+            protein_inference_outputs["qz"].mean,
+            rna_inference_outputs["qz"].scale,
+            protein_inference_outputs["qz"].scale,
         )
-
-        # Compute pairwise distances for RNA and protein
-        rna_distances = compute_pairwise_kl(
-            rna_inference_outputs["qz"].mean, rna_inference_outputs["qz"].scale
-        )
-        prot_distances = compute_pairwise_kl(
-            protein_inference_outputs["qz"].mean, protein_inference_outputs["qz"].scale
-        )
-
-        # Retrieve cell neighborhood information
-        index = rna_batch["labels"]
-        cell_neighborhood_info = torch.tensor(
-            self.protein_vae.adata[index].obs["CN"].values, device=device
-        )
-        rna_major_cell_type = torch.tensor(
-            self.rna_vae.adata[index].obs["major_cell_types"].values.codes, device=device
-        ).squeeze()
-        protein_major_cell_type = torch.tensor(
-            self.rna_vae.adata[index].obs["major_cell_types"].values.codes, device=device
-        ).squeeze()
-
-        num_cells = cell_neighborhood_info.shape[0]
-        diagonal_mask = torch.eye(num_cells, dtype=torch.bool, device=device)
-
-        same_cn_mask = cell_neighborhood_info.unsqueeze(0) == cell_neighborhood_info.unsqueeze(1)
-        same_major_cell_type_mask = rna_major_cell_type.unsqueeze(
-            0
-        ) == protein_major_cell_type.unsqueeze(1)
-
-        # Use protein distances or a combination as needed
-        distances = prot_distances + rna_distances
-        distances = distances.masked_fill(diagonal_mask, 0)
-
-        # Define loss masks
-        same_major_type_same_cn_loss = (distances**2) * (same_major_cell_type_mask & same_cn_mask)
-        same_major_type_different_cn_loss = ((10 - distances).clamp(min=0) ** 2) * (
-            same_major_cell_type_mask & ~same_cn_mask
-        )
-        different_major_type_same_cn_loss = ((10 - distances).clamp(min=0) ** 2) * (
-            ~same_major_cell_type_mask & same_cn_mask
-        )
-        different_major_type_different_cn_loss = ((10 - distances).clamp(min=0) ** 2) * (
-            ~same_major_cell_type_mask & ~same_cn_mask
-        )
-
-        cn_loss = (
-            same_major_type_same_cn_loss.mean()
-            + same_major_type_different_cn_loss.mean()
-            + different_major_type_same_cn_loss.mean()
-            + different_major_type_different_cn_loss.mean()
-        ) / (num_cells * (num_cells - 1))
-
+        contrastive_loss = torch.tensor(0.0).to(device)
         validation_total_loss = (
-            1 * self.contrastive_weight * cn_loss
-            + 0.1 * rna_loss_output.loss
-            + 0.1 * protein_loss_output.loss
-            + 10 * matching_rna_protein_latent_distances.mean()
+            rna_loss_output.loss
+            + protein_loss_output.loss
+            + contrastive_loss
+            + matching_rna_protein_latent_distances.mean()
         )
 
-        # Log metrics
-        self.log(
-            "validation_rna_loss", rna_loss_output.loss, on_epoch=True, sync_dist=self.use_sync_dist
-        )
-        self.log(
-            "validation_protein_loss",
-            protein_loss_output.loss,
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
-        )
-        self.log(
-            "validation_contrastive_loss", cn_loss, on_epoch=True, sync_dist=self.use_sync_dist
-        )
-        self.log(
-            "validation_total_loss",
+        # Log validation metrics
+        log_validation_metrics(
+            self,
+            rna_loss_output,
+            protein_loss_output,
+            contrastive_loss,
             validation_total_loss,
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
-        )
-        self.log(
-            "validation_matching_latent_distances",
-            matching_rna_protein_latent_distances.mean(),
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
+            matching_rna_protein_latent_distances,
         )
 
-        # Compute and log additional metrics
-        self.compute_and_log_metrics(rna_loss_output, self.val_metrics, "validation")
-        self.compute_and_log_metrics(protein_loss_output, self.val_metrics, "validation")
-
-        # Log validation metrics and update history
-        self.log(
-            "validation_rna_loss", rna_loss_output.loss, on_epoch=True, sync_dist=self.use_sync_dist
-        )
-        self.history["validation_rna_loss"].append(rna_loss_output.loss.item())
-
-        self.log(
-            "validation_protein_loss",
-            protein_loss_output.loss,
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
-        )
-        self.history["validation_protein_loss"].append(protein_loss_output.loss.item())
-
-        self.log(
-            "validation_contrastive_loss", cn_loss, on_epoch=True, sync_dist=self.use_sync_dist
-        )
-        self.history["validation_contrastive_loss"].append(cn_loss.item())
-
-        self.log(
-            "validation_total_loss",
+        # Log batch metrics for first batch only
+        log_batch_metrics(
+            self,
+            batch_idx,
             validation_total_loss,
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
+            rna_loss_output,
+            protein_loss_output,
+            contrastive_loss,
         )
-        self.history["validation_total_loss"].append(validation_total_loss.item())
-
-        self.log(
-            "validation_matching_latent_distances",
-            matching_rna_protein_latent_distances.mean(),
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
-        )
-        self.history["validation_matching_latent_distances"].append(
-            matching_rna_protein_latent_distances.mean().item()
-        )
-
-        if batch_idx == 0:  # Print validation metrics for first batch of each epoch
-            print(f"\nValidation metrics at epoch {self.current_epoch}:")
-            print(f"Total validation loss: {validation_total_loss.item():.4f}")
-            print(f"RNA validation loss: {rna_loss_output.loss.item():.4f}")
-            print(f"Protein validation loss: {protein_loss_output.loss.item():.4f}")
-            print(f"Contrastive validation loss: {cn_loss.item():.4f}")
 
         return validation_total_loss
 
@@ -362,15 +293,14 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
         )
         index = rna_batch["labels"]
-        # assert len(set(self.protein_vae.adata[index].obs['CN'].values)) != 1# should this be commented out?
 
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
-        # here we assume that the cells have been aligned in the same order to their best match across modalities (check adata_prot_subset.uns['ordered_matching_cells'])
 
-        archetype_dis = scipy.spatial.distance.cdist(
-            rna_batch["archetype_vec"], protein_batch["archetype_vec"], metric="cosine"
+        archetype_dis = torch.cdist(  # cosine distance
+            normalize(rna_batch["archetype_vec"], dim=1),
+            normalize(protein_batch["archetype_vec"], dim=1),
         )
 
         latent_distances = compute_pairwise_kl_two_items(
@@ -384,23 +314,21 @@ class DualVAETrainingPlan(TrainingPlan):
         if (
             self.global_step > -1
             and self.global_step % (1 + int(self.total_steps / (self.plot_x_times))) == 0
+            and plot_flag
         ):
-            latent_distances_temp = torch.cdist(
-                rna_inference_outputs["qz"].mean, protein_inference_outputs["qz"].mean, p=2
-            )
             plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs)
             plot_rna_protein_matching_means_and_scale(
                 rna_inference_outputs, protein_inference_outputs
             )
-            print(f"min laten distances is {round(latent_distances.min().item(),3)}")
-            print(f"max laten distances is {round(latent_distances.max().item(),3)}")
-            print(f"mean laten distances is {round(latent_distances.mean().item(),3)}\n\n")
+            print(f"min latent distances: {round(latent_distances.min().item(),3)}")
+            print(f"max latent distances: {round(latent_distances.max().item(),3)}")
+            print(f"mean latent distances: {round(latent_distances.mean().item(),3)}")
 
         archetype_dis_tensor = torch.tensor(
             archetype_dis, dtype=torch.float, device=latent_distances.device
         )
         threshold = 0.0005
-        # normlize distances to [0,1] since we are using the same threshold for both archetype and latent distances
+        # normalize distances to [0,1] since we are using the same threshold for both archetype and latent distances
         archetype_dis_tensor = (archetype_dis_tensor - archetype_dis_tensor.min()) / (
             archetype_dis_tensor.max() - archetype_dis_tensor.min()
         )
@@ -447,29 +375,29 @@ class DualVAETrainingPlan(TrainingPlan):
                 prot_distances,
             )
             self.first_step = False
+
         if (
             self.global_step > -1
             and self.global_step % (1 + int(self.total_steps / (self.plot_x_times))) == 0
+            and plot_flag
         ):
-            print("mean prot distances is ", round(prot_distances.mean().item(), 3))
-            print("mean rna distances is ", round(rna_distances.mean().item(), 3))
-            print("after I multiply the prot distances by 5")
+            print("\nDistance metrics:")
+            print(f"Mean protein distances: {round(prot_distances.mean().item(), 3)}")
+            print(f"Mean RNA distances: {round(rna_distances.mean().item(), 3)}")
+            print(f"Acceptable ratio: {round(num_acceptable.float().item() / num_cells, 3)}")
+            print(f"Stress loss: {round(stress_loss.item(), 3)}")
+            print(f"Matching loss: {round(matching_loss.item(), 3)}")
 
-            verify_gradients(self.rna_vae.module, self.protein_vae)  # no funcitonal
-            print("acceptable ratio", round(num_acceptable.float().item() / num_cells, 3))
-            print("stress_loss", round(stress_loss.item(), 3))
-            print("reward", round(reward.item(), 3))
-            print("exact_pairs_loss", round(exact_pairs.item(), 3))
-            print("matching_loss", round(matching_loss.item(), 3), "\n\n")
-            "sssssssssssssssssssssssssssssssssssssssssssss"
-            if plot_flag:
-                plot_latent(
-                    rna_inference_outputs["qz"].mean.clone().detach().cpu().numpy(),
-                    protein_inference_outputs["qz"].mean.clone().detach().cpu().numpy(),
-                    self.rna_vae.adata,
-                    self.protein_vae.adata,
-                    index=protein_batch["labels"],
-                )
+            # Plot latent space
+            plot_latent(
+                rna_inference_outputs["qz"].mean.clone().detach().cpu().numpy(),
+                protein_inference_outputs["qz"].mean.clone().detach().cpu().numpy(),
+                self.rna_vae.adata,
+                self.protein_vae.adata,
+                index=protein_batch["labels"],
+            )
+
+            # Calculate mixing score
             mixing_score_ = mixing_score(
                 rna_inference_outputs["qz"].mean,
                 protein_inference_outputs["qz"].mean,
@@ -478,7 +406,6 @@ class DualVAETrainingPlan(TrainingPlan):
                 index,
                 plot_flag,
             )
-            print(f"mixing score is {mixing_score_}\n\n")
 
             self.log(
                 "extra_metric_acceptable_ratio",
@@ -494,23 +421,16 @@ class DualVAETrainingPlan(TrainingPlan):
             self.log("extra_metric_iLISI", mixing_score_["iLISI"], on_epoch=False, on_step=True)
             self.log("extra_metric_cLISI", mixing_score_["cLISI"], on_epoch=False, on_step=True)
 
-            # price accuracy for diversity
+            # Print accuracy
             accuracy = (batch_pred.argmax(dim=1) == batch_labels).float().mean()
-            print(f"accuracy is {accuracy}")
+            print(f"Accuracy: {accuracy}")
             self.log("extra_metric_accuracy", accuracy, on_epoch=False, on_step=True)
 
-            # plt.figure()
-            # archetype_dis_tensor_ = archetype_dis_tensor.detach().cpu().numpy()
-            # plt.hist(np.sort(archetype_dis_tensor_.flatten()),bins=100)
-            # plt.hist(np.sort(archetype_dis_tensor_)[latent_distances.detach().cpu().numpy() < threshold].flatten(),bins=100)
-            # plt.title(f'num of below threshold {np.sum(latent_distances.detach().cpu().numpy() < threshold)}')
-            # plt.show()
+            # Plot archetype vs latent distances
+            plot_archetype_vs_latent_distances(archetype_dis_tensor, latent_distances, threshold)
+            plot_cosine_distance(rna_batch, protein_batch)
 
-            if plot_flag:
-                archetype_vs_latent_distances_plot(
-                    archetype_dis_tensor, latent_distances, threshold
-                )
-                plot_cosine_distance(rna_batch, protein_batch)
+        # Get cell info
         cell_neighborhood_info = torch.tensor(self.protein_vae.adata[index].obs["CN"].values).to(
             device
         )
@@ -525,10 +445,8 @@ class DualVAETrainingPlan(TrainingPlan):
             .squeeze()
         )
 
+        # Set up masks for loss calculations
         num_cells = self.rna_vae.adata[index].shape[0]
-        # this will give us each row represents a item in the array, and each col is whether it is the same as the items in that index of the col
-        # this way we get for each cell(a row) which other cells (index of each item in the row, which is the col) are matching
-        # so if we got 1,2,1, we will get [[1,0,1],[0,1,0],[1,0,1]]
         same_cn_mask = cell_neighborhood_info.unsqueeze(0) == cell_neighborhood_info.unsqueeze(1)
         same_major_cell_type = rna_major_cell_type.unsqueeze(
             0
@@ -549,235 +467,150 @@ class DualVAETrainingPlan(TrainingPlan):
         different_major_type_same_cn_mask.masked_fill_(diagonal_mask, 0)
         different_major_type_different_cn_mask.masked_fill_(diagonal_mask, 0)
 
-        same_major_type_same_cn_loss = (distances**2) * same_major_type_same_cn_mask
-        same_major_type_different_cn_loss = (
-            (10 - distances).clamp(min=0) ** 2
-        ) * same_major_type_different_cn_mask
-        different_major_type_same_cn_loss = (
-            (10 - distances).clamp(min=0) ** 2
-        ) * different_major_type_same_cn_mask
-        different_major_type_different_cn_loss = (
-            (10 - distances).clamp(min=0) ** 2
-        ) * different_major_type_different_cn_mask
-        # for debugging only: #
-        same_cn_loss = (distances**2) * same_cn_mask
-        same_major_type_loss = (distances**2) * same_major_cell_type
-        # end of debugging
-        positive_loss = same_major_type_same_cn_loss
+        # Calculate diversity loss
+        diversity_loss = 0.0
 
-        # negative_loss = different_major_type_different_cn_loss + different_major_type_same_cn_loss + 10* same_major_type_different_cn_loss
-        negative_loss = same_major_type_different_cn_loss  # try to simplify loss
-        cn_loss = (positive_loss.mean() + negative_loss.mean()) / (num_cells * (num_cells - 1))
-
-        matching_loss = 1000 * matching_loss.mean()
-        reconstruction_loss = rna_loss_output.loss * 000.1 + protein_loss_output.loss * 000.1
-        # Calculate silhouette score for the CN clusters
-        # if self.global_step % 50 ==0:
-        #     cn_labels = cell_neighborhood_info.cpu().numpy()
-        #     silhouette_avg_rna = silhouette_score(rna_inference_outputs["qz"].mean.detach().cpu().numpy(), cn_labels)
-        #     silhouette_avg_prot = silhouette_score(protein_inference_outputs["qz"].mean.detach().cpu().numpy(), cn_labels)
-        #     silhouette_avg = (silhouette_avg_rna + silhouette_avg_prot) / 2
-        #
-        #     if silhouette_avg < 0.1:
-        #         self.contrastive_weight = self.contrastive_weight * 10
-        #     else :
-        #         self.contrastive_weight =  self.contrastive_weight / 10
-        contrastive_loss = self.contrastive_weight * cn_loss * 1000000
-
-        probs = F.softmax(batch_pred, dim=-1)
-        entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1)
-        adv_loss = -entropy.mean()  # Negative entropy to maximize uncertainty
-
-        adv_loss = 1 * adv_loss
-
-        # In training_step:
-        all_latent = torch.cat(
-            [rna_inference_outputs["qz"].mean, protein_inference_outputs["qz"].mean], dim=0
-        )
-        rna_dis = torch.cdist(rna_inference_outputs["qz"].mean, rna_inference_outputs["qz"].mean)
-        prot_dis = torch.cdist(
-            protein_inference_outputs["qz"].mean, protein_inference_outputs["qz"].mean
-        )
-        rna_prot_dis = torch.cdist(
-            rna_inference_outputs["qz"].mean, protein_inference_outputs["qz"].mean
-        )
-        #
-        # apply loss on similarity between rna and prot vs internal similarity
-        # Calculate the similarity loss as the absolute difference between the average of the mean absolute clamped RNA and protein distances
-        # and the mean absolute clamped RNA-protein distances. This helps in measuring the similarity between RNA and protein distances
-        # while avoiding the influence of outliers by using clamped distances.
-        similarity_loss_raw = torch.abs(
-            ((rna_dis.abs().mean() + prot_dis.abs().mean()) / 2) - rna_prot_dis.abs().mean()
-        )
-        # Store the current loss value
-
-        self.similarity_loss_history.append(similarity_loss_raw.item())
-
-        # Only keep the most recent window of values
-        if len(self.similarity_loss_history) > self.steady_state_window:
-            self.similarity_loss_history.pop(0)
-
-        # Determine if we're in steady state
-        in_steady_state = False
-        coeff_of_variation = 0  # default value
-        if len(self.similarity_loss_history) == self.steady_state_window:
-            # Calculate mean and standard deviation over the window
-            mean_loss = sum(self.similarity_loss_history) / self.steady_state_window
-            std_loss = (
-                sum((x - mean_loss) ** 2 for x in self.similarity_loss_history)
-                / self.steady_state_window
-            ) ** 0.5
-
-            # Check if variation is small enough to be considered steady state
-            coeff_of_variation = std_loss / mean_loss
-            if coeff_of_variation < self.steady_state_tolerance:
-                in_steady_state = True
-
-        # Determine if loss has increased significantly from steady state
-        loss_increased = False
-        if not self.similarity_active and len(self.similarity_loss_history) > 0:
-            recent_loss = similarity_loss_raw.item()
-            min_steady_loss = min(self.similarity_loss_history)
-            if recent_loss > min_steady_loss * (1 + self.reactivation_threshold):
-                loss_increased = True
-        # Update the weight based on steady state detection
-        if in_steady_state and self.similarity_active:
-            current_similarity_weight = (
-                self.similarity_weight / 1000
-            )  # Zero out weight when in steady state
-            self.similarity_active = False
-        elif loss_increased and not self.similarity_active:
-            current_similarity_weight = self.similarity_weight  # Reactivate with full weight
-            self.similarity_active = True
-        else:
-            current_similarity_weight = self.similarity_weight if self.similarity_active else 0
-        # if the mixing score is lower than 1.8 activaet the similarity loss
-        # Apply weight to loss
-
-        combined_latent = ad.concat(
-            [
-                AnnData(rna_inference_outputs["qz"].mean.detach().cpu().numpy()),
-                AnnData(protein_inference_outputs["qz"].mean.detach().cpu().numpy()),
-            ],
-            join="outer",
-            label="modality",
-            keys=["RNA", "Protein"],
-        )
-
-        if self.global_step % 50 == 0:
-            sc.pp.pca(combined_latent, n_comps=5)
-            sc.pp.neighbors(combined_latent, use_rep="X_pca", n_neighbors=10)
-            iLISI_score = calculate_iLISI(combined_latent, "modality", plot_flag=False)
-            if iLISI_score < 1.9 and self.similarity_weight > 1e8:
-                print()
-                self.similarity_weight = self.similarity_weight * 10
-            elif self.similarity_weight > 100:  # make it smaller only if it is not too small
-                self.similarity_weight = self.similarity_weight / 10
-        similarity_loss = current_similarity_weight * similarity_loss_raw
-        self.active_similarity_loss_active_history.append(self.similarity_active)
-        self.similarity_loss_all_history.append(similarity_loss.item())
-        if (
-            self.global_step > -1
-            and self.global_step % (1 + int(self.total_steps / (self.plot_x_times))) == 0
-        ):
-            plot_similarity_loss_history(
-                self.similarity_loss_all_history, self.active_similarity_loss_active_history
+        if same_major_type_same_cn_mask.sum() > 0:
+            diversity_loss += (
+                distances.masked_select(same_major_type_same_cn_mask).mean() * 0.1
+            )  # multiplyers needs to be small as it is the opposite of the contrast loss
+        if different_major_type_same_cn_mask.sum() > 0:
+            diversity_loss += (
+                distances.masked_select(different_major_type_same_cn_mask).mean() * 0.1
+            )
+        if different_major_type_different_cn_mask.sum() > 0:
+            diversity_loss += (
+                distances.masked_select(different_major_type_different_cn_mask).mean() * 0.1
+            )
+        if same_major_type_different_cn_mask.sum() > 0:
+            diversity_loss += (
+                -distances.masked_select(same_major_type_different_cn_mask).mean() * 0.1
             )
 
-        dis = torch.cdist(all_latent, all_latent)
-        dis1 = dis[:rna_size, rna_size:]
-        dis2 = dis[rna_size:, rna_size:]
-        diversity_loss = torch.abs(dis1.mean() - dis2.mean())
-        # print('diversity_loss',diversity_loss)
-        diversity_loss = diversity_loss * 1000000
+        # Define contrastive loss
+        contrastive_loss = 0.0
+
+        # same cell types within 1 CN should be in 1 cluster.
+        if same_major_type_same_cn_mask.sum() > 0:
+            contrastive_loss += -distances.masked_select(same_major_type_same_cn_mask).mean()
+        # different cell types in same CN should be apart
+        if different_major_type_same_cn_mask.sum() > 0:
+            contrastive_loss += distances.masked_select(different_major_type_same_cn_mask).mean()
+        # different cell types in different CNs should also be apart
+        if different_major_type_different_cn_mask.sum() > 0:
+            contrastive_loss += (
+                distances.masked_select(different_major_type_different_cn_mask).mean() * 0.5
+            )  # slight multiplier as it is not immediately clear that they should be apart
+        # same cell types across different CNs should be in 1 cluster (shared cell type meaning)
+        if same_major_type_different_cn_mask.sum() > 0:
+            contrastive_loss += (
+                -distances.masked_select(same_major_type_different_cn_mask).mean() * 0.5
+            )  # slight multiplier as it is not immediately clear that they should be similar
+        contrastive_loss = contrastive_loss * self.contrastive_weight
+
+        is_steady_state = False
+        # update similarity loss history
+        if len(self.similarity_loss_history) > self.steady_state_window:
+            recent_history = self.similarity_loss_history[-self.steady_state_window :]
+            variation = np.std(recent_history) / (np.mean(recent_history) + 1e-10)
+            is_steady_state = variation < self.steady_state_tolerance
+
+        if is_steady_state and self.similarity_active:
+            # Deactivate similarity loss when it reaches steady state
+            self.similarity_active = False
+        elif not self.similarity_active and self.global_step % 50 == 0:
+            # Check if we should reactivate similarity loss
+            if len(self.history["train_similarity_loss"]) > 50:
+                recent_loss = np.mean(self.history["train_similarity_loss"][-50:])
+                if recent_loss > self.reactivation_threshold:
+                    self.similarity_active = True
+                    self.similarity_weight = 1000  # Reset weight to a lower value for reactivation
+
+        # Apply similarity loss if active
+        if self.similarity_active:
+            similarity_loss_raw = torch.sum(distances * (-same_cn_mask.float())) / (
+                torch.sum(-same_cn_mask.float()) + 1e-10
+            )
+            ratio = self.similarity_weight / 1000  # Normalize for plotting
+            similarity_loss = similarity_loss_raw * self.similarity_weight
+        else:
+            similarity_loss_raw = torch.tensor(0.0).to(device)
+            ratio = 0.0
+            similarity_loss = torch.tensor(0.0).to(device)
+
+        # Update history for similarity loss
+        self.similarity_loss_history.append(similarity_loss_raw.item())
+        self.active_similarity_loss_active_history.append(self.similarity_active)
+        self.similarity_loss_all_history.append(similarity_loss.item())
+
+        # Calculate total loss
         total_loss = (
-            reconstruction_loss
+            rna_loss_output.loss
+            + protein_loss_output.loss
             + contrastive_loss
+            + adv_loss
             + matching_loss
             + similarity_loss
-            # + adv_loss
-            # + diversity_loss
+            + diversity_loss
         )
-        # Log losses and update history
-        self.log(
-            "train_similarity_loss_raw", similarity_loss_raw.item(), on_epoch=False, on_step=True
-        )
+
+        # Add other info to history
+        self.history["step"].append(self.global_step)
+        self.history["timestamp"].append(datetime.now().timestamp())
+        self.history["epoch"].append(self.current_epoch)
         self.history["train_similarity_loss_raw"].append(similarity_loss_raw.item())
-
-        self.log("train_similarity_weight", current_similarity_weight, on_epoch=False, on_step=True)
-        self.history["train_similarity_weight"].append(current_similarity_weight)
-
-        self.log("train_similarity_weighted", similarity_loss.item(), on_epoch=False, on_step=True)
         self.history["train_similarity_weighted"].append(similarity_loss.item())
+        self.history["train_similarity_weight"].append(self.similarity_weight)
+        self.history["train_similarity_ratio"].append(ratio)
 
-        self.log("train_similarity_loss", similarity_loss.item(), on_epoch=False, on_step=True)
-        self.history["train_similarity_loss"].append(similarity_loss.item())
-
-        similarity_ratio = similarity_loss.item() / (total_loss.item() + 1e-8)
-        self.log("train_similarity_ratio", similarity_ratio, on_epoch=False, on_step=True)
-        self.history["train_similarity_ratio"].append(similarity_ratio)
-
-        self.log(
-            "train_rna_reconstruction_loss", rna_loss_output.loss, on_epoch=False, on_step=True
+        # Log training metrics
+        log_training_metrics(
+            self,
+            rna_loss_output,
+            protein_loss_output,
+            contrastive_loss,
+            matching_loss,
+            similarity_loss,
+            total_loss,
+            adv_loss,
+            diversity_loss,
         )
-        self.history["train_rna_reconstruction_loss"].append(rna_loss_output.loss.item())
 
-        self.log(
-            "train_protein_reconstruction_loss",
-            protein_loss_output.loss,
-            on_epoch=False,
-            on_step=True,
+        # Log step metrics (only prints every 10 steps)
+        log_step_metrics(
+            self,
+            self.global_step,
+            total_loss,
+            rna_loss_output,
+            protein_loss_output,
+            contrastive_loss,
+            matching_loss,
+            similarity_loss,
         )
-        self.history["train_protein_reconstruction_loss"].append(protein_loss_output.loss.item())
 
-        self.log("train_contrastive_loss", contrastive_loss, on_epoch=False, on_step=True)
-        self.history["train_contrastive_loss"].append(contrastive_loss.item())
-
-        self.log("train_matching_rna_protein_loss", matching_loss, on_epoch=False, on_step=True)
-        self.history["train_matching_rna_protein_loss"].append(matching_loss.item())
-
-        self.log("train_total_loss", total_loss, on_epoch=False, on_step=True)
-        self.history["train_total_loss"].append(total_loss.item())
-
-        self.log("train_adv_loss", adv_loss, on_epoch=False, on_step=True)
-        self.history["train_adv_loss"].append(adv_loss.item())
-
-        self.log("train_diversity_loss", diversity_loss, on_epoch=False, on_step=True)
-        self.history["train_diversity_loss"].append(diversity_loss.item())
-
-        if self.global_step % 10 == 0:  # Print every 10 steps
-            print(f"\nStep {self.global_step} - Current losses:")
-            print(f"Total loss: {total_loss.item():.4f}")
-            print(f"RNA reconstruction loss: {rna_loss_output.loss.item():.4f}")
-            print(f"Protein reconstruction loss: {protein_loss_output.loss.item():.4f}")
-            print(f"Contrastive loss: {contrastive_loss.item():.4f}")
-            print(f"Matching loss: {matching_loss.item():.4f}")
-            print(f"Similarity loss: {similarity_loss.item():.4f}")
-            print(f"History size: {len(self.history['train_total_loss'])}")
-
-        # self.saved_model = False if (self.current_epoch % 49 == 0) else True
-        # if self.current_epoch % 50 == 0 and self.saved_model:
-        #     print('sved model')
-        #     rna_vae.save(save_dir, prefix=f'batch_{self.current_epoch}_', save_anndata=False, overwrite=True)
-        #     self.saved_model =True
         return total_loss
 
     def _get_protein_batch(self, batch):
-        indices = (
-            batch["labels"].detach().cpu().numpy().flatten()
-        )  # Assuming batch contains indices
+        indices = batch["labels"].detach().cpu().numpy().flatten()
         indices = np.sort(indices)
 
         protein_data = self.protein_vae.adata[indices]
+        X = protein_data.X
+        if issparse(X):
+            X = X.toarray()
+        X = torch.tensor(X, dtype=torch.float32).to(device)
+        batch_indices = torch.tensor(protein_data.obs["_scvi_batch"].values, dtype=torch.long).to(
+            device
+        )
+        archetype_vec = torch.tensor(
+            protein_data.obsm["archetype_vec"].values, dtype=torch.float32
+        ).to(device)
+
         protein_batch = {
-            "X": torch.tensor(
-                protein_data.X.toarray() if issparse(protein_data.X) else protein_data.X
-            ).to(device),
-            "batch": torch.tensor(protein_data.obs["_scvi_batch"].values, dtype=torch.long).to(
-                device
-            ),
+            "X": X,
+            "batch": batch_indices,
             "labels": indices,
-            "archetype_vec": protein_data.obsm["archetype_vec"],
+            "archetype_vec": archetype_vec,
         }
         return protein_batch
 
@@ -785,25 +618,28 @@ class DualVAETrainingPlan(TrainingPlan):
         indices = batch["labels"].detach().cpu().numpy().flatten()
         indices = np.sort(indices)
         rna_data = self.rna_vae.adata[indices]
+        X = rna_data.X
+        if issparse(X):
+            X = X.toarray()
+        X = torch.tensor(X, dtype=torch.float32).to(device)
+        batch_indices = torch.tensor(rna_data.obs["_scvi_batch"].values, dtype=torch.long).to(
+            device
+        )
+        archetype_vec = torch.tensor(rna_data.obsm["archetype_vec"].values, dtype=torch.float32).to(
+            device
+        )
+
         rna_batch = {
-            "X": torch.tensor(rna_data.X.toarray() if issparse(rna_data.X) else rna_data.X).to(
-                device
-            ),
-            "batch": torch.tensor(rna_data.obs["_scvi_batch"].values, dtype=torch.long).to(device),
+            "X": X,
+            "batch": batch_indices,
             "labels": indices,
-            "archetype_vec": rna_data.obsm["archetype_vec"],
+            "archetype_vec": archetype_vec,
         }
         return rna_batch
 
     def on_train_epoch_end(self):
         """Called at the end of each training epoch."""
-        print(f"\nEpoch {self.current_epoch} completed")
-        print(
-            f"Average training loss: {np.mean(self.history['train_total_loss'][-self.trainer.num_training_batches:]):.4f}"
-        )
-        if len(self.history["validation_total_loss"]) > 0:
-            print(f"Latest validation loss: {self.history['validation_total_loss'][-1]:.4f}")
-        print(f"History sizes: {[k + ': ' + str(len(v)) for k, v in self.history.items()]}")
+        log_epoch_end(self)
 
     def get_history(self):
         """Return the training history."""
@@ -823,8 +659,6 @@ SCVI.setup_anndata(
     adata_prot_subset,
     labels_key="index_col",
 )
-
-# %%
 
 
 # %%
@@ -859,10 +693,10 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
         save_dir="my_logs", name=f"experiment_name_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
 
-    # Set up training parameters
+    # Set up training parameters with smaller batch size
     train_kwargs = {
         "max_epochs": n_epochs,
-        "batch_size": batch_size,
+        "batch_size": batch_size,  # Use the passed batch_size parameter
         "train_size": 0.9,
         "validation_size": 0.1,
         "early_stopping": False,
@@ -870,6 +704,8 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
         "logger": logger,
         "accelerator": "gpu" if use_gpu and torch.cuda.is_available() else "cpu",
         "devices": 1,
+        "gradient_clip_val": 1.0,  # Add gradient clipping
+        "accumulate_grad_batches": 4,  # Add gradient accumulation
     }
 
     # Create training plan with both VAEs
@@ -896,6 +732,25 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
     protein_vae_new.is_trained_ = True
 
     return rna_vae_new, protein_vae_new
+
+
+# %%
+def select_gene_likelihood(adata):
+    """Select an appropriate gene likelihood based on the data."""
+    if issparse(adata.X):
+        # For sparse matrices, assume it's count data (common in scRNA-seq)
+        return "zinb"
+    elif adata.X.min() >= 0:
+        # If all values are non-negative
+        if np.allclose(np.round(adata.X), adata.X):
+            # If data is integer-valued (like counts)
+            return "zinb"
+        else:
+            # If data contains non-integer values
+            return "normal"
+    else:
+        # For data with negative values
+        return "normal"
 
 
 # %%
@@ -940,8 +795,8 @@ print("\nStarting training...")
 rna_vae_new, protein_vae_new = train_vae(
     rna_vae=rna_vae,
     protein_vae=protein_vae,
-    n_epochs=1,  # You can modify these parameters as needed
-    batch_size=128,
+    n_epochs=2,  # Train for only 2 epochs
+    batch_size=32,  # Smaller batch size for memory efficiency
     lr=1e-3,
     use_gpu=True,
     **training_kwargs,
@@ -1269,9 +1124,3 @@ accuracy = matches.sum() / len(matches)
 print(f"Accuracy of cell type matching between modalities: {accuracy:.4f}")
 
 # %%
-# Additional visualizations using PCA
-sc.pp.pca(combined_latent)
-sc.pl.pca(combined_latent, color="modality", projection="3d")
-sc.pl.pca(combined_latent, color="modality", components=["3,4,5"], projection="3d")
-sc.pl.pca(combined_latent, color="modality", components=["1,2,3"], projection="3d")
-sc.pl.pca(combined_latent, color="modality", components=["6,7,8"], projection="3d")

@@ -14,37 +14,26 @@
 
 # %%
 
-import os
-import sys
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Set working directory to project root
-os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import copy
 import importlib
 import os
-import re
 import sys
 
-import anndata
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import scvi
 import seaborn as sns
-from anndata import AnnData
-from kneed import KneeLocator
+from anndata import AnnData, concat
 from matplotlib import pyplot as plt
 from py_pcha import PCHA
 from scipy.sparse import issparse
 from scipy.spatial.distance import cdist
 from scipy.stats import zscore
-from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score
 from tqdm import tqdm
+
+# Add repository root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bar_nick_utils
 import covet_utils
@@ -65,35 +54,33 @@ from bar_nick_utils import (
     preprocess_rna,
     reorder_rows_to_maximize_diagonal,
 )
-from covet_utils import compute_covet
 
-plot_flag = True
-# computationally figure out which ones are best
+# Set random seed for reproducibility
 np.random.seed(8)
 
+# Global variables
+plot_flag = True
 
-# %%
-
+# Load data
 file_prefixes = ["preprocessed_adata_rna_", "preprocessed_adata_prot_"]
 folder = "CODEX_RNA_seq/data/processed_data"
 
-# Load the latest files (example)
+# Load the latest files
 latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
 adata_1_rna = sc.read(latest_files["preprocessed_adata_rna_"])
 adata_2_prot = sc.read(latest_files["preprocessed_adata_prot_"])
 
-num_rna_cells = 6000
-num_protein_cells = 20000
-# num_rna_cells = num_protein_cells= 1000
+# Subsample data
+num_rna_cells = 80000
+num_protein_cells = 80000
 subsample_n_obs_rna = min(adata_1_rna.shape[0], num_rna_cells)
 subsample_n_obs_protein = min(adata_2_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_1_rna, n_obs=subsample_n_obs_rna)
 sc.pp.subsample(adata_2_prot, n_obs=subsample_n_obs_protein)
 
-
 original_protein_num = adata_2_prot.X.shape[1]
 
-
+# Compute spatial neighbors
 sc.pp.neighbors(adata_2_prot, use_rep="spatial_location")
 
 connectivities = adata_2_prot.obsp["connectivities"]
@@ -104,84 +91,57 @@ assert np.array_equal(
 if plot_flag:
     sns.heatmap(connectivities.todense()[:1000, :1000])
 
-
-# %%
-from scipy.sparse import issparse
-
+# Compute neighbor means
 neighbor_sums = connectivities.dot(adata_2_prot.X)  # get the sum of all neighbors
-# neighbor_means = neighbor_sums/(0.00001+neighbor_sums.sum(1))[:,np.newaxis] # normalize
-# if statement to check for dense vector, if dense to to array if nnumpy array do nothing
 if issparse(neighbor_sums):
     my_array = neighbor_sums.toarray()
 neighbor_means = np.asarray(neighbor_sums / connectivities.sum(1))
 if plot_flag:
-    # sns.heatmap(adata_2_prot.obsp['distances'].todense()[:1000,:1000])
     plt.show()
+
+# Compute spatial neighbors with cutoff
 sc.pp.neighbors(
     adata_2_prot, use_rep="spatial_location", key_added="spatial_neighbors", n_neighbors=15
 )
 
 distances = adata_2_prot.obsp["spatial_neighbors_distances"].data
-log_transformed_distances = (
-    distances + 1
-)  # since the distances are not normally distributed, log-transform them
+log_transformed_distances = distances + 1  # log-transform distances
 
-sns.histplot(log_transformed_distances)
-plt.title("Distribution of spatial distances between protein neighbors before cutoff")
-plt.show()
+if plot_flag:
+    sns.histplot(log_transformed_distances)
+    plt.title("Distribution of spatial distances between protein neighbors before cutoff")
+    plt.show()
+
+# Apply distance cutoff
 distances_mean = log_transformed_distances.mean()
 distances_std = log_transformed_distances.std()
-
-one_std_dev = distances_mean + distances_std
-# Zero out neighbors in the connectivity matrix and remove them from the distances matrix if their distance is more than 2 standard deviations above the mean
 two_std_dev = distances_mean + 2 * distances_std
 
-# Get the indices of the neighbors to be zeroed out
 indices_to_zero_out = np.where(adata_2_prot.obsp["spatial_neighbors_distances"].data > two_std_dev)[
     0
 ]
-
-# added this because indices to zero out were greater than data_2_prot.obsp['spatial_neighbors_connectivities'].data.shape[0]
-# only keeps indices less than indices
 indices_to_zero_out = indices_to_zero_out[
     indices_to_zero_out < adata_2_prot.obsp["spatial_neighbors_connectivities"].data.shape[0]
 ]
 
-# Zero out the corresponding entries in the connectivity matrix
-# adata_2_prot.obsp['spatial_neighbors_connectivities'].data[indices_to_zero_out] = 0
-# adata_2_prot.obsp['spatial_neighbors_distances'].data[indices_to_zero_out] = 0
-
-# TODO look into this
 adata_2_prot.obsp["spatial_neighbors_connectivities"].data[indices_to_zero_out] = 0
 adata_2_prot.obsp["spatial_neighbors_distances"].data[indices_to_zero_out] = 0
-# Recompute the connectivity matrix
-sns.histplot(adata_2_prot.obsp["spatial_neighbors_distances"].data)
-plt.title("Distribution of spatial distances between protein neighbors after cutoff")
-plt.show()
-# todo  I am using the data as if its notmarl and its not, so I need to see how to remove the tail in a different way
 
+if plot_flag:
+    sns.histplot(adata_2_prot.obsp["spatial_neighbors_distances"].data)
+    plt.title("Distribution of spatial distances between protein neighbors after cutoff")
+    plt.show()
 
-# %%
 print(
     indices_to_zero_out.max(), adata_2_prot.obsp["spatial_neighbors_connectivities"].data.shape[0]
 )
-
-
-# %%
 print(
     len(adata_2_prot.obsp["spatial_neighbors_distances"].data),
     len(adata_2_prot.obsp["spatial_neighbors_connectivities"].data),
 )
 
-
-# %%
-# (different samples)
-# since we have different samples, we need different final labels after the clustering
-# Standardize the data
-normalized_data = zscore(
-    neighbor_means, axis=0
-)  # each cell we get the mean of the features of its neighbors
-
+# Compute cell neighborhoods
+normalized_data = zscore(neighbor_means, axis=0)
 
 temp = AnnData(normalized_data)
 temp.obs = adata_2_prot.obs
@@ -189,76 +149,54 @@ sc.pp.pca(temp)
 sc.pp.neighbors(temp)
 sc.tl.leiden(temp, resolution=0.1, key_added="CN")
 num_clusters = len(adata_2_prot.obs["CN"].unique())
-palette = sns.color_palette(
-    "tab10", num_clusters
-)  # "tab10" is a good color map, you can choose others too
-adata_2_prot.uns["spatial_clusters_colors"] = palette.as_hex()  # Save as hex color codes
+palette = sns.color_palette("tab10", num_clusters)
+adata_2_prot.uns["spatial_clusters_colors"] = palette.as_hex()
 
-
-# %%
 if issparse(adata_2_prot.X):
     adata_2_prot.X = adata_2_prot.X.toarray()
 
-
-# %%
-
-plt.figure(figsize=(10, 5))
-plt.subplot(1, 2, 1)
-plt.title("Mean Protein Expression of Cell Neighborhoods")
-sns.heatmap(
-    neighbor_means
-)  # less noisy because we mean, makes sense as we made sure each cell is of same cell type
-plt.subplot(1, 2, 2)
-plt.title("Raw Protein Expression per Cell")
-sns.heatmap(adata_2_prot.X)
-plt.show()
-
-
-# %%
-# (different adata technique)
+# Plot neighbor means
 if plot_flag:
-    # merge the CN to the protein data
-    fig, ax = plt.subplots()
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.title("Mean Protein Expression of Cell Neighborhoods")
+    sns.heatmap(neighbor_means)
+    plt.subplot(1, 2, 2)
+    plt.title("Raw Protein Expression per Cell")
+    sns.heatmap(adata_2_prot.X)
+    plt.show()
 
+# Plot spatial clusters
+if plot_flag:
+    fig, ax = plt.subplots()
     sc.pl.scatter(
         adata_2_prot,
         x="X",
         y="Y",
-        color="CN",  # got this CN from kmeans
+        color="CN",
         title="Cluster cells by their CN, can see the different CN in different regions, \nthanks to the different B cell types in each region",
-        ax=ax,  # Use the ax created above
-        show=False,  # Prevent scanpy from showing the plot immediately
+        ax=ax,
+        show=False,
     )
-    # for x in horizontal_splits[1:-1]:  # Exclude the edges to avoid border doubling
-    #     ax.axvline(x=x, color='black', linestyle='--')
-    # for y in vertical_splits[1:-1]:  # Exclude the edges to avoid border doubling
-    #     ax.axhline(y=y, color='black', linestyle='--')
-    # plt.show()
 
-    neighbor_adata = anndata.AnnData(neighbor_means)
-if plot_flag:
+    neighbor_adata = AnnData(neighbor_means)
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    sns.heatmap(
-        neighbor_adata.X
-    )  # less noisy because we mean, makes sense as we made sure each cell is of same cell type
+    sns.heatmap(neighbor_adata.X)
     plt.title("convet sqrt")
     plt.subplot(1, 2, 2)
     sns.heatmap(adata_2_prot.X.todense() if issparse(adata_2_prot.X) else adata_2_prot.X)
     plt.title("Proteins expressions of each cell")
     plt.show()
-    # rna no longer has the CN, using the protein
-    neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"])
 
-    # rna no longer has the CN, using the protein
     neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"])
     sc.pp.pca(neighbor_adata)
     sc.pp.neighbors(neighbor_adata)
     sc.tl.umap(neighbor_adata)
     sc.pl.umap(neighbor_adata, color="CN", title="UMAP of CN embedding")
 
-    # making sure the CN and the protein are distinct
-    adata_prot_cn_concat = anndata.concat(
+    # Combine protein and CN data
+    adata_prot_cn_concat = concat(
         [adata_2_prot, neighbor_adata], join="outer", label="modality", keys=["Protein", "CN"]
     )
     X = (
@@ -270,7 +208,6 @@ if plot_flag:
     adata_prot_cn_concat.X = X
     sc.pp.pca(adata_prot_cn_concat)
     sc.pp.neighbors(adata_prot_cn_concat)
-if plot_flag:
     sc.tl.umap(adata_prot_cn_concat)
     sc.pl.umap(
         adata_prot_cn_concat,
@@ -289,15 +226,7 @@ if plot_flag:
         ],
     )
 
-
-# %%
-
-
-# %%
-# Assuming `adata_prot` is the original AnnData object
-# And `neighbor_means` is the new matrix to be concatenated
-# different adata
-
+# Add CN features to protein data
 new_feature_names = [f"CN_{i}" for i in adata_2_prot.var.index]
 if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
     new_X = np.hstack([adata_2_prot.X, neighbor_means])
@@ -307,62 +236,20 @@ else:
     new_X = adata_2_prot.X
     new_vars = adata_2_prot.var
 
-adata_2_prot = anndata.AnnData(
+adata_2_prot = AnnData(
     X=new_X,
-    obs=adata_2_prot.obs.copy(),  # Keep the same observation metadata
-    var=new_vars,  # Keep the same variable metadata
-    uns=adata_2_prot.uns.copy(),  # Keep the same unstructured data #todo brin back?
-    obsm=adata_2_prot.obsm.copy(),  # Keep the same observation matrices ? #todo bring back?
-    # varm=adata_prot.varm.copy(), # Keep the same variable matrices
-    # layers=adata_2_prot.layers.copy()  # Keep the same layers
+    obs=adata_2_prot.obs.copy(),
+    var=new_vars,
+    uns=adata_2_prot.uns.copy(),
+    obsm=adata_2_prot.obsm.copy(),
 )
 adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
     "CN"
 ] * neighbor_means.shape[1]
-sc.pp.pca(adata_2_prot)  # rerun PCA
+sc.pp.pca(adata_2_prot)
 print(f"New adata shape (protein features + cell neighborhood vector): {adata_2_prot.shape}")
-# adata_2_prot_new.var['feature_type'] = ['protein'] * original_protein_num + ['CN'] * neighbor_adata.shape[1]
-# plot pca variance using scanpy
-# remove pca
-# if 'X_pca' in adata_2_prot_new.obsm:
-#    adata_2_prot_new.obsm.pop('X_pca')
-#  set new highly variable genes
-# adata_2_prot_new.var['highly_variable'] = True
-# adata_2_prot_new.obs['CN'] = adata_2_prot.uns['CN']
-# adata_2_prot_new.X = (zscore(adata_2_prot_new.X, axis=0))
-# sc.pp.highly_variable_genes(adata_2_prot_new)
-# sc.pp.pca(adata_2_prot_new)
-# sc.pp.neighbors(adata_2_prot_new,n_neighbors=15)
-# sc.tl.umap(adata_2_prot_new)
-# sc.pl.umap(adata_2_prot_new, color='CN', title='UMAP of CN embedding to make sure they are not mixed')
-# todo make sure no more things to remove
-# new_pca = adata_2_prot_new.obsm['X_pca']
-# sns.heatmap(adata_2_prot_new.X)
-# sc.pl.pca_variance_ratio(adata_2_prot_new, log=True, n_pcs=50, save='.pdf')
-# sc.pp.pca(adata_2_prot_new)
-# if 'adata_2_prot_old' not in globals():
-#    adata_2_prot_old = adata_2_prot.copy()
-# print(f"New adata shape (protein features + cell neighborhood vector): {adata_2_prot_new.shape}")
-# make sure adata2 prot is float32 and dense mat
-# adata_2_prot_new.X = adata_2_prot_new.X.astype('float32')
-# adata_2_prot_new.X = adata_2_prot_new.X.toarray() if issparse(adata_2_prot_new.X) else adata_2_prot_new.X
-# adata_2_prot = adata_2_prot_new # todo uncomment this
 
-
-# %%
-# if plot_flag:
-#     sc.pl.pca(adata_2_prot_new, color='cell_types')
-#     sc.pp.neighbors(adata_2_prot_new, n_neighbors=5, use_rep='X_pca')
-#     sc.tl.umap(adata_2_prot_new)
-#     sc.pl.umap(adata_2_prot_new, color='cell_types')
-
-
-# %%
-# # End of CN concatenation to protein features
-
-
-# %%
-# different rna, protein data analysis
+# Compute PCA and UMAP for both modalities
 sc.pp.pca(adata_1_rna)
 sc.pp.pca(adata_2_prot)
 sc.pp.neighbors(adata_1_rna, key_added="original_neighbors", use_rep="X_pca")
@@ -397,43 +284,7 @@ if plot_flag:
         title=["Protein UMAp major cell types", "Protein UMAP major cell types"],
     )
 
-
-# %%
-
-
-# %%
-# import numpy as np
-# from sklearn.neighbors import NearestNeighbors
-# import networkx as nx
-# from node2vec import Node2Vec
-# # Load your RNA expression data
-# # Assuming 'adata' is your AnnData object
-# X = adata.X
-# # Compute kNN graph
-# nn = NearestNeighbors(n_neighbors=10)
-# nn.fit(X)
-# distances, indices = nn.kneighbors(X)
-# # Create adjacency matrix
-# adj = np.zeros((X.shape[0], X.shape[0]))
-# for i in range(X.shape[0]):
-#     adj[i, indices[i]] = 1
-# # Create a NetworkX graph
-# G = nx.Graph()
-# G.add_nodes_from(range(X.shape[0]))
-# for i in range(X.shape[0]):
-#     for j in indices[i]:
-#         G.add_edge(i, j)
-# # Apply Node2Vec
-# node2vec = Node2Vec(G, dimensions=64, walk_length=30, num_walks=200, workers=4)
-# model = node2vec.fit(window=10, min_count=1, batch_words=4)
-# # Get node embeddings
-# node_embeddings = model.wv.vectors
-# # Use the embeddings for further analysis
-# print(node_embeddings.shape)
-
-
-# %%
-# computing a gene module score
+# Define gene modules
 terminal_exhaustion = [
     "CD3G",
     "FASLG",
@@ -470,6 +321,7 @@ terminal_exhaustion = [
     "GZMB",
     "TOX",
 ]
+
 precursor_exhaustion = [
     "TCF7",
     "MS4A4A",
@@ -493,6 +345,7 @@ precursor_exhaustion = [
     "SLAMF6",
     "LY6E",
 ]
+
 cd8_t_cell_activation = [
     "CD69",
     "CCR7",
@@ -521,60 +374,25 @@ cd8_t_cell_activation = [
     "TNFRSF18",
 ]
 
-
-# %%
+# Convert gene names to uppercase
 adata_1_rna.var_names = adata_1_rna.var_names.str.upper()
 adata_2_prot.var_names = adata_2_prot.var_names.str.upper()
 
-
-# %%
+# Compute gene module scores
 sc.tl.score_genes(
     adata_1_rna, gene_list=terminal_exhaustion, score_name="terminal_exhaustion_score"
 )
 
-
-# %%
-plot_flag = True
 if plot_flag:
     sc.pl.umap(adata_1_rna, color="terminal_exhaustion_score", cmap="viridis")
 
-
-# %%
-adata_1_rna
-
-
-# %%
-# ### analysis to get to scatter plot
-
-
-# %%
-# # different adata analysis
-# adata_2_prot_first_110_vars = adata_2_prot[:, adata_2_prot.var_names[:110]].copy()
-# adata_2_prot_second_110_vars = adata_2_prot[:, adata_2_prot.var_names[110:]].copy()
-# sc.pp.pca(adata_2_prot_first_110_vars)
-# sc.pp.pca(adata_2_prot_second_110_vars)
-# # plot umap each separately
-# sc.pp.neighbors(adata_2_prot_first_110_vars)
-# sc.tl.umap(adata_2_prot_first_110_vars)
-# sc.pp.neighbors(adata_2_prot_first_110_vars)
-# sc.tl.umap(adata_2_prot_first_110_vars)
-# sc.pp.neighbors(adata_2_prot_second_110_vars)
-# sc.tl.umap(adata_2_prot_second_110_vars)
-
-# if plot_flag:
-#     sc.pl.embedding(adata_2_prot_first_110_vars, basis='X_umap', color=[ 'major_cell_types','cell_types'], title=['Protein UMAP first 110 vars major cell types','Protein UMAP first 110 vars major cell types'])
-#     sc.pl.embedding(adata_2_prot_second_110_vars, basis='X_umap', color=[ 'major_cell_types','cell_types'], title=['Protein UMAP second 110 vars major cell types','Protein UMAP second 110 vars major cell types'])
-
-
-# %%
-# different rna, protein adata analysis
+# Compute PCA dimensions
 max_possible_pca_dim_rna = min(adata_1_rna.X.shape[1], adata_1_rna.X.shape[0])
 max_possible_pca_dim_prot = min(adata_2_prot.X.shape[1], adata_2_prot.X.shape[0])
 sc.pp.pca(adata_1_rna, n_comps=max_possible_pca_dim_rna - 1)
 sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
-# make PCA explain X% of variance
 
-# going to make pca 25 here just so they have the same number of pca
+# Select PCA components based on variance explained
 max_dim = 50
 variance_ration_selected = 0.75
 
@@ -586,15 +404,14 @@ if n_comps_thresh == 1:
         "n_comps_thresh is 1, this is not good, try to lower the variance_ration_selected"
     )
 real_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])[n_comps_thresh]
-# sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
 sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of rna variance: {n_comps_thresh}\n")
+
 sc.pp.pca(adata_2_prot)
 cumulative_variance_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ration_selected) + 1
 n_comps_thresh = min(n_comps_thresh, max_dim)
 real_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])[n_comps_thresh]
-# sc.pp.pca(adata_2_prot, n_comps=n_comps_thresh)
 sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of protein variance: {n_comps_thresh}")
 if n_comps_thresh == 1:
@@ -602,13 +419,7 @@ if n_comps_thresh == 1:
         "n_comps_thresh is 1, this is not good, try to lower the variance_ration_selected"
     )
 
-
-# %%
-# # Find Archetypes
-
-
-# %%
-# Different adata analysis
+# Find archetypes
 archetype_list_protein = []
 archetype_list_rna = []
 converge = 1e-5
@@ -652,63 +463,20 @@ min_len = min(len(archetype_list_protein), len(archetype_list_rna))
 archetype_list_protein = archetype_list_protein[:min_len]
 archetype_list_rna = archetype_list_rna[:min_len]
 
-
-# %%
-# Plot the Elbow Method for both protein and RNA
+# Plot elbow method results
 if plot_flag:
     plt.figure(figsize=(8, 6))
-    plt.plot(ks, evs_protein, marker="o", label="Protein")
-    plt.plot(ks[: len(evs_rna)], evs_rna, marker="s", label="RNA")
+    plt.plot(range(len(evs_protein)), evs_protein, marker="o", label="Protein")
+    plt.plot(range(len(evs_rna)), evs_rna, marker="s", label="RNA")
     plt.xlabel("Number of Archetypes (k)")
     plt.ylabel("Explained Variance")
     plt.title("Elbow Plot: Explained Variance vs Number of Archetypes")
     plt.legend()
     plt.grid()
 
-
-# %%
-# # different adata analysis
-# archetype_list_protein = []
-
-# archetype_list_rna = []
-# converge = 1e-5
-# min_k = 7  # this is where we set number of archetypes
-# max_k = 8
-# step_size = 1
-
-# evs = []
-# X_protein = adata_2_prot.obsm['X_pca'].T
-# total = (max_k - min_k) / step_size
-# for i, k in tqdm(enumerate(range(min_k, max_k, step_size)), total=total, desc='Protein Archetypes Detection'):
-#     archetype, _, _, _, ev = PCHA(X_protein, noc=k)
-#     evs.append(ev)
-#     archetype_list_protein.append(np.array(archetype).T)
-#     if i > 0 and ev - evs[i - 1] < converge:
-#         print('early stopping')
-#         break
-# evs = []
-# X_rna = adata_1_rna.obsm['X_pca'].T
-
-# for j, k in tqdm(enumerate(range(min_k, max_k, step_size)), total=total, desc='RNA Archetypes Detection'):
-#     if j > i:
-#         break
-#     archetype, _, _, _, ev = PCHA(X_rna, noc=k)
-#     evs.append(ev)
-#     archetype_list_rna.append(np.array(archetype).T)
-#     if j > 0 and ev - evs[j - 1] < converge:
-#         print('early stopping')
-#         break
-# min_len = min([len(archetype_list_protein), len(archetype_list_rna)])
-# archetype_list_protein = archetype_list_protein[:min_len]
-# archetype_list_rna = archetype_list_rna[:min_len]
-
-
-# %%
-# different sample analysis
+# Get cell type lists
 minor_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["cell_types"])))
 major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
-
-# have to do this above two lines for rna too
 minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
 major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 
@@ -723,8 +491,7 @@ major_cell_types_amount_rna = [
 assert set(adata_1_rna.obs["major_cell_types"]) == set(adata_2_prot.obs["major_cell_types"])
 archetype_proportion_list_rna, archetype_proportion_list_protein = [], []
 
-# i made sure that archetype prot and archetype rna have the same dimensions but still not working
-
+# Compute archetype proportions
 for archetypes_prot, archetypes_rna in tqdm(
     zip(archetype_list_protein, archetype_list_rna),
     total=len(archetype_list_protein),
@@ -737,17 +504,11 @@ for archetypes_prot, archetypes_rna in tqdm(
         adata_1_rna.obsm["X_pca"], archetypes_rna
     )
 
-    archetypes_dim_prot = archetypes_prot.shape[
-        1
-    ]  # these dimensions are not 25 anymore, made them 50
+    archetypes_dim_prot = archetypes_prot.shape[1]
     archetype_num_prot = archetypes_prot.shape[0]
-    # need to do the above two lines for rna too
-
-    # archetype num prot and rna should be the same?
-    archetypes_dim_rna = archetypes_rna.shape[1]  # these dimensions are 50
+    archetypes_dim_rna = archetypes_rna.shape[1]
     archetype_num_rna = archetypes_rna.shape[0]
 
-    # could it be because the minor and major cell types have different lengths for protein and rna?
     prot_arch_prop = pd.DataFrame(
         np.zeros((archetype_num_prot, len(major_cell_types_list_prot))),
         columns=major_cell_types_list_prot,
@@ -768,7 +529,6 @@ for archetypes_prot, archetypes_rna in tqdm(
         ).T
         df_rna = df_rna.groupby("major_cell_types")["weight"].sum()[major_cell_types_list_rna]
         df_prot = df_prot.groupby("major_cell_types")["weight"].sum()[major_cell_types_list_prot]
-        # normalize by the amount of major cell types
         rna_arch_prop.loc[curr_archetype, :] = df_rna.values / major_cell_types_amount_rna
         prot_arch_prop.loc[curr_archetype, :] = df_prot.values / major_cell_types_amount_prot
 
@@ -779,19 +539,13 @@ for archetypes_prot, archetypes_rna in tqdm(
     archetype_proportion_list_rna.append(rna_arch_prop.copy())
     archetype_proportion_list_protein.append(prot_arch_prop.copy())
 
-
-# %%
-# lengths of major cell type amount rna and protein are the same
 print(major_cell_types_amount_rna)
 print(major_cell_types_amount_prot)
 
-
-# %%
-# plotting the results of the lowest num of archetypes
+# Plot archetype proportions
 if plot_flag:
     fig = plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    # sns.heatmap(reorder_rows_to_maximize_diagonal(archetype_proportion_list_rna[0])[0])
     sns.heatmap((archetype_proportion_list_rna[0]), cbar=False)
     plt.xticks()
     plt.title("RNA Archetypes")
@@ -799,7 +553,6 @@ if plot_flag:
     plt.ylabel("Archetypes")
     plt.subplot(1, 2, 2)
     plt.title("Protein Archetypes")
-    # sns.heatmap(reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[0])
     sns.heatmap((archetype_proportion_list_protein[0]), cbar=False)
     plt.suptitle("Non-Aligned Archetypes Profiles")
     plt.yticks([])
@@ -810,12 +563,9 @@ if plot_flag:
     new_order_2 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[1]
     data1 = archetype_proportion_list_rna[0].iloc[new_order_1, :]
     data2 = archetype_proportion_list_protein[0].iloc[new_order_2, :]
-    # this just uses simple diagonal optimization for each one separatly, this is not final matching
     plot_archetypes_matching(data1, data2)
 
-
-# %%
-# todo find_best_pair_by_row_matching() find a mathing which has too many archetypes, should check it later
+# Find best matching archetypes
 (
     best_num_or_archetypes_index,
     best_total_cost,
@@ -833,38 +583,28 @@ print(f"Best total matching cost: {best_total_cost}")
 print(f"Row indices (RNA): {best_rna_archetype_order}")
 print(f"Matched row indices (Protein): {best_protein_archetype_order}")
 
-
-# %%
-# reorder the archetypes based on the best matching so the archtypes across modalities are aligned
+# Reorder archetypes based on best matching
 best_archetype_rna_prop = (
     archetype_proportion_list_rna[best_num_or_archetypes_index]
     .iloc[best_rna_archetype_order, :]
     .reset_index(drop=True)
 )
-# best_archetype_rna_prop = pd.DataFrame(best_archetype_rna_prop)
 best_archetype_prot_prop = (
     archetype_proportion_list_protein[best_num_or_archetypes_index]
     .iloc[best_protein_archetype_order, :]
     .reset_index(drop=True)
 )
-# best_archetype_prot_prop = pd.DataFrame(best_archetype_prot_prop)
 if plot_flag:
     plot_archetypes_matching(best_archetype_rna_prop, best_archetype_prot_prop, 8)
 
-
-# %%
 best_archetype_prot_prop.idxmax(axis=0)
 
-
-# %%
 if plot_flag:
-    # show the proportion of each cell type in the archetypes, for both modalities, to see the overlap higer overlap is better
     best_archetype_prot_prop.idxmax(axis=0).plot(
         kind="bar", color="red", hatch="\\", label="Protein"
     )
     best_archetype_rna_prop.idxmax(axis=0).plot(kind="bar", alpha=0.5, hatch="/", label="RNA")
     plt.title("show overlap of cell types proportions in archetypes")
-    # add legend
     plt.legend()
     plt.xlabel("Major Cell Types")
     plt.ylabel("Proportion")
@@ -877,13 +617,9 @@ if plot_flag:
         num_trials=100,
     )
 
-
-# %%
 best_protein_archetype_order
 
-
-# %%
-# get all cells archetype vec and see how they match
+# Get cell archetype vectors
 ordered_best_rna_archetype = archetype_list_rna[best_num_or_archetypes_index][
     best_protein_archetype_order, :
 ]
@@ -897,6 +633,7 @@ cells_archetype_vec_prot = get_cell_representations_as_archetypes_cvxpy(
     adata_2_prot.obsm["X_pca"], ordered_best_protein_archetype
 )
 
+# Add archetype vectors to AnnData objects
 adata_1_rna.obsm["archetype_vec"] = pd.DataFrame(
     cells_archetype_vec_rna,
     index=adata_1_rna.obs.index,
@@ -910,21 +647,17 @@ adata_2_prot.obsm["archetype_vec"] = pd.DataFrame(
 adata_1_rna.obsm["archetype_vec"].columns = adata_1_rna.obsm["archetype_vec"].columns.astype(str)
 adata_2_prot.obsm["archetype_vec"].columns = adata_2_prot.obsm["archetype_vec"].columns.astype(str)
 
+# Add archetype labels
 adata_1_rna.obs["archetype_label"] = pd.Categorical(np.argmax(cells_archetype_vec_rna, axis=1))
 adata_2_prot.obs["archetype_label"] = pd.Categorical(np.argmax(cells_archetype_vec_prot, axis=1))
 adata_1_rna.uns["archetypes"] = ordered_best_rna_archetype
 adata_2_prot.uns["archetypes"] = ordered_best_protein_archetype
+
+# Evaluate distance metrics
 metrics = ["euclidean", "cityblock", "cosine", "correlation", "chebyshev"]
 evaluate_distance_metrics(cells_archetype_vec_rna, cells_archetype_vec_prot, metrics)
 
-
-# %%
-# add the best matching archetype to the metadata
-adata_1_rna.obs["archetype_label"] = pd.Categorical(np.argmax(cells_archetype_vec_rna, axis=1))
-adata_2_prot.obs["archetype_label"] = pd.Categorical(np.argmax(cells_archetype_vec_prot, axis=1))
-
-
-# %%
+# Plot archetype weights
 if plot_flag:
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
@@ -935,7 +668,6 @@ if plot_flag:
     plt.yticks([])
     plt.ylabel("Archetypes")
     plt.subplot(1, 2, 2)
-
     plt.ylabel("Archetypes")
     plt.title("Protein Archetype Weights vs Cell Types")
     sns.heatmap(pd.DataFrame(best_archetype_prot_prop).iloc[row_order], cbar=False)
@@ -945,239 +677,17 @@ if plot_flag:
     )
     plt.yticks([])
     plt.xticks(rotation=45)
-
     plt.show()
 
-
-# %%
-plt.figure(figsize=(10, 5))
-plt.subplot(1, 2, 1)
-plt.title("RNA Archetype Weights vs Cell Types")
-plt.ylabel("Archetypes")
-_, row_order = reorder_rows_to_maximize_diagonal(best_archetype_rna_prop)
-sns.heatmap(pd.DataFrame(best_archetype_rna_prop).iloc[row_order], cbar=False)
-plt.yticks([])
-plt.ylabel("Archetypes")
-plt.subplot(1, 2, 2)
-
-plt.ylabel("Archetypes")
-plt.title("Protein Archetype Weights vs Cell Types")
-sns.heatmap(pd.DataFrame(best_archetype_prot_prop).iloc[row_order], cbar=False)
-plt.ylabel("Archetypes")
-# plt.suptitle('The more similar the better, means that the archetypes are aligned in explaining different cell types')
-plt.suptitle(
-    "Archetype Weight Distribution Across Cell Types (Higher Similarity = Better Alignment)"
-)
-plt.yticks([])
-
-plt.show()
-
-
-# %%
-
-archetype_distances = cdist(cells_archetype_vec_rna, cells_archetype_vec_prot, metric="correlation")
-if plot_flag:
-    plt.figure(figsize=(15, 7))
-    plt.subplot(1, 2, 1)
-    plt.title("RNA vs Protein Archetype Correlation Matrix")
-    sns.heatmap(np.log1p(archetype_distances[:1000, :1000]))
-    plt.xlabel("Protein Archetypes")
-    plt.ylabel("RNA Archetypes")
-    plt.subplot(1, 2, 2)
-    plt.title("RNA vs Protein Archetype Minimum Distance Matches")
-    min_values_highlight = archetype_distances.copy()
-    min_values_highlight[
-        archetype_distances.argmin(axis=0), range(len(archetype_distances.argmin(axis=0)))
-    ] = 100
-    sns.heatmap(min_values_highlight[:5000, :5000])
-    plt.xlabel("Protein Archetypes")
-    plt.ylabel("RNA Archetypes")
-    plt.suptitle("Cross-Modality Archetype Similarity Analysis")
-    plt.show()
-
-
-# %%
-if plot_flag:
-    ax = sns.histplot(
-        adata_1_rna.obs,
-        x="archetype_label",
-        hue="major_cell_types",
-        multiple="fill",
-        stat="proportion",
-    )
-    plt.xticks(rotation=45)
-    sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-    plt.title("RNA: Distribution of Major Cell Types per Archetype")
-    plt.show()
-
-    ax = sns.histplot(
-        adata_2_prot.obs,
-        x="archetype_label",
-        hue="major_cell_types",
-        multiple="fill",
-        stat="proportion",
-    )
-    plt.xticks(rotation=45)
-    sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-    plt.title("Protein: Distribution of Major Cell Types per Archetype")
-
-
-# %%
-def plot_scatter(mtx1, mtx2, n_samples):
-    pca = PCA(n_components=2)
-    embeddings_combined = np.vstack((mtx1, mtx2))
-    tsne_results = pca.fit_transform(embeddings_combined)
-    # tsne_results = pca.fit_transform(embeddings_combined)
-
-    labels = ["Dataset 1"] * n_samples + ["Dataset 2"] * n_samples
-    df = pd.DataFrame(tsne_results, columns=["TSNE1", "TSNE2"])
-    df["Dataset"] = labels
-
-    sns.scatterplot(x="TSNE1", y="TSNE2", hue="Dataset", data=df)
-    plt.title("t-SNE of Aligned Embeddings")
-    plt.show()
-
-
-# %%
-# ### weights
-
-
-# %%
-if plot_flag:
-    # plot both heatmaps as subplots, and add titel the more similar the better:
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("RNA Archetype Weights vs Cell Types")
-    plt.ylabel("Archetypes")
-    _, row_order = reorder_rows_to_maximize_diagonal(best_archetype_rna_prop)
-    sns.heatmap(pd.DataFrame(best_archetype_rna_prop).loc[row_order, :])
-    # sns.heatmap(pd.DataFrame(best_archetype_rna_prop))
-    plt.subplot(1, 2, 2)
-    plt.ylabel("Archetypes")
-    # sns.heatmap(best_archetype_prot_prop)
-    sns.heatmap(pd.DataFrame(best_archetype_prot_prop).loc[row_order, :])
-    # sns.heatmap(pd.DataFrame(best_archetype_prot_prop).iloc[row_order,:])
-    plt.title("Protein Archetype Weights vs Cell Types")
-    plt.suptitle(
-        "Archetype Weight Distribution Across Cell Types (Higher Similarity = Better Alignment)"
-    )
-    plt.show()
-    # errors = np.abs(ordered_arch_prot - ordered_arch_rna)
-    # random_error =np.abs(ordered_arch_prot - np.random.permutation(ordered_arch_rna))
-    # plt.plot(errors.values.flatten())
-    # plt.plot(random_error.values.flatten())
-    # plt.legend(['Error', 'Random Error'])
-    # plt.show()
-
-
-# %%
-fig, axes = plt.subplots(1, 2, figsize=(15, 7))
-
-# Plot for RNA
-ax = sns.histplot(
-    adata_1_rna.obs,
-    x="archetype_label",
-    hue="major_cell_types",
-    multiple="fill",
-    stat="proportion",
-    ax=axes[0],
-)
-axes[0].set_xticks(axes[0].get_xticks())  # Set the ticks first
-axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45)
-axes[0].set_title("RNA Archetypes Distribution Colored by Major Cell Types")
-axes[0].set_xlabel("Archetype Label")
-axes[0].tick_params(axis="x", which="both", bottom=True, top=False, labelbottom=True)
-axes[0].get_legend().remove()  # Remove the legend from the left subplot
-
-# Plot for Protein
-ax = sns.histplot(
-    adata_2_prot.obs,
-    x="archetype_label",
-    hue="major_cell_types",
-    multiple="fill",
-    stat="proportion",
-    ax=axes[1],
-)
-axes[1].set_xticks(axes[1].get_xticks())  # Set the ticks first
-axes[1].set_yticklabels([])
-axes[1].set_title("Protein Archetypes Distribution Colored by Major Cell Types")
-sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-
-plt.tight_layout()
-plt.show()
-# TODO this plot does not add up for some reason, it seems that the archetypes are not aligned correctly
-
-
-# %%
-if plot_flag:
-    data_points_rna = adata_1_rna.obsm["X_pca"]
-    data_points_prot = adata_2_prot.obsm["X_pca"]
-    data_point_archetype_indices_rna = list(np.argmax(cells_archetype_vec_rna, axis=1))
-    data_point_archetype_indices_prot = list(np.argmax(cells_archetype_vec_prot, axis=1))
-
-    # use ground truth cell types
-    show_ground_truth = True
-    if show_ground_truth:
-        major_or_minor = "cell_types"
-        major_or_minor = "major_cell_types"
-        samples_cell_types_rna = list(adata_1_rna.obs[major_or_minor])
-        samples_cell_types_prot = list(adata_2_prot.obs[major_or_minor])
-    else:  #
-        # Get the archetype indices for each data point
-        major_cell_types_list = minor_cell_types_list_rna
-        current_cell_types_list = major_cell_types_list
-        # Map the archetype indices to cell type names
-        samples_cell_types_rna = [
-            current_cell_types_list[i] for i in data_point_archetype_indices_rna
-        ]
-        samples_cell_types_prot = [
-            current_cell_types_list[i] for i in data_point_archetype_indices_prot
-        ]
-
-    # Optionally limit the number of samples
-    num_samples = 50000  # or any number you prefer
-    data_points_rna_plot = data_points_rna[:num_samples]
-    data_points_prot_plot = data_points_prot[:num_samples]
-    samples_cell_types_rna_plot = samples_cell_types_rna[:num_samples]
-    samples_cell_types_prot_plot = samples_cell_types_prot[:num_samples]
-    data_point_archetype_indices_rna_plot = data_point_archetype_indices_rna[:num_samples]
-    data_point_archetype_indices_prot_plot = data_point_archetype_indices_prot[:num_samples]
-
-    # Create a consistent color mapping
-    all_cell_types = set(samples_cell_types_rna_plot + samples_cell_types_prot_plot)
-    all_cell_types.discard("archetype")
-    all_cell_types = [ct for ct in all_cell_types if ct is not np.nan]
-    all_cell_types = sorted(all_cell_types)
-    palette = sns.color_palette("tab20", len(all_cell_types))
-    cell_type_colors = {cell_type: color for cell_type, color in zip(all_cell_types, palette)}
-    cell_type_colors["archetype"] = "black"
-
-    # Call the updated function with the color mapping
-    plot_archetypes(
-        data_points_rna_plot,
-        ordered_best_rna_archetype,
-        samples_cell_types_rna_plot,
-        data_point_archetype_indices_rna_plot,
-        modality="RNA PCA Embedding",
-        cell_type_colors=cell_type_colors,
-    )
-    plot_archetypes(
-        data_points_prot_plot,
-        ordered_best_protein_archetype,
-        samples_cell_types_prot_plot,
-        data_point_archetype_indices_prot_plot,
-        modality="Protein PCA Embedding",
-        cell_type_colors=cell_type_colors,
-    )
-
-
-# %%
+# Create archetype AnnData objects
 adata_archetype_rna = AnnData(adata_1_rna.obsm["archetype_vec"])
 adata_archetype_prot = AnnData(adata_2_prot.obsm["archetype_vec"])
 adata_archetype_rna.obs = adata_1_rna.obs
 adata_archetype_prot.obs = adata_2_prot.obs
 adata_archetype_rna.index = adata_1_rna.obs.index
 adata_archetype_prot.index = adata_2_prot.obs.index
+
+# Plot archetype visualizations
 if plot_flag:
     sc.pp.pca(adata_archetype_rna)
     sc.pp.pca(adata_archetype_prot)
@@ -1190,10 +700,6 @@ if plot_flag:
     sc.pl.umap(adata_archetype_rna, color=["major_cell_types", "archetype_label", "cell_types"])
     sc.pl.umap(adata_archetype_prot, color=["major_cell_types", "archetype_label", "cell_types"])
 
-
-# %%
-if plot_flag:
-    # making sure that the archetypes make sense in original data context
     sc.pp.neighbors(adata_1_rna)
     sc.pp.neighbors(adata_2_prot)
     sc.tl.umap(adata_1_rna)
@@ -1207,104 +713,7 @@ if plot_flag:
         title="Protein UMAP Embedding Colored by Archetype Labels",
     )
 
-
-# %%
-adata_1_rna
-
-
-# %%
-t_cell_terminal_exhaustion = [
-    "CD3G",
-    "FASLG",
-    "ID2",
-    "LAG3",
-    "RGS1",
-    "CCL3",
-    "CCL3L1",
-    "KIAA1671",
-    "SH2D2A",
-    "DUSP2",
-    "PDCD1",
-    "CD7",
-    "NR4A2",
-    "CD160",
-    "PTPN22",
-    "ABI3",
-    "PTGER4",
-    "GZMK",
-    "GZMA",
-    "MBNL1",
-    "VMP1",
-    "PLAC8",
-    "RGS3",
-    "EFHD2",
-    "GLRX",
-    "CXCR6",
-    "ARL6IP1",
-    "CCL4",
-    "ISG15",
-    "LAX1",
-    "CD8A",
-    "SERPINA3",
-    "GZMB",
-    "TOX",
-]
-
-t_cell_precursor_exhaustion = [
-    "TCF7",
-    "MS4A4A",
-    "TNFSF8",
-    "CXCL10",
-    "EEF1B2",
-    "ID3",
-    "IL7R",
-    "JUN",
-    "LTB",
-    "XCL1",
-    "SOCS3",
-    "TRAF1",
-    "EMB",
-    "CRTAM",
-    "EEF1G",
-    "CD9",
-    "ITGB1",
-    "GPR183",
-    "ZFP36L1",
-    "SLAMF6",
-    "LY6E",
-]
-
-t_cell_t_reg = [
-    "NT5E",
-    "CD3D",
-    "CD3G",
-    "CD3E",
-    "CD4",
-    "CD5",
-    "ENTPD1",
-    "CTLA4",
-    "IZUMO1R",
-    "TNFRSF18",
-    "IL2RA",
-    "ITGAE",
-    "LAG3",
-    "TGFB1",
-    "LRRC32",
-    "TNFRSF4",
-    "SELL",
-    "FOXP3",
-    "STAT5A",
-    "STAT5B",
-    "LGALS1",
-    "IL10",
-    "IL12A",
-    "EBI3",
-    "TGFB1",
-]
-
-
-# %%
-# save all adata objects with time stamp
+# Save results
 clean_uns_for_h5ad(adata_2_prot)
 clean_uns_for_h5ad(adata_1_rna)
 time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1312,16 +721,12 @@ adata_1_rna.write(f"data/adata_rna_{time_stamp}.h5ad")
 adata_2_prot.write(f"data/adata_prot_{time_stamp}.h5ad")
 adata_archetype_rna.write(f"data/adata_archetype_rna_{time_stamp}.h5ad")
 adata_archetype_prot.write(f"data/adata_archetype_prot_{time_stamp}.h5ad")
-# load the latest of each sort by time as if I dont have the time stamp, read all files in the right name prefix and sort by time in a folder
+
+# Load latest files
 folder = "CODEX_RNA_seq/data/"
 file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_archetype_prot_"]
-
-# Load the latest files (example)
 latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
 adata_rna = sc.read(latest_files["adata_rna_"])
 adata_prot = sc.read(latest_files["adata_prot_"])
 adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
 adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
-
-
-# %%

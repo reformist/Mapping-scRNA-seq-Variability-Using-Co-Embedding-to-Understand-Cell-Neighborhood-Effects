@@ -307,21 +307,17 @@ def plot_rna_protein_matching_means_and_scale(
 
 
 def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs, use_subsample=True):
-    plt.figure(figsize=(10, 5))
+    plt.figure()
     plt.subplot(1, 2, 1)
-    plt.title("RNA Latent Space: Mean vs Standard Deviation")
-
-    n_samples = rna_inference_outputs["qz"].mean.shape[0]
     if use_subsample:
-        n_subsample = min(300, n_samples)  # Changed from 300 to 1000 to match batch size
-        subsample_indexes = np.random.choice(n_samples, n_subsample, replace=False)
+        subsample_indexes = np.random.choice(
+            rna_inference_outputs["qz"].mean.shape[0], 300, replace=False
+        )
     else:
-        subsample_indexes = np.arange(n_samples)
-
+        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
     sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
+    plt.title(f"heatmap of RNA")
     plt.subplot(1, 2, 2)
-    plt.title("Protein Latent Space: Mean vs Standard Deviation")
-    plt.suptitle("Latent Space Distribution Analysis")
 
     sns.heatmap(protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
     if use_subsample:
@@ -1747,60 +1743,73 @@ def plot_archetypes_matching(data1, data2, rows=5):
 
 def plot_latent(rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index):
     plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("RNA Latent Space\nColored by Cell Types")
-    # Get the correct subset of cell types for the points being plotted
-    cell_types = adata_rna_subset.obs["cell_types"].astype("category").cat.codes
-    if len(cell_types) > len(rna_mean):
-        cell_types = cell_types[: len(rna_mean)]
-    # Run PCA on RNA latent space
-    pca = PCA(n_components=2)
-    rna_mean_pca = pca.fit(rna_mean)
-    rna_mean_pca = pca.transform(rna_mean)
+    pca = PCA(n_components=3)
+    pca.fit(rna_mean)
+    rna_pca = pca.transform(rna_mean)
+    plt.subplot(1, 3, 1)
     plt.scatter(
-        rna_mean_pca[:, 0],
-        rna_mean_pca[:, 1],
-        c=cell_types,
-        cmap="tab10",
-        alpha=0.5,
-        s=1,
-        rasterized=True,
+        rna_pca[:, 0],
+        rna_pca[:, 1],
+        c=pd.Categorical(adata_rna_subset[index].obs["CN"].values).codes,
+        cmap="jet",
     )
-    plt.xlabel(f"Latent Dimension {index[0]}")
-    plt.ylabel(f"Latent Dimension {index[1]}")
-    plt.colorbar(label="Cell Type")
+    plt.title("RNA")
 
-    plt.subplot(1, 2, 2)
-    plt.title("Protein Latent Space\nColored by Cell Types")
-    # Get the correct subset of cell types for the points being plotted
-    cell_types = adata_prot_subset.obs["cell_types"].astype("category").cat.codes
-    if len(cell_types) > len(protein_mean):
-        cell_types = cell_types[: len(protein_mean)]
-    protein_mean_pca = pca.transform(protein_mean)
+    pca.fit(protein_mean)
+    protein_pca = pca.transform(protein_mean)
+    plt.subplot(1, 3, 2)
     plt.scatter(
-        protein_mean_pca[:, 0],
-        protein_mean_pca[:, 1],
-        c=cell_types,
+        protein_pca[:, 0],
+        protein_pca[:, 1],
+        c=pd.Categorical(adata_prot_subset[index].obs["CN"]).codes,
+        cmap="jet",
     )
-    plt.xlabel(f"Latent Dimension {index[0]}")
-    plt.ylabel(f"Latent Dimension {index[1]}")
-    plt.colorbar(label="Cell Type")
-    plt.tight_layout()
+    plt.title("protein")
+    plt.suptitle("PCA of latent space during training\nColor by CN lable")
+
+    ax = plt.subplot(1, 3, 3, projection="3d")
+    ax.scatter(rna_pca[:, 0], rna_pca[:, 1], rna_pca[:, 2], c="red", label="RNA")
+    ax.scatter(
+        protein_pca[:, 0],
+        protein_pca[:, 1],
+        protein_pca[:, 2],
+        c="blue",
+        label="protein",
+        alpha=0.5,
+    )
+    for rna_point, prot_point in zip(rna_pca, protein_pca):
+        ax.plot(
+            [rna_point[0], prot_point[0]],
+            [rna_point[1], prot_point[1]],
+            [rna_point[2], prot_point[2]],
+            "k--",
+            alpha=0.6,
+            lw=0.5,
+        )
+    ax.set_title("merged RNA and protein")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.set_zlabel("PC3")
+    ax.legend()
     plt.show()
 
 
 def plot_latent_single(means, adata, index, color_label="CN", title=""):
-    plt.figure(figsize=(5, 5))
-    plt.title(f"Latent Space Visualization\nColored by {color_label}")
+    plt.figure(figsize=(10, 5))
+    pca = PCA(n_components=3)
+    means_cpu = means.detach().cpu().numpy()
+    index_cpu = index.detach().cpu().numpy().flatten()
+    pca.fit(means_cpu)
+    rna_pca = pca.transform(means_cpu)
+    plt.subplot(1, 1, 1)
     plt.scatter(
-        means[:, index[0]],
-        means[:, index[1]],
-        c=adata.obs[color_label].astype("category").cat.codes,
+        rna_pca[:, 0],
+        rna_pca[:, 1],
+        c=pd.Categorical(adata[index_cpu].obs[color_label].values).codes,
+        cmap="jet",
     )
-    plt.xlabel(f"Latent Dimension {index[0]}")
-    plt.ylabel(f"Latent Dimension {index[1]}")
-    plt.colorbar(label=color_label)
-    plt.tight_layout()
+    plt.title(title)
+    plt.show()
 
 
 def plot_inference_outputs(
@@ -1948,6 +1957,23 @@ def compute_random_matching_cost(rna, protein, metric="correlation"):
     return normalized_cost, distances
 
 
+def match_rows(matrix1, matrix2, metric="correlation"):
+    """Helper function to match rows between two matrices."""
+    if metric == "correlation":
+        # Compute correlation matrix
+        corr_matrix = np.corrcoef(matrix1, matrix2)[: matrix1.shape[0], matrix1.shape[0] :]
+        # Convert correlation to distance (1 - correlation)
+        dist_matrix = 1 - corr_matrix
+    else:
+        # Use scipy's cdist for other metrics
+        dist_matrix = cdist(matrix1, matrix2, metric=metric)
+
+    # Use Hungarian algorithm for optimal matching
+    row_ind, col_ind = linear_sum_assignment(dist_matrix)
+    total_cost = dist_matrix[row_ind, col_ind].sum()
+    return row_ind, col_ind, total_cost, dist_matrix
+
+
 def find_best_pair_by_row_matching(
     archetype_proportion_list_rna, archetype_proportion_list_protein, metric="correlation"
 ):
@@ -1972,22 +1998,6 @@ def find_best_pair_by_row_matching(
     best_protein_archetype_order : np.ndarray
         Indices of Protein rows matched to RNA rows.
     """
-
-    def match_rows(matrix1, matrix2, metric="correlation"):
-        """Helper function to match rows between two matrices."""
-        if metric == "correlation":
-            # Compute correlation matrix
-            corr_matrix = np.corrcoef(matrix1, matrix2)[: matrix1.shape[0], matrix1.shape[0] :]
-            # Convert correlation to distance (1 - correlation)
-            dist_matrix = 1 - corr_matrix
-        else:
-            # Use scipy's cdist for other metrics
-            dist_matrix = cdist(matrix1, matrix2, metric=metric)
-
-        # Use Hungarian algorithm for optimal matching
-        row_ind, col_ind = linear_sum_assignment(dist_matrix)
-        total_cost = dist_matrix[row_ind, col_ind].sum()
-        return row_ind, col_ind, total_cost, dist_matrix
 
     best_num_or_archetypes_index = None
     best_total_cost = float("inf")
