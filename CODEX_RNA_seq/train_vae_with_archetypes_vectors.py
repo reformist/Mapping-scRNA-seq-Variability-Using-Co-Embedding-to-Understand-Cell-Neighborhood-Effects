@@ -202,11 +202,15 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_active = True
         self.reactivation_threshold = 0.1
         self.active_similarity_loss_active_history = []
+        self.train_losses = []
+        self.val_losses = []
+        self.similarity_losses = []  # Store similarity losses
+        self.similarity_losses_raw = []  # Store raw similarity losses
+        self.similarity_weights = []  # Store similarity weights
+        self.similarity_ratios = []  # Store similarity ratios
 
         # Setup logging
         self.log_file = setup_logging()
-        self.train_losses = []
-        self.val_losses = []
 
     def training_step(self, batch, batch_idx):
         rna_batch = self._get_rna_batch(batch)
@@ -428,7 +432,7 @@ class DualVAETrainingPlan(TrainingPlan):
         if is_steady_state and self.similarity_active:
             self.similarity_active = False
         elif not self.similarity_active and self.global_step % 50 == 0:
-            if len(self.history_["train_similarity_loss"]) > 50:
+            if self.global_step > 50:
                 recent_loss = np.mean(self.history_["train_similarity_loss"][-50:])
                 if recent_loss > self.reactivation_threshold:
                     self.similarity_active = True
@@ -444,6 +448,12 @@ class DualVAETrainingPlan(TrainingPlan):
             similarity_loss_raw = torch.tensor(0.0).to(device)
             ratio = 0.0
             similarity_loss = torch.tensor(0.0).to(device)
+
+        # Store similarity metrics
+        self.similarity_losses.append(similarity_loss.item())
+        self.similarity_losses_raw.append(similarity_loss_raw.item())
+        self.similarity_weights.append(self.similarity_weight)
+        self.similarity_ratios.append(ratio)
 
         self.similarity_loss_history.append(similarity_loss_raw.item())
         self.active_similarity_loss_active_history.append(self.similarity_active)
@@ -577,8 +587,15 @@ class DualVAETrainingPlan(TrainingPlan):
         return rna_batch
 
     def get_history(self):
-        """Return the training history from log file"""
-        return load_history(self.log_file)
+        """Return the training history including similarity losses"""
+        return {
+            "train_similarity_loss": self.similarity_losses,
+            "train_similarity_loss_raw": self.similarity_losses_raw,
+            "train_similarity_weight": self.similarity_weights,
+            "train_similarity_ratio": self.similarity_ratios,
+            "train_total_loss": self.train_losses,
+            "val_total_loss": self.val_losses,
+        }
 
 
 # %%
@@ -678,7 +695,7 @@ print("Python path:", sys.path)
 rna_vae, protein_vae = train_vae(
     adata_rna_subset=adata_rna_subset,
     adata_prot_subset=adata_prot_subset,
-    n_epochs=1,
+    n_epochs=100,
     batch_size=1000,
     lr=1e-3,
     use_gpu=True,
