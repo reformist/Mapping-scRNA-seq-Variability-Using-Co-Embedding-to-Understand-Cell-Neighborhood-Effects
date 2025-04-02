@@ -254,43 +254,40 @@ def plot_similarity_loss_history(similarity_loss_history, active_history):
 
 
 def plot_normalized_losses(history):
-    """Plot normalized training losses"""
-    plt.figure(figsize=(15, 10))
+    """Plot normalized training and validation losses"""
+    plt.figure(figsize=(15, 5))
 
-    # Plot total loss
-    plt.subplot(2, 2, 1)
-    plt.plot(history["train_total_loss"], label="Total Loss")
-    plt.title("Total Loss")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.legend()
+    # Plot training losses
+    plt.subplot(121)
+    train_keys = [key for key in history.keys() if key.startswith("train_")]
+    for key in train_keys:
+        loss_data = np.array(history[key])
+        if len(loss_data) > 0:
+            min_val = loss_data.min()
+            max_val = loss_data.max()
+            normalized_loss = (loss_data - min_val) / (max_val - min_val + 1e-8)
+            plt.plot(normalized_loss, label=f"{key} (min: {min_val:.2f}, max: {max_val:.2f})")
+    plt.title("Normalized Training Losses")
+    plt.xlabel("Training Step")
+    plt.ylabel("Normalized Loss Value")
+    plt.grid(True)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
-    # Plot reconstruction losses
-    plt.subplot(2, 2, 2)
-    plt.plot(history["train_rna_reconstruction_loss"], label="RNA Reconstruction")
-    plt.plot(history["train_protein_reconstruction_loss"], label="Protein Reconstruction")
-    plt.title("Reconstruction Losses")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.legend()
-
-    # Plot contrastive and matching losses
-    plt.subplot(2, 2, 3)
-    plt.plot(history["train_contrastive_loss"], label="Contrastive Loss")
-    plt.plot(history["train_matching_rna_protein_loss"], label="Matching Loss")
-    plt.title("Contrastive and Matching Losses")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.legend()
-
-    # Plot similarity and diversity losses
-    plt.subplot(2, 2, 4)
-    plt.plot(history["train_similarity_loss"], label="Similarity Loss")
-    plt.plot(history["train_diversity_loss"], label="Diversity Loss")
-    plt.title("Similarity and Diversity Losses")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.legend()
+    # Plot validation losses
+    plt.subplot(122)
+    val_keys = [key for key in history.keys() if key.startswith("validation_")]
+    for key in val_keys:
+        loss_data = np.array(history[key])
+        if len(loss_data) > 0:
+            min_val = loss_data.min()
+            max_val = loss_data.max()
+            normalized_loss = (loss_data - min_val) / (max_val - min_val + 1e-8)
+            plt.plot(normalized_loss, label=f"{key} (min: {min_val:.2f}, max: {max_val:.2f})")
+    plt.title("Normalized Validation Losses")
+    plt.xlabel("Validation Step")
+    plt.ylabel("Normalized Loss Value")
+    plt.grid(True)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
     plt.tight_layout()
     plt.show()

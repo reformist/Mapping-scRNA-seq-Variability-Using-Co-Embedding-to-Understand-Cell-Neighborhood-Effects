@@ -102,8 +102,6 @@ from CODEX_RNA_seq.plotting_functions_vae import (
     plot_normalized_losses,
     plot_rna_protein_embeddings,
     plot_rna_protein_matching_means_and_scale,
-    plot_scvi_umap,
-    plot_similarity_loss_history,
     plot_spatial_data,
 )
 
@@ -115,6 +113,7 @@ from CODEX_RNA_seq.logging_functions import (
     log_training_metrics,
     log_validation_metrics,
     print_distance_metrics,
+    setup_history,
 )
 
 # reimport the two above too
@@ -196,100 +195,16 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_active = True  # Flag to track if similarity loss is active
         self.reactivation_threshold = 0.1  # Threshold to reactivate similarity loss
         self.active_similarity_loss_active_history = []
+        setup_history(self)
         self.similarity_loss_all_history = []
 
-        # Initialize history dictionary with step tracking
-        self.history_ = {
-            "step": [],  # Track step number
-            "timestamp": [],  # Track timestamp for each step
-            "epoch": [],  # Track current epoch
-            "train_total_loss": [],
-            "train_rna_reconstruction_loss": [],
-            "train_protein_reconstruction_loss": [],
-            "train_contrastive_loss": [],
-            "train_matching_rna_protein_loss": [],
-            "train_similarity_loss": [],
-            "train_similarity_loss_raw": [],
-            "train_similarity_weighted": [],
-            "train_similarity_weight": [],
-            "train_similarity_ratio": [],
-            "train_adv_loss": [],
-            "train_diversity_loss": [],
-            "validation_total_loss": [],
-            "validation_rna_loss": [],
-            "validation_protein_loss": [],
-            "validation_contrastive_loss": [],
-            "validation_matching_latent_distances": [],
-            "learning_rate": [],  # Track learning rate
-            "batch_size": [],  # Track batch size
-            "gradient_norm": [],  # Track gradient norm
-        }
-        print("Initialized history dictionary with keys:", self.history_.keys())
+    def on_epoch_end(self):
+        """Empty implementation to override parent class method"""
+        pass
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            list(self.rna_vae.module.parameters()) + list(self.protein_vae.module.parameters()),
-            lr=0.001,
-            weight_decay=1e-5,
-        )
-        # d = { # maybe add this?
-        # "optimizer": optimizer,
-        # "gradient_clip_val": 1.0,  # Critical for stability
-        # "gradient_clip_algorithm": "value"
-        # }
-        return optimizer
-
-    def validation_step(self, batch, batch_idx):
-        """Validation step for the model."""
-        rna_batch = self._get_rna_batch(batch)
-        _, _, rna_loss_output = self.rna_vae.module(rna_batch, loss_kwargs=self.loss_kwargs)
-        protein_batch = self._get_protein_batch(batch)
-        _, _, protein_loss_output = self.protein_vae.module(
-            protein_batch, loss_kwargs=self.loss_kwargs
-        )
-
-        # Compute losses
-        rna_inference_outputs = self.rna_vae.module.inference(
-            rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
-        )
-        protein_inference_outputs = self.protein_vae.module.inference(
-            protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
-        )
-        matching_rna_protein_latent_distances = compute_pairwise_kl_two_items(
-            rna_inference_outputs["qz"].mean,
-            protein_inference_outputs["qz"].mean,
-            rna_inference_outputs["qz"].scale,
-            protein_inference_outputs["qz"].scale,
-        )
-        contrastive_loss = torch.tensor(0.0).to(device)
-        validation_total_loss = (
-            rna_loss_output.loss
-            + protein_loss_output.loss
-            + contrastive_loss
-            + matching_rna_protein_latent_distances.mean()
-        )
-
-        # Log validation metrics
-        log_validation_metrics(
-            self,
-            rna_loss_output,
-            protein_loss_output,
-            contrastive_loss,
-            validation_total_loss,
-            matching_rna_protein_latent_distances,
-        )
-
-        # Log batch metrics for first batch only
-        log_batch_metrics(
-            self,
-            batch_idx,
-            validation_total_loss,
-            rna_loss_output,
-            protein_loss_output,
-            contrastive_loss,
-        )
-
-        return validation_total_loss
+    def on_train_end(self):
+        """Empty implementation to override parent class method"""
+        pass
 
     def training_step(self, batch, batch_idx):
         rna_batch = self._get_rna_batch(batch)
@@ -399,6 +314,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         if should_plot:
             print_distance_metrics(
+                self,
                 prot_distances,
                 rna_distances,
                 num_acceptable,
@@ -656,48 +572,25 @@ class DualVAETrainingPlan(TrainingPlan):
 
 
 # %%
-# Setup SCVI data
-SCVI.setup_anndata(
-    adata_rna_subset,
-    labels_key="index_col",
-)
-if adata_prot_subset.X.min() < 0:
-    adata_prot_subset.X = adata_prot_subset.X - adata_prot_subset.X.min()
-
-SCVI.setup_anndata(
-    adata_prot_subset,
-    labels_key="index_col",
-)
-
-
-# %%
-def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu=True, **kwargs):
+def train_vae(
+    adata_rna_subset, adata_prot_subset, n_epochs=1, batch_size=128, lr=1e-3, use_gpu=True, **kwargs
+):
     """Train the VAE models."""
 
-    SCVI.setup_anndata(
-        rna_vae.adata,  # Pass the AnnData object, not the SCVI model
-        labels_key="index_col",
+    rna_vae = scvi.model.SCVI(
+        adata_rna_subset,
+        gene_likelihood=select_gene_likelihood(adata_rna_subset),
+        n_hidden=128,
+        n_layers=3,
     )
-    SCVI.setup_anndata(
-        protein_vae.adata,  # Pass the AnnData object, not the SCVI model
-        labels_key="index_col",
-    )
-
-    # Create new VAE models with matched data
-    rna_vae_new = scvi.model.SCVI(rna_vae.adata, gene_likelihood="zinb", n_hidden=50, n_layers=3)
-    protein_vae_new = scvi.model.SCVI(
-        protein_vae.adata, gene_likelihood="normal", n_hidden=50, n_layers=3
+    protein_vae = scvi.model.SCVI(
+        adata_prot_subset, gene_likelihood="normal", n_hidden=50, n_layers=3
     )
 
-    # Copy over the trained weights if they exist
-    if hasattr(rna_vae.module, "state_dict"):
-        rna_vae_new.module.load_state_dict(rna_vae.module.state_dict())
-    if hasattr(protein_vae.module, "state_dict"):
-        protein_vae_new.module.load_state_dict(protein_vae.module.state_dict())
+    rna_vae._training_plan_cls = DualVAETrainingPlan
 
     # Set training plan
-    rna_vae_new._training_plan_cls = DualVAETrainingPlan
-    protein_vae_new._training_plan_cls = DualVAETrainingPlan
+    rna_vae._training_plan_cls = DualVAETrainingPlan
     logger = TensorBoardLogger(
         save_dir="my_logs", name=f"experiment_name_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
@@ -710,7 +603,7 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
         "validation_size": 0.1,
         "early_stopping": False,
         "check_val_every_n_epoch": 1,
-        "logger": logger,
+        # "logger": logger,
         "accelerator": "gpu" if use_gpu and torch.cuda.is_available() else "cpu",
         "devices": 1,
         "gradient_clip_val": 1.0,  # Add gradient clipping
@@ -719,8 +612,8 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
 
     # Create training plan with both VAEs
     plan_kwargs = {
-        "protein_vae": protein_vae_new,
-        "rna_vae": rna_vae_new,
+        "protein_vae": protein_vae,
+        "rna_vae": rna_vae,
         "contrastive_weight": kwargs.pop("contrastive_weight", 1.0),
         "plot_x_times": kwargs.pop("plot_x_times", 5),
         "batch_size": batch_size,
@@ -728,70 +621,42 @@ def train_vae(rna_vae, protein_vae, n_epochs=1, batch_size=128, lr=1e-3, use_gpu
     }
 
     # Create training plan instance to access history
-    training_plan = DualVAETrainingPlan(rna_vae_new.module, **plan_kwargs)
+    training_plan = DualVAETrainingPlan(rna_vae.module, **plan_kwargs)
 
     # Train the model
-    rna_vae_new.train(**train_kwargs, plan_kwargs=plan_kwargs)
+    rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
 
     # Store the training history
-    rna_vae_new.__dict__["history_"] = training_plan.history_
+    rna_vae.__dict__["history_"] = training_plan.history_
 
     # Manually set trained flag
-    rna_vae_new.is_trained_ = True
-    protein_vae_new.is_trained_ = True
-
-    return rna_vae_new, protein_vae_new
-
-
-# %%
-def setup_vaes():
-    """Set up the VAE models."""
-    # Select gene likelihood
-    gene_likelihood = select_gene_likelihood(adata_rna_subset)
-    print(f"Selected gene likelihood: {gene_likelihood}")
-
-    # Initialize VAEs
-    rna_vae = scvi.model.SCVI(
-        adata_rna_subset, gene_likelihood=gene_likelihood, n_hidden=50, n_layers=3
-    )
-    protein_vae = scvi.model.SCVI(
-        adata_prot_subset, gene_likelihood="normal", n_hidden=50, n_layers=3
-    )
-
-    # Store initial weights
-    initial_weights = {name: param.clone() for name, param in rna_vae.module.named_parameters()}
-
-    # Set training plan and device
-    rna_vae._training_plan_cls = DualVAETrainingPlan
-    protein_vae._training_plan_cls = DualVAETrainingPlan
-    protein_vae.module.to("cpu")
-    rna_vae.module.to("cpu")
-    rna_vae.is_trained = protein_vae.is_trained = False
+    rna_vae.is_trained_ = True
+    protein_vae.is_trained_ = True
 
     return rna_vae, protein_vae
 
 
 # %%
 # Setup VAEs and training parameters
-rna_vae, protein_vae = setup_vaes()
 training_kwargs = {
     "contrastive_weight": 10.0,
-    "plot_x_times": 5,
+    "plot_x_times": 2,
 }
 
 # %%
 # Train the model
 print("\nStarting training...")
-rna_vae_new, protein_vae_new = train_vae(
-    rna_vae=rna_vae,
-    protein_vae=protein_vae,
+rna_vae, protein_vae = train_vae(
+    adata_rna_subset=adata_rna_subset,
+    adata_prot_subset=adata_prot_subset,
     n_epochs=1,  # Train for only 2 epochs
     batch_size=1000,  # Smaller batch size for memory efficiency
     lr=1e-3,
     use_gpu=True,
     **training_kwargs,
 )
-
+rna_vae_new = rna_vae
+print(rna_vae_new.history_)
 # %%
 # Check if history is available in the VAE's __dict__
 if "history_" not in rna_vae_new.__dict__:
