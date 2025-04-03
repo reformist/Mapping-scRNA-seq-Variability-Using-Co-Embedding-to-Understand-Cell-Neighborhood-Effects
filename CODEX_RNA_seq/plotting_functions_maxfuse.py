@@ -1,20 +1,33 @@
-# %%
-# Setup paths
-# %%
+# %% MaxFuse Plotting Functions
+# This module contains functions for plotting MaxFuse-specific visualizations.
+
+# %% Imports and Setup
+import importlib
 import os
 import sys
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# %%
-# Imports
-# %%
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import scanpy as sc
 import seaborn as sns
+from matplotlib import pyplot as plt
+
+# Add repository root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set working directory to project root
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import cell_lists
+import plotting_functions
+
+import bar_nick_utils
+
+importlib.reload(cell_lists)
+importlib.reload(plotting_functions)
+importlib.reload(bar_nick_utils)
 
 
 def plot_data_overview(adata_1, adata_2):

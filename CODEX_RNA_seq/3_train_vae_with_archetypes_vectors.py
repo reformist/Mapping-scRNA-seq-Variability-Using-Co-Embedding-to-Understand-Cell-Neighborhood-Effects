@@ -38,20 +38,13 @@ from datetime import datetime
 from pathlib import Path
 
 import anndata as ad
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import scipy
 import scvi
-import seaborn as sns
 from anndata import AnnData
-from matplotlib.patches import Arc
 from pytorch_lightning.loggers import TensorBoardLogger
-from scipy.optimize import linear_sum_assignment
 from scipy.sparse import issparse
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 
 # import torch F
 from torch.nn.functional import normalize
@@ -59,17 +52,12 @@ from torch.nn.functional import normalize
 # Add repository root to Python path without changing working directory
 
 importlib.reload(scvi)
-import re
 
 import torch
 import torch.nn.functional as F
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
-from sklearn.metrics import (
-    adjusted_mutual_info_score,
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
+from sklearn.metrics import adjusted_mutual_info_score
 
 import bar_nick_utils
 
@@ -77,6 +65,11 @@ importlib.reload(bar_nick_utils)
 
 # Import plotting functions
 import CODEX_RNA_seq.plotting_functions_vae
+
+importlib.reload(CODEX_RNA_seq.plotting_functions_vae)
+
+# Import logging functions
+import CODEX_RNA_seq.logging_functions
 from bar_nick_utils import (
     clean_uns_for_h5ad,
     compare_distance_distributions,
@@ -86,17 +79,11 @@ from bar_nick_utils import (
     mixing_score,
     select_gene_likelihood,
 )
-
-importlib.reload(CODEX_RNA_seq.plotting_functions_vae)
-# Import logging functions
-import CODEX_RNA_seq.logging_functions
 from CODEX_RNA_seq.plotting_functions_vae import (
     plot_archetype_vectors,
-    plot_archetype_vs_latent_distances,
     plot_cell_type_distributions,
     plot_combined_latent_space,
     plot_combined_latent_space_umap,
-    plot_cosine_distance,
     plot_inference_outputs,
     plot_latent,
     plot_latent_distances,
@@ -109,13 +96,10 @@ from CODEX_RNA_seq.plotting_functions_vae import (
 
 importlib.reload(CODEX_RNA_seq.logging_functions)
 from CODEX_RNA_seq.logging_functions import (
-    load_history,
     log_epoch_end,
-    log_extra_metrics,
     log_step_metrics,
     log_training_metrics,
     log_validation_metrics,
-    print_distance_metrics,
     print_training_metrics,
     setup_logging,
     update_log,

@@ -37,6 +37,19 @@ repos:
         args: ["--profile", "black", "--line-length", "100"]
         exclude: ^.*legacy/.*$
 
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.2.0
+    hooks:
+      - id: autoflake
+        args: [
+          --remove-all-unused-imports,
+          --ignore-init-module-imports,
+          --recursive,
+          --in-place,
+          --exclude=__init__.py,
+        ]
+        exclude: ^.*legacy/.*$
+
   - repo: local
     hooks:
       - id: clear-notebook-outputs

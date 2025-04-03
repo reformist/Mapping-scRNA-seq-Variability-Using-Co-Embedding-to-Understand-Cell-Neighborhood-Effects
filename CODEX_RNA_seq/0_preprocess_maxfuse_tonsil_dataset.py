@@ -28,7 +28,7 @@ import importlib
 import warnings
 from pathlib import Path
 
-import anndata
+import anndata as ad
 import numpy as np
 import pandas as pd
 import plotting_functions_maxfuse as pf
@@ -41,6 +41,8 @@ import covet_utils
 
 importlib.reload(bar_nick_utils)
 importlib.reload(covet_utils)
+importlib.reload(pf)
+
 from bar_nick_utils import clean_uns_for_h5ad
 
 
@@ -97,7 +99,7 @@ def load_protein_data(data_dir):
     ]
 
     protein_locations = ['centroid_x', 'centroid_y']
-    protein_adata = anndata.AnnData(
+    protein_adata = ad.AnnData(
         protein[protein_features].to_numpy(), dtype=np.float32
     )
     protein_adata.obsm["spatial"] = protein[protein_locations].to_numpy()
@@ -112,7 +114,7 @@ def load_rna_data(data_dir):
     rna = mmread(data_dir / "tonsil/tonsil_rna_counts.txt")
     rna_names = pd.read_csv(data_dir / 'tonsil/tonsil_rna_names.csv')['names'].to_numpy()
 
-    rna_adata = anndata.AnnData(
+    rna_adata = ad.AnnData(
         rna.tocsr(), dtype=np.float32
     )
     rna_adata.var_names = rna_names

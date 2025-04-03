@@ -1,31 +1,42 @@
-# %%
-# Setup paths
-# %%
+# %% VAE Plotting Functions
+# This module contains functions for plotting VAE-specific visualizations.
+
+# %% Imports and Setup
+import importlib
 import os
 import sys
 
+import numpy as np
+import scanpy as sc
+import seaborn as sns
+from anndata import AnnData
+from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 
+# Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import anndata
+import cell_lists
+import plotting_functions
+
+import bar_nick_utils
+
+importlib.reload(cell_lists)
+importlib.reload(plotting_functions)
+importlib.reload(bar_nick_utils)
 
 # %%
 # Imports
 # %%
 import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import scanpy as sc
 import scipy.spatial
 import scipy.spatial.distance as scipy
-import seaborn as sns
-import torch
-import torch.nn.functional as F
-from anndata import AnnData
-from scipy.spatial.distance import cdist
-from sklearn.manifold import TSNE
 
 
 def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index=None):

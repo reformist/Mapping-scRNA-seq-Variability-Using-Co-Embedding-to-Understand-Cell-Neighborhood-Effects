@@ -25,13 +25,11 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn as sns
-from anndata import AnnData, concat
+from anndata import AnnData
 from matplotlib import pyplot as plt
 from py_pcha import PCHA
 from scipy.sparse import issparse
-from scipy.spatial.distance import cdist
 from scipy.stats import zscore
-from sklearn.decomposition import PCA
 from tqdm import tqdm
 
 # Add repository root to Python path
@@ -43,7 +41,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cell_lists import cd8_t_cell_activation, precursor_exhaustion, terminal_exhaustion
+import cell_lists
+import plotting_functions
+
+import bar_nick_utils
+import covet_utils
+
+importlib.reload(cell_lists)
+importlib.reload(plotting_functions)
+importlib.reload(bar_nick_utils)
+importlib.reload(covet_utils)
+
+from cell_lists import terminal_exhaustion
 from plotting_functions import (
     plot_archetype_proportions,
     plot_archetype_visualizations,
@@ -54,11 +63,6 @@ from plotting_functions import (
     plot_spatial_clusters,
 )
 
-import bar_nick_utils
-import covet_utils
-
-importlib.reload(bar_nick_utils)
-importlib.reload(covet_utils)
 from bar_nick_utils import (
     clean_uns_for_h5ad,
     compare_matchings,
@@ -66,7 +70,6 @@ from bar_nick_utils import (
     find_best_pair_by_row_matching,
     get_cell_representations_as_archetypes_cvxpy,
     get_latest_file,
-    plot_archetypes,
     plot_archetypes_matching,
     reorder_rows_to_maximize_diagonal,
 )

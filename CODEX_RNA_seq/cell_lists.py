@@ -13,11 +13,33 @@
 # ---
 
 # %% Cell Lists
-# This file contains various cell-related lists used in the analysis.
+# This module contains lists of cell types and markers.
 
-# load /home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad
+# %% Imports and Setup
+import importlib
+import os
+import sys
+
 import scanpy as sc
 
+# Add repository root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set working directory to project root
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import plotting_functions
+
+import bar_nick_utils
+
+importlib.reload(plotting_functions)
+importlib.reload(bar_nick_utils)
+
+
+# load /home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad
 adata = sc.read(
     "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad"
 )
