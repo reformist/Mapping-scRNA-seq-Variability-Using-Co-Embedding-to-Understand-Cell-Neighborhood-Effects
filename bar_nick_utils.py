@@ -16,7 +16,6 @@ import scipy.sparse as sp
 import seaborn as sns
 import torch
 from anndata import AnnData
-from kneed import KneeLocator
 from scipy.optimize import linear_sum_assignment, nnls
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
@@ -162,8 +161,9 @@ def compare_distance_distributions(rand_distances, rna_latent, prot_latent, dist
         rand_rna_latent.X[cell_type_indices] = (
             rand_rna_latent[cell_type_indices][shuffled_indices].copy().X
         )
-
-    rand_distances_cell_type = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
+    rand_distances_cell_type = torch.cdist(
+        torch.tensor(rand_rna_latent.X), torch.tensor(prot_latent.X)
+    )
 
     # Filter distances using 95th percentile
     rand_dist_filtered = rand_distances[rand_distances < np.percentile(rand_distances, 95)]
@@ -391,7 +391,8 @@ def mixing_score(
     protein_inference_outputs_mean,
     adata_rna_subset,
     adata_prot_subset,
-    index,
+    index_rna,
+    index_prot,
     plot_flag=False,
 ):
     if isinstance(rna_inference_outputs_mean, torch.Tensor):
@@ -408,8 +409,8 @@ def mixing_score(
     )
     combined_major_cell_types = pd.concat(
         (
-            adata_rna_subset[index].obs["major_cell_types"],
-            adata_prot_subset[index].obs["major_cell_types"],
+            adata_rna_subset[index_rna].obs["major_cell_types"],
+            adata_prot_subset[index_prot].obs["major_cell_types"],
         ),
         join="outer",
     )

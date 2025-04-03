@@ -266,7 +266,7 @@ cumulative_variance_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ration_selected) + 1
 n_comps_thresh = min(n_comps_thresh, max_dim)
 real_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])[n_comps_thresh]
-sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
+sc.pp.pca(adata_2_rna, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of protein variance: {n_comps_thresh}")
 if n_comps_thresh == 1:
     raise ValueError(

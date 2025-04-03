@@ -41,3 +41,4 @@ history_test.log
 external_data/protein_gene_conversion.csv
 external_data/citeseq_pbmc/rna.txt
 external_data/tonsil/tonsil_rna_counts.txt
+mlruns/*

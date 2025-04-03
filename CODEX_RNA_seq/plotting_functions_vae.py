@@ -39,18 +39,20 @@ import scipy.spatial
 import scipy.spatial.distance as scipy
 
 
-def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index=None):
+def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_rna=None, index_prot=None):
     """Plot latent space visualization"""
-    if index is None:
-        index = range(len(adata_prot.obs.index))
+    if index_rna is None:
+        index_rna = range(len(adata_rna.obs.index))
+    if index_prot is None:
+        index_prot = range(len(adata_prot.obs.index))
 
     # Create AnnData objects for visualization
     rna_ann = AnnData(X=latent_rna)
     prot_ann = AnnData(X=latent_prot)
 
     # Add metadata
-    rna_ann.obs = adata_rna.obs.iloc[index].copy()
-    prot_ann.obs = adata_prot.obs.iloc[index].copy()
+    rna_ann.obs = adata_rna.obs.iloc[index_rna].copy()
+    prot_ann.obs = adata_prot.obs.iloc[index_prot].copy()
 
     # Compute PCA
     sc.pp.pca(rna_ann)
@@ -422,28 +424,6 @@ def plot_cell_type_distributions(combined_latent, top_n=3):
             ],
             alpha=0.5,
         )
-
-
-def plot_latent_distances(rna_latent, prot_latent, distances):
-    """Plot latent space distances between modalities"""
-    # Randomize RNA latent space to compare distances
-    rand_rna_latent = rna_latent.copy()
-    shuffled_indices = np.random.permutation(rand_rna_latent.obs.index)
-    rand_rna_latent = rand_rna_latent[shuffled_indices].copy()
-    rand_distances = np.linalg.norm(rand_rna_latent.X - prot_latent.X, axis=1)
-
-    # Plot randomized latent space distances
-    rand_rna_latent.obs["latent_dis"] = np.log(distances)
-
-    sc.tl.umap(rand_rna_latent)
-    sc.pl.umap(
-        rand_rna_latent,
-        cmap="coolwarm",
-        color="latent_dis",
-        title="Latent space distances between RNA and Protein cells",
-    )
-
-    return rand_distances
 
 
 def plot_rna_protein_embeddings(rna_vae_new, protein_vae):
