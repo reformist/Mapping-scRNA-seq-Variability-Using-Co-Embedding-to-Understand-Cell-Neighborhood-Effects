@@ -220,8 +220,8 @@ if plot_flag:
 # %%
 # Filter and subsample data
 # %%
-num_rna_cells = 800  # Adjust these values as needed
-num_protein_cells = 800
+num_rna_cells = 8000  # Adjust these values as needed
+num_protein_cells = 8000
 rna_adata, protein_adata = filter_and_subsample_data(rna_adata, protein_adata,
                                                     num_rna_cells, num_protein_cells)
 

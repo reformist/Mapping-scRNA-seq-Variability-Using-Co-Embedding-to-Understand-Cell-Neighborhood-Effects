@@ -344,26 +344,29 @@ def plot_cell_type_distribution(adata_prot_subset, one_cell_type):
 
 def plot_original_data_visualizations(adata_rna_subset, adata_prot_subset):
     """Plot original data visualizations"""
+
     sc.pl.embedding(
         adata_rna_subset,
-        color=["cell_types"],
+        color=["CN", "cell_types", "archetype_label"],
         basis="X_original_umap",
-        title="Original rna data CN",
+        title=[
+            "Original rna data CN",
+            "Original rna data cell types",
+            "Original rna data archetype label",
+        ],
     )
-    sc.pl.embedding(
-        adata_rna_subset,
-        color=["CN", "cell_types"],
-        basis="X_original_umap",
-        title="Original rna data CN",
-    )
-    sc.pl.embedding(
-        adata_prot_subset, color=["CN", "cell_types", "archetype_label"], basis="X_original_umap"
-    )
+
     sc.pl.embedding(
         adata_prot_subset,
         color=[
+            "CN",
             "archetype_label",
             "cell_types",
         ],
         basis="X_original_umap",
+        title=[
+            "Original protein data CN",
+            "Original protein data archetype label",
+            "Original protein data cell types",
+        ],
     )

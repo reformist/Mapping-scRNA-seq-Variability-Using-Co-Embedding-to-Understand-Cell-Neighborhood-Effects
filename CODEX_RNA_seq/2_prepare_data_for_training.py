@@ -60,6 +60,10 @@ import bar_nick_utils
 
 importlib.reload(bar_nick_utils)
 
+import plotting_functions
+
+importlib.reload(plotting_functions)
+
 from plotting_functions import (
     plot_archetype_heatmaps,
     plot_b_cells_analysis,
@@ -205,8 +209,8 @@ file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_arc
 sample_size = 8000  # Adjust this value as needed
 
 adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefixes, sample_size)
-adata_rna_subset = adata_rna_subset[:500]  # todo remove
-adata_prot_subset = adata_prot_subset[:250]  # todo remove
+adata_rna_subset = adata_rna_subset[:2000]  # todo remove
+adata_prot_subset = adata_prot_subset[:1200]  # todo remove
 # %%
 # Process and visualize data
 # %%
@@ -236,14 +240,21 @@ if plot_flag:
 adata_rna_subset_matched, adata_prot_subset_matched = match_datasets(
     adata_rna_subset, adata_prot_subset, threshold=0.1, plot_flag=plot_flag
 )
+
+# %%
+
+# Rest of the code below will not execute
 adata_rna_subset, adata_prot_subset = adata_rna_subset_matched, adata_prot_subset_matched
-# Compute pairwise cosine distances between RNA and protein cells
+
+# Find closest protein cells to each RNA cell using archetype vectors
 dist_matrix = scipy.spatial.distance.cdist(
     adata_rna_subset.obsm["archetype_vec"], adata_prot_subset.obsm["archetype_vec"], metric="cosine"
 )
-
-# For each RNA cell, find closest protein cell and use its CN
 closest_prot_indices = np.argmin(dist_matrix, axis=1)
+plt.figure()
+plt.plot(closest_prot_indices)
+plt.show()
+# Set CN values based on closest protein cells
 adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
 
 # Compute PCA and UMAP
@@ -285,3 +296,5 @@ if plot_flag:
 archetype_distances = compute_archetype_distances(adata_rna_subset, adata_prot_subset)
 print(f"Initial matching distance: {matching_distance_before:.3f}")
 print(f"Average matching distance: {np.diag(archetype_distances).mean():.3f}")
+
+# %%

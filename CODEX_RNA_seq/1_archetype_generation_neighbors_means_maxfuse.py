@@ -90,7 +90,7 @@ adata_2_prot = sc.read(latest_files["preprocessed_adata_prot_"])
 # Subsample data
 num_rna_cells = 80000
 num_protein_cells = 80000
-num_rna_cells = num_protein_cells = 500
+num_rna_cells = num_protein_cells = 2000
 subsample_n_obs_rna = min(adata_1_rna.shape[0], num_rna_cells)
 subsample_n_obs_protein = min(adata_2_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_1_rna, n_obs=subsample_n_obs_rna)

@@ -78,18 +78,13 @@ importlib.reload(bar_nick_utils)
 # Import plotting functions
 import CODEX_RNA_seq.plotting_functions_vae
 from bar_nick_utils import (
-    calculate_cLISI,
-    calculate_iLISI,
     clean_uns_for_h5ad,
     compare_distance_distributions,
     compute_pairwise_kl,
     compute_pairwise_kl_two_items,
-    get_latest_file,
     get_umap_filtered_fucntion,
-    match_datasets,
     mixing_score,
     select_gene_likelihood,
-    verify_gradients,
 )
 
 importlib.reload(CODEX_RNA_seq.plotting_functions_vae)

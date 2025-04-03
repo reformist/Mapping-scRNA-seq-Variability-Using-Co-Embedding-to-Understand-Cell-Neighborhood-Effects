@@ -662,6 +662,18 @@ def match_datasets(
 
     matching_distance_before = np.diag(dist_matrix).mean()
 
+    if plot_flag:
+        plt.figure(figsize=(12, 5))
+        plt.subplot(121)
+        sns.heatmap(adata1.obsm[obs_key1], cmap="viridis")
+        plt.title("RNA Archetype Vectors")
+        plt.subplot(122)
+        sns.heatmap(adata2.obsm[obs_key2], cmap="viridis")
+        plt.title("Protein Archetype Vectors")
+        plt.suptitle("Initial Data")
+        plt.tight_layout()
+        plt.show()
+
     n1, n2 = len(adata1), len(adata2)
 
     # Determine which dataset is smaller
@@ -677,66 +689,86 @@ def match_datasets(
     if not smaller_is_first:
         dist_matrix = dist_matrix.T
 
-    # Use Hungarian algorithm for optimal matching
-    row_ind, col_ind = linear_sum_assignment(dist_matrix)
+    if plot_flag:
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(dist_matrix, cmap="viridis")
+        plt.title("Initial Distance Matrix")
+        plt.show()
 
-    # Get the distances for the matched pairs
-    match_quality = dist_matrix[row_ind, col_ind]
+    # First evaluate each cell's worst match
+    adata1_best_matches = np.min(dist_matrix, axis=1)
+    adata2_best_matches = np.min(dist_matrix, axis=0)
 
-    # Filter out bad matches based on threshold
+    # Print diagnostic information
+    print("\nDistance Distribution Statistics:")
+    print(f"RNA cells worst match percentiles:")
+    for p in [0, 25, 50, 75, 100]:
+        print(f"{p}th percentile: {np.percentile(adata1_best_matches, p):.3f}")
+    print(f"\nProtein cells worst match percentiles:")
+    for p in [0, 25, 50, 75, 100]:
+        print(f"{p}th percentile: {np.percentile(adata2_best_matches, p):.3f}")
+
+    # If threshold is auto, compute it from the distribution of worst matches
     if threshold == "auto":
-        num_bins = n_smaller // 20
-        hist, bin_edges = np.histogram(match_quality, bins=num_bins)
-        num_cutoffs = num_bins // 2
-        bin_edges, hist = bin_edges[num_cutoffs + 1 :], hist[num_cutoffs:]
-        # smooth the histogram using a moving average
-        window_size = max(num_bins // 40, 3)
-        hist = np.convolve(hist, np.ones(window_size), mode="same") / window_size
+        all_worst_matches = np.concatenate([adata1_best_matches, adata2_best_matches])
+        threshold = np.percentile(all_worst_matches, 75)  # Use 75th percentile as threshold
+        print(f"\nSetting auto threshold to 75th percentile: {threshold:.3f}")
 
-        kneedle = KneeLocator(bin_edges, hist, S=2.0, curve="convex", direction="decreasing")
-        threshold = kneedle.knee
-        if threshold is None:
-            threshold = 0.01
-        if plot_flag:
-            kneedle.plot_knee()
-            plt.xlabel("Cosine Distance")
-            plt.ylabel("Count")
-            plt.title(
-                "Knee Point Detection to set acceptable threshold for RNA to Protein matching"
-            )
-            plt.show()
+    print(f"\nUsing threshold: {threshold:.3f}")
 
-    # Keep only cells with good matches
-    good_match_mask = match_quality <= threshold
-    good_smaller_indices = row_ind[good_match_mask]
-    good_larger_indices = col_ind[good_match_mask]
+    # Create masks for good matches in each dataset
+    good_adata1_mask = adata1_best_matches <= threshold
+    good_adata2_mask = adata2_best_matches <= threshold
 
-    # Check if any cells in larger dataset have matches below threshold
-    larger_has_matches = np.any(dist_matrix <= threshold, axis=0)
-    keep_larger_indices = np.where(larger_has_matches)[0]
+    # Print how many cells pass the threshold
+    print(f"\nCells passing threshold:")
+    print(f"RNA cells: {np.sum(good_adata1_mask)} / {len(good_adata1_mask)}")
+    print(f"Protein cells: {np.sum(good_adata2_mask)} / {len(good_adata2_mask)}")
 
-    # Remove cells from larger dataset that don't have any good matches
-    if len(keep_larger_indices) < n_larger:
+    # Get indices of cells that have good matches
+    good_adata1_indices = np.where(good_adata1_mask)[0]
+    good_adata2_indices = np.where(good_adata2_mask)[0]
+
+    # Create filtered distance matrix with only good matches
+    filtered_dist_matrix = dist_matrix[good_adata1_mask][:, good_adata2_mask]
+
+    if len(filtered_dist_matrix) == 0:
         print(
-            f"Removing {n_larger - len(keep_larger_indices)} cells from larger dataset with no good matches"
+            f"No good matches found with threshold {threshold:.3f}. Try increasing the threshold."
         )
-        larger_adata = larger_adata[keep_larger_indices].copy()
-        dist_matrix = dist_matrix[:, keep_larger_indices]
-        n_larger = len(larger_adata)
+        return smaller_adata[[]].copy(), larger_adata[[]].copy()
 
-        # Recompute Hungarian matching with filtered larger dataset
-        row_ind, col_ind = linear_sum_assignment(dist_matrix)
-        match_quality = dist_matrix[row_ind, col_ind]
-        good_match_mask = match_quality <= threshold
-        good_smaller_indices = row_ind[good_match_mask]
-        good_larger_indices = col_ind[good_match_mask]
+    # Run Hungarian algorithm on filtered distance matrix
+    row_ind, col_ind = linear_sum_assignment(filtered_dist_matrix)
+
+    # Map back to original indices
+    final_smaller_indices = good_adata1_indices[row_ind]
+    final_larger_indices = good_adata2_indices[col_ind]
+
+    # Get match quality for reporting
+    match_quality = dist_matrix[final_smaller_indices, final_larger_indices]
+
+    if plot_flag:
+        plt.figure(figsize=(12, 5))
+        plt.subplot(121)
+        sns.heatmap(filtered_dist_matrix, cmap="viridis")
+        plt.title("Filtered Distance Matrix\n(After removing bad matches)")
+        plt.subplot(122)
+        plt.hist(match_quality, bins=50, alpha=0.5, color="green", label="Good matches")
+        plt.axvline(x=threshold, color="red", linestyle="--", label=f"Threshold ({threshold:.3f})")
+        plt.title("Match Quality Distribution")
+        plt.xlabel("Distance")
+        plt.ylabel("Count")
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
 
     # Create DataFrame for sorting smaller dataset
     smaller_df = pd.DataFrame(
         {
-            "index": good_smaller_indices,
-            "major_cell_types": smaller_adata.obs["major_cell_types"].iloc[good_smaller_indices],
-            "cell_types": smaller_adata.obs["cell_types"].iloc[good_smaller_indices],
+            "index": final_smaller_indices,
+            "major_cell_types": smaller_adata.obs["major_cell_types"].iloc[final_smaller_indices],
+            "cell_types": smaller_adata.obs["cell_types"].iloc[final_smaller_indices],
         }
     )
 
@@ -745,9 +777,24 @@ def match_datasets(
     sorted_smaller_indices = smaller_df["index"].values
 
     # Get corresponding larger indices in the same order as sorted smaller indices
-    sorted_larger_indices = good_larger_indices[
-        np.array([np.where(good_smaller_indices == idx)[0][0] for idx in sorted_smaller_indices])
+    sorted_larger_indices = final_larger_indices[
+        np.array([np.where(final_smaller_indices == idx)[0][0] for idx in sorted_smaller_indices])
     ]
+
+    if plot_flag:
+        plt.figure(figsize=(12, 5))
+        plt.subplot(121)
+        sns.heatmap(dist_matrix[sorted_smaller_indices][:, sorted_larger_indices], cmap="viridis")
+        plt.title("Distance Matrix (Sorted by Cell Type)")
+        plt.subplot(122)
+        plt.hist(match_quality, bins=50, alpha=0.5, color="green", label="Good matches")
+        plt.axvline(x=threshold, color="red", linestyle="--", label=f"Threshold ({threshold:.3f})")
+        plt.title("Match Quality Distribution (After Sorting)")
+        plt.xlabel("Distance")
+        plt.ylabel("Count")
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
 
     # Find which cells in the larger dataset were not matched
     all_larger_indices = np.arange(n_larger)
@@ -780,50 +827,84 @@ def match_datasets(
         final_adata1_indices = final_larger_indices
         final_adata2_indices = sorted_smaller_indices
 
+    if plot_flag:
+        plt.figure(figsize=(12, 5))
+        plt.subplot(121)
+        sns.heatmap(adata1[final_adata1_indices].obsm[obs_key1].values, cmap="viridis")
+        plt.title("Final RNA Archetype Vectors")
+        plt.subplot(122)
+        sns.heatmap(adata2[final_adata2_indices].obsm[obs_key2].values, cmap="viridis")
+        plt.title("Final Protein Archetype Vectors")
+        plt.suptitle("Final Matched Data")
+        plt.tight_layout()
+        plt.show()
+        min_len = min(len(final_adata1_indices), len(final_adata2_indices))
+        plt.figure(figsize=(12, 5))
+        plt.subplot(121)
+        sns.heatmap(adata1[final_adata1_indices[:min_len]].obsm[obs_key1].values, cmap="viridis")
+        plt.title("Final RNA Archetype Vectors")
+        plt.subplot(122)
+        sns.heatmap(adata2[final_adata2_indices[:min_len]].obsm[obs_key2].values, cmap="viridis")
+        plt.title("Final Protein Archetype Vectors")
+        plt.suptitle("Final Matched Data min length")
+        plt.tight_layout()
+        plt.show()
+
     # Calculate statistics
     stats = {
         "total_adata1": n1,
         "total_adata2": n2,
-        "matched_cells": len(good_smaller_indices),
-        "removed_smaller_modality": n_smaller - len(good_smaller_indices),
-        "removed_larger_modality": n2 - len(keep_larger_indices),
-        "mean_distance": match_quality[good_match_mask].mean(),
+        "matched_cells": len(good_adata1_indices),
+        "removed_smaller_modality": n_smaller - len(good_adata1_indices),
+        "removed_larger_modality": n_larger - len(good_adata2_indices),
+        "mean_distance": match_quality.mean(),
+        "median_distance": np.median(match_quality),
+        "std_distance": np.std(match_quality),
+        "min_distance": np.min(match_quality),
+        "max_distance": np.max(match_quality),
     }
 
     # Print comprehensive report
     smaller_name = "adata1" if smaller_is_first else "adata2"
     larger_name = "adata2" if smaller_is_first else "adata1"
 
+    # Get the correct numbers for each dataset
+    if smaller_is_first:
+        smaller_kept = stats["matched_cells"]
+        smaller_total = stats["total_adata1"]
+        smaller_removed = stats["removed_smaller_modality"]
+        larger_kept = len(good_adata2_indices)
+        larger_total = stats["total_adata2"]
+        larger_removed = larger_total - len(good_adata2_indices)
+    else:
+        smaller_kept = stats["matched_cells"]
+        smaller_total = stats["total_adata2"]
+        smaller_removed = stats["removed_smaller_modality"]
+        larger_kept = len(good_adata1_indices)
+        larger_total = stats["total_adata1"]
+        larger_removed = larger_total - len(good_adata1_indices)
+
     print(
         "Matching Report:\n"
-        f"- Kept {stats['matched_cells']}/{n_smaller} {smaller_name} cells "
-        f"({stats['removed_smaller_modality']} removed due to poor matching)\n"
-        f"- Kept {len(keep_larger_indices)}/{n2} {larger_name} cells "
-        f"({stats['removed_larger_modality']} removed with no good matches)\n"
+        f"- Kept {smaller_kept}/{smaller_total} {smaller_name} cells "
+        f"({smaller_removed} removed due to poor matching)\n"
+        f"- Kept {larger_kept}/{larger_total} {larger_name} cells "
+        f"({larger_removed} removed with no good matches)\n"
         f"- Average match distance before matching: {matching_distance_before:.3f}\n"
-        f"- Average match distance after matching: {stats['mean_distance']:.3f}"
+        f"- Average match distance after matching: {stats['mean_distance']:.3f}\n"
+        f"- Median match distance: {stats['median_distance']:.3f}\n"
+        f"- Std match distance: {stats['std_distance']:.3f}\n"
+        f"- Min/Max match distance: {stats['min_distance']:.3f}/{stats['max_distance']:.3f}"
     )
 
     if plot_flag:
-        # Plot distribution of matching distances
-        plt.figure(figsize=(10, 6))
-        plt.hist(match_quality, bins=50, alpha=0.5, color="blue", label="All matches")
-        plt.hist(
-            match_quality[good_match_mask], bins=50, alpha=0.5, color="green", label="Good matches"
-        )
-        plt.axvline(x=threshold, color="red", linestyle="--", label=f"Threshold ({threshold:.3f})")
-        plt.xlabel("Cosine Distance")
-        plt.ylabel("Count")
-        plt.legend()
-        plt.title("Distribution of Matching Distances")
-        plt.show()
-
         # Plot remaining visualizations if needed
-        unmatched_smaller = np.setdiff1d(np.arange(n_smaller), good_smaller_indices)
         if smaller_is_first:
+            unmatched_smaller = np.setdiff1d(np.arange(n_smaller), good_adata1_indices)
             unmatched_rna_indices = unmatched_smaller
             unmatched_prot_indices = []
         else:
+            unmatched_smaller = np.setdiff1d(np.arange(n_smaller), good_adata2_indices)
             unmatched_rna_indices = []
             unmatched_prot_indices = unmatched_smaller
 
@@ -837,7 +918,7 @@ def match_datasets(
 
     # Create final matched AnnData objects
     matched_adata1 = adata1[final_adata1_indices].copy()
-    matched_adata2 = larger_adata[final_adata2_indices].copy()
+    matched_adata2 = adata2[final_adata2_indices].copy()
 
     # Set metadata to indicate the datasets are ordered
     matched_adata1.uns["ordered_matching_cells"] = True
@@ -848,11 +929,21 @@ def match_datasets(
     # Verify alignment of matched cells
     n_matched = len(sorted_smaller_indices)
     if not (
-        matched_adata1.obs["cell_types"].values[:n_matched]
-        == matched_adata2.obs["cell_types"].values[:n_matched]
+        matched_adata1.obs["cell_types"].astype(str).values[:n_matched]
+        == matched_adata2.obs["cell_types"].astype(str).values[:n_matched]
     ).all():
         print("Warning: Cell types of matched cells are not aligned!")
+        # Print some diagnostic information
+        print("\nFirst few cell types in dataset 1:")
+        print(matched_adata1.obs["cell_types"].astype(str).values[:5])
+        print("\nFirst few cell types in dataset 2:")
+        print(matched_adata2.obs["cell_types"].astype(str).values[:5])
+        print("\nUnique cell types in dataset 1:")
+        print(np.unique(matched_adata1.obs["cell_types"].astype(str).values))
+        print("\nUnique cell types in dataset 2:")
+        print(np.unique(matched_adata2.obs["cell_types"].astype(str).values))
 
+    # Check if CN is preserved in matched_adata2
     return matched_adata1, matched_adata2
 
 
