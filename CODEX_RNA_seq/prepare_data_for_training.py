@@ -1,3 +1,5 @@
+# %%
+
 # ---
 # jupyter:
 #   jupytext:
@@ -20,7 +22,7 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # %%
 # Imports
 # %%
@@ -120,26 +122,22 @@ def load_data(folder, file_prefixes):
     print("Loading data files...")
     latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
     print(latest_files)
-
     adata_rna = sc.read(latest_files["adata_rna_"])
     print("Loaded RNA data:", adata_rna.shape)
     adata_prot = sc.read(latest_files["adata_prot_"])
     print("Loaded protein data:", adata_prot.shape)
-    adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
-    print("Loaded RNA archetypes:", adata_archetype_rna.shape)
-    adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
-    print("Loaded protein archetypes:", adata_archetype_prot.shape)
 
-    return adata_rna, adata_prot, adata_archetype_rna, adata_archetype_prot
+    return adata_rna, adata_prot
 
 
 def subsample_data(adata_rna, adata_prot, sample_size=2000):
     """Subsample data to specified size"""
     print("\nSubsampling data...")
-    sample_size = min(len(adata_prot), len(adata_rna), sample_size)
-    adata_rna_subset = sc.pp.subsample(adata_rna, n_obs=sample_size, copy=True)
-    adata_prot_subset = sc.pp.subsample(adata_prot, n_obs=int(sample_size) - 1, copy=True)
-    print(f"Subsampled to {sample_size} cells")
+    rna_sample_size = min(len(adata_rna), sample_size)
+    prot_sample_size = min(len(adata_prot), sample_size)
+    adata_rna_subset = sc.pp.subsample(adata_rna, n_obs=rna_sample_size, copy=True)
+    adata_prot_subset = sc.pp.subsample(adata_prot, n_obs=prot_sample_size, copy=True)
+    print(f"Subsampled to {rna_sample_size} RNA cells and {prot_sample_size} protein cells")
     return adata_rna_subset, adata_prot_subset
 
 
@@ -164,8 +162,7 @@ def compute_archetype_distances(adata_rna_subset, adata_prot_subset):
         adata_prot_subset.obsm["archetype_vec"].values,
         metric="cosine",
     )
-    matching_distance_before = np.diag(archetype_distances).mean()
-    print(f"Initial matching distance: {matching_distance_before:.3f}")
+
     return archetype_distances
 
 
@@ -195,9 +192,7 @@ def save_processed_data(adata_rna_subset, adata_prot_subset, save_dir):
 def load_and_subsample_data(folder, file_prefixes, sample_size=2000):
     """Load and subsample data files"""
     device = setup_environment()
-    adata_rna, adata_prot, adata_archetype_rna, adata_archetype_prot = load_data(
-        folder, file_prefixes
-    )
+    adata_rna, adata_prot = load_data(folder, file_prefixes)
     adata_rna_subset, adata_prot_subset = subsample_data(adata_rna, adata_prot, sample_size)
     del adata_prot, adata_rna
     return adata_rna_subset, adata_prot_subset
@@ -210,11 +205,13 @@ file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_arc
 sample_size = 8000  # Adjust this value as needed
 
 adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefixes, sample_size)
-
+adata_rna_subset = adata_rna_subset[:500]  # todo remove
+adata_prot_subset = adata_prot_subset[:250]  # todo remove
 # %%
 # Process and visualize data
 # %%
 plot_flag = True  # Set to False to skip all visualizations
+
 sc.pp.pca(adata_rna_subset)
 sc.pp.pca(adata_prot_subset)
 sc.pp.neighbors(adata_rna_subset)
@@ -229,17 +226,25 @@ adata_rna_subset, adata_prot_subset = order_cells_by_type(adata_rna_subset, adat
 
 # Compute archetype distances
 archetype_distances = compute_archetype_distances(adata_rna_subset, adata_prot_subset)
-
+matching_distance_before = np.diag(archetype_distances).mean()
+# %%
 # Plot archetype heatmaps
 if plot_flag:
     plot_archetype_heatmaps(adata_rna_subset, adata_prot_subset, archetype_distances)
-
+# %%
 # Match datasets
 adata_rna_subset_matched, adata_prot_subset_matched = match_datasets(
     adata_rna_subset, adata_prot_subset, threshold=0.1, plot_flag=plot_flag
 )
 adata_rna_subset, adata_prot_subset = adata_rna_subset_matched, adata_prot_subset_matched
-adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values
+# Compute pairwise cosine distances between RNA and protein cells
+dist_matrix = scipy.spatial.distance.cdist(
+    adata_rna_subset.obsm["archetype_vec"], adata_prot_subset.obsm["archetype_vec"], metric="cosine"
+)
+
+# For each RNA cell, find closest protein cell and use its CN
+closest_prot_indices = np.argmin(dist_matrix, axis=1)
+adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
 
 # Compute PCA and UMAP
 adata_rna_subset, adata_prot_subset = compute_pca_and_umap(adata_rna_subset, adata_prot_subset)
@@ -262,18 +267,21 @@ save_processed_data(adata_rna_subset, adata_prot_subset, save_dir)
 # Additional analysis cells - uncomment and modify as needed
 # %%
 # Plot specific visualizations
-# sc.pl.embedding(adata_rna_subset, color=["cell_types"], basis="X_original_umap", title="RNA data cell types")
+if plot_flag:
+    sc.pl.embedding(
+        adata_rna_subset, color=["cell_types"], basis="X_original_umap", title="RNA data cell types"
+    )
 
 # %%
 # Analyze specific cell types
-# one_cell_type = adata_prot_subset.obs["major_cell_types"][0]
-# plot_b_cells_analysis(adata_rna_subset[adata_rna_subset.obs["major_cell_types"] == one_cell_type])
+if plot_flag:
+    one_cell_type = adata_prot_subset.obs["major_cell_types"][0]
+    plot_b_cells_analysis(
+        adata_rna_subset[adata_rna_subset.obs["major_cell_types"] == one_cell_type]
+    )
 
 # %%
 # Compute additional metrics
-# archetype_distances = compute_archetype_distances(adata_rna_subset, adata_prot_subset)
-# print(f"Average matching distance: {np.diag(archetype_distances).mean():.3f}")
-
-# %%
-# Save intermediate results
-# sc.write("intermediate_results.h5ad", adata_rna_subset)
+archetype_distances = compute_archetype_distances(adata_rna_subset, adata_prot_subset)
+print(f"Initial matching distance: {matching_distance_before:.3f}")
+print(f"Average matching distance: {np.diag(archetype_distances).mean():.3f}")

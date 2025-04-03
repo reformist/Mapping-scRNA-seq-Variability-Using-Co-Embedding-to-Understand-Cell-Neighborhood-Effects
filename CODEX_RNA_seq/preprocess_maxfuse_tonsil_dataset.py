@@ -188,8 +188,8 @@ device = setup_environment()
 
 # Setup paths
 root_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-data_dir = root_dir / "data"
-save_dir = root_dir / "data"
+data_dir = root_dir /'CODEX_RNA_seq' /'data'/'raw_data'
+save_dir = root_dir / "CODEX_RNA_seq" /'data'/'processed_data'
 plot_flag = True
 
 # Create data directory if it doesn't exist
@@ -220,8 +220,8 @@ if plot_flag:
 # %%
 # Filter and subsample data
 # %%
-num_rna_cells = 80000  # Adjust these values as needed
-num_protein_cells = 80000
+num_rna_cells = 800  # Adjust these values as needed
+num_protein_cells = 800
 rna_adata, protein_adata = filter_and_subsample_data(rna_adata, protein_adata,
                                                     num_rna_cells, num_protein_cells)
 

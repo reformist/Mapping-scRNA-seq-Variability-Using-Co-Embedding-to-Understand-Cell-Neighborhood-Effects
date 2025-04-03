@@ -3,6 +3,7 @@
 data/
 *.h5ad
 *.zip
+*.csv
 temp
 starfysh_reproducibility/
 **/tb_logs
@@ -37,3 +38,6 @@ history_test.log
 *.log.*.*.*
 *.log.*.*.*.*
 *.log.*.*.*.*.*
+external_data/protein_gene_conversion.csv
+external_data/citeseq_pbmc/rna.txt
+external_data/tonsil/tonsil_rna_counts.txt

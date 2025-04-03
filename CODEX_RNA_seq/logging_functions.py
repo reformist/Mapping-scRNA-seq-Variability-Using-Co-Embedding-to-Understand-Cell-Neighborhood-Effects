@@ -239,3 +239,69 @@ def load_history(log_file):
     """Load history from log file"""
     with open(log_file, "r") as f:
         return json.load(f)
+
+
+def print_training_metrics(
+    global_step,
+    current_epoch,
+    rna_loss_output,
+    protein_loss_output,
+    contrastive_loss,
+    adv_loss,
+    matching_loss,
+    similarity_loss,
+    diversity_loss,
+    total_loss,
+    latent_distances,
+    similarity_loss_raw,
+    similarity_weight,
+    ratio,
+    similarity_active,
+    num_acceptable,
+    num_cells,
+    exact_pairs,
+):
+    """Print training metrics in a structured format."""
+    print("\n" + "=" * 80)
+    print(f"Step {global_step}, Epoch {current_epoch}")
+    print("=" * 80)
+
+    # Helper function to format loss with percentage
+    def format_loss(loss, total):
+        abs_total = abs(total)
+        abs_loss = abs(loss)
+        if abs_loss > 100:
+            return f"{round(loss, 2)} ({round(abs_loss/abs_total*100, 1)}%)"
+        return f"{loss:.3f} ({round(abs_loss/abs_total*100, 1)}%)"
+
+    print("\nLosses:")
+    print("-" * 40)
+    print(f"RNA Loss: {format_loss(rna_loss_output.loss.item(), total_loss.item())}")
+    print(f"Protein Loss: {format_loss(protein_loss_output.loss.item(), total_loss.item())}")
+    print(f"Contrastive Loss: {format_loss(contrastive_loss.item(), total_loss.item())}")
+    print(f"Adversarial Loss: {format_loss(adv_loss.item(), total_loss.item())}")
+    print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss.item())}")
+    print(f"Similarity Loss: {format_loss(similarity_loss.item(), total_loss.item())}")
+    print(f"Diversity Loss: {format_loss(diversity_loss.item(), total_loss.item())}")
+    print(f"Total Loss: {total_loss.item():.3f}")
+
+    print("\nDistance Metrics:")
+    print("-" * 40)
+    print(f"Min Latent Distances: {round(latent_distances.min().item(),3)}")
+    print(f"Max Latent Distances: {round(latent_distances.max().item(),3)}")
+    print(f"Mean Latent Distances: {round(latent_distances.mean().item(),3)}")
+
+    print("\nSimilarity Metrics:")
+    print("-" * 40)
+    print(f"Similarity Loss Raw: {similarity_loss_raw.item():.3f}")
+    print(f"Similarity Weight: {similarity_weight}")
+    print(f"Similarity Ratio: {ratio:.3f}")
+    print(f"Similarity Active: {similarity_active}")
+
+    print("\nMatching Metrics:")
+    print("-" * 40)
+    print(f"Number of Acceptable Pairs: {num_acceptable.item()}")
+    print(f"Total Pairs: {num_cells}")
+    print(f"Acceptable Ratio: {num_acceptable.item()/num_cells:.3f}")
+    print(f"Exact Pairs Loss: {exact_pairs.item():.3f}")
+    print("=" * 80 + "\n")

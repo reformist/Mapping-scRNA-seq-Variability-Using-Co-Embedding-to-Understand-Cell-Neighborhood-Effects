@@ -12,8 +12,10 @@
 #     name: python3
 # ---
 
-# %%
+# %% Archetype Generation with Neighbors Means and MaxFuse
+# This notebook generates archetypes for RNA and protein data using neighbor means and MaxFuse alignment.
 
+# %% Imports and Setup
 import copy
 import importlib
 import os
@@ -35,13 +37,29 @@ from tqdm import tqdm
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set working directory to project root
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from cell_lists import cd8_t_cell_activation, precursor_exhaustion, terminal_exhaustion
+from plotting_functions import (
+    plot_archetype_proportions,
+    plot_archetype_visualizations,
+    plot_archetype_weights,
+    plot_elbow_method,
+    plot_modality_embeddings,
+    plot_neighbor_means,
+    plot_spatial_clusters,
+)
+
 import bar_nick_utils
 import covet_utils
 
 importlib.reload(bar_nick_utils)
 importlib.reload(covet_utils)
 from bar_nick_utils import (
-    add_spatial_data_to_prot,
     clean_uns_for_h5ad,
     compare_matchings,
     evaluate_distance_metrics,
@@ -50,8 +68,6 @@ from bar_nick_utils import (
     get_latest_file,
     plot_archetypes,
     plot_archetypes_matching,
-    preprocess_protein,
-    preprocess_rna,
     reorder_rows_to_maximize_diagonal,
 )
 
@@ -59,8 +75,9 @@ from bar_nick_utils import (
 np.random.seed(8)
 
 # Global variables
-plot_flag = True
+plot_flag = False
 
+# %% Load and Preprocess Data
 # Load data
 file_prefixes = ["preprocessed_adata_rna_", "preprocessed_adata_prot_"]
 folder = "CODEX_RNA_seq/data/processed_data"
@@ -73,13 +90,15 @@ adata_2_prot = sc.read(latest_files["preprocessed_adata_prot_"])
 # Subsample data
 num_rna_cells = 80000
 num_protein_cells = 80000
+num_rna_cells = num_protein_cells = 500
 subsample_n_obs_rna = min(adata_1_rna.shape[0], num_rna_cells)
 subsample_n_obs_protein = min(adata_2_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_1_rna, n_obs=subsample_n_obs_rna)
 sc.pp.subsample(adata_2_prot, n_obs=subsample_n_obs_protein)
 
 original_protein_num = adata_2_prot.X.shape[1]
-
+print(f"data shape: {adata_1_rna.shape}, {adata_2_prot.shape}")
+# %% Compute Spatial Neighbors and Means
 # Compute spatial neighbors
 sc.pp.neighbors(adata_2_prot, use_rep="spatial_location")
 
@@ -99,6 +118,7 @@ neighbor_means = np.asarray(neighbor_sums / connectivities.sum(1))
 if plot_flag:
     plt.show()
 
+# %% Spatial Neighbors with Cutoff
 # Compute spatial neighbors with cutoff
 sc.pp.neighbors(
     adata_2_prot, use_rep="spatial_location", key_added="spatial_neighbors", n_neighbors=15
@@ -140,6 +160,7 @@ print(
     len(adata_2_prot.obsp["spatial_neighbors_connectivities"].data),
 )
 
+# %% Compute Cell Neighborhoods
 # Compute cell neighborhoods
 normalized_data = zscore(neighbor_means, axis=0)
 
@@ -157,75 +178,14 @@ if issparse(adata_2_prot.X):
 
 # Plot neighbor means
 if plot_flag:
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("Mean Protein Expression of Cell Neighborhoods")
-    sns.heatmap(neighbor_means)
-    plt.subplot(1, 2, 2)
-    plt.title("Raw Protein Expression per Cell")
-    sns.heatmap(adata_2_prot.X)
-    plt.show()
+    plot_neighbor_means(adata_2_prot, neighbor_means)
 
+# %% Plot Spatial Clusters
 # Plot spatial clusters
 if plot_flag:
-    fig, ax = plt.subplots()
-    sc.pl.scatter(
-        adata_2_prot,
-        x="X",
-        y="Y",
-        color="CN",
-        title="Cluster cells by their CN, can see the different CN in different regions, \nthanks to the different B cell types in each region",
-        ax=ax,
-        show=False,
-    )
+    plot_spatial_clusters(adata_2_prot, neighbor_means)
 
-    neighbor_adata = AnnData(neighbor_means)
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    sns.heatmap(neighbor_adata.X)
-    plt.title("convet sqrt")
-    plt.subplot(1, 2, 2)
-    sns.heatmap(adata_2_prot.X.todense() if issparse(adata_2_prot.X) else adata_2_prot.X)
-    plt.title("Proteins expressions of each cell")
-    plt.show()
-
-    neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"])
-    sc.pp.pca(neighbor_adata)
-    sc.pp.neighbors(neighbor_adata)
-    sc.tl.umap(neighbor_adata)
-    sc.pl.umap(neighbor_adata, color="CN", title="UMAP of CN embedding")
-
-    # Combine protein and CN data
-    adata_prot_cn_concat = concat(
-        [adata_2_prot, neighbor_adata], join="outer", label="modality", keys=["Protein", "CN"]
-    )
-    X = (
-        adata_prot_cn_concat.X.toarray()
-        if issparse(adata_prot_cn_concat.X)
-        else adata_prot_cn_concat.X
-    )
-    X = np.nan_to_num(X)
-    adata_prot_cn_concat.X = X
-    sc.pp.pca(adata_prot_cn_concat)
-    sc.pp.neighbors(adata_prot_cn_concat)
-    sc.tl.umap(adata_prot_cn_concat)
-    sc.pl.umap(
-        adata_prot_cn_concat,
-        color=["CN", "modality"],
-        title=[
-            "UMAP of CN embedding to make sure they are not mixed",
-            "UMAP of CN embedding to make sure they are not mixed",
-        ],
-    )
-    sc.pl.pca(
-        adata_prot_cn_concat,
-        color=["CN", "modality"],
-        title=[
-            "PCA of CN embedding to make sure they are not mixed",
-            "PCA of CN embedding to make sure they are not mixed",
-        ],
-    )
-
+# %% Add CN Features to Protein Data
 # Add CN features to protein data
 new_feature_names = [f"CN_{i}" for i in adata_2_prot.var.index]
 if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
@@ -249,6 +209,7 @@ adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
 sc.pp.pca(adata_2_prot)
 print(f"New adata shape (protein features + cell neighborhood vector): {adata_2_prot.shape}")
 
+# %% Compute PCA and UMAP for Both Modalities
 # Compute PCA and UMAP for both modalities
 sc.pp.pca(adata_1_rna)
 sc.pp.pca(adata_2_prot)
@@ -260,120 +221,9 @@ sc.tl.umap(adata_2_prot, neighbors_key="original_neighbors")
 adata_2_prot.obsm["X_original_umap"] = adata_2_prot.obsm["X_umap"]
 
 if plot_flag:
-    sc.tl.umap(adata_2_prot, neighbors_key="original_neighbors")
-    sc.pl.pca(
-        adata_1_rna,
-        color=["cell_types", "major_cell_types"],
-        title=["RNA pca minor cell types", "RNA pca major cell types"],
-    )
-    sc.pl.pca(
-        adata_2_prot,
-        color=["cell_types", "major_cell_types"],
-        title=["Protein pca minor cell types", "Protein pca major cell types"],
-    )
-    sc.pl.embedding(
-        adata_1_rna,
-        basis="X_umap",
-        color=["major_cell_types", "cell_types"],
-        title=["RNA UMAP major cell types", "RNA UMAP major cell types"],
-    )
-    sc.pl.embedding(
-        adata_2_prot,
-        basis="X_original_umap",
-        color=["major_cell_types", "cell_types"],
-        title=["Protein UMAp major cell types", "Protein UMAP major cell types"],
-    )
+    plot_modality_embeddings(adata_1_rna, adata_2_prot)
 
-# Define gene modules
-terminal_exhaustion = [
-    "CD3G",
-    "FASLG",
-    "ID2",
-    "LAG3",
-    "RGS1",
-    "CCL3",
-    "CCL3L1",
-    "KIAA1671",
-    "SH2D2A",
-    "DUSP2",
-    "PDCD1",
-    "CD7",
-    "NR4A2",
-    "CD160",
-    "PTPN22",
-    "ABI3",
-    "PTGER4",
-    "GZMK",
-    "GZMA",
-    "MBNL1",
-    "VMP1",
-    "PLAC8",
-    "RGS3",
-    "EFHD2",
-    "GLRX",
-    "CXCR6",
-    "ARL6IP1",
-    "CCL4",
-    "ISG15",
-    "LAX1",
-    "CD8A",
-    "SERPINA3",
-    "GZMB",
-    "TOX",
-]
-
-precursor_exhaustion = [
-    "TCF7",
-    "MS4A4A",
-    "TNFSF8",
-    "CXCL10",
-    "EEF1B2",
-    "ID3",
-    "IL7R",
-    "JUN",
-    "LTB",
-    "XCL1",
-    "SOCS3",
-    "TRAF1",
-    "EMB",
-    "CRTAM",
-    "EEF1G",
-    "CD9",
-    "ITGB1",
-    "GPR183",
-    "ZFP36L1",
-    "SLAMF6",
-    "LY6E",
-]
-
-cd8_t_cell_activation = [
-    "CD69",
-    "CCR7",
-    "CD27",
-    "BTLA",
-    "CD40LG",
-    "IL2RA",
-    "CD3E",
-    "CD47",
-    "EOMES",
-    "GNLY",
-    "GZMA",
-    "GZMB",
-    "PRF1",
-    "IFNG",
-    "CD8A",
-    "CD8B",
-    "CD95L",
-    "LAMP1",
-    "LAG3",
-    "CTLA4",
-    "HLA-DRA",
-    "TNFRSF4",
-    "ICOS",
-    "TNFRSF9",
-    "TNFRSF18",
-]
-
+# %% Convert Gene Names and Compute Module Scores
 # Convert gene names to uppercase
 adata_1_rna.var_names = adata_1_rna.var_names.str.upper()
 adata_2_prot.var_names = adata_2_prot.var_names.str.upper()
@@ -386,6 +236,7 @@ sc.tl.score_genes(
 if plot_flag:
     sc.pl.umap(adata_1_rna, color="terminal_exhaustion_score", cmap="viridis")
 
+# %% Compute PCA Dimensions
 # Compute PCA dimensions
 max_possible_pca_dim_rna = min(adata_1_rna.X.shape[1], adata_1_rna.X.shape[0])
 max_possible_pca_dim_prot = min(adata_2_prot.X.shape[1], adata_2_prot.X.shape[0])
@@ -419,12 +270,13 @@ if n_comps_thresh == 1:
         "n_comps_thresh is 1, this is not good, try to lower the variance_ration_selected"
     )
 
+# %% Find Archetypes
 # Find archetypes
 archetype_list_protein = []
 archetype_list_rna = []
 converge = 1e-5
-min_k = 9
-max_k = 10
+min_k = 7
+max_k = 8
 step_size = 1
 
 # Store explained variances for plotting the elbow method
@@ -465,19 +317,17 @@ archetype_list_rna = archetype_list_rna[:min_len]
 
 # Plot elbow method results
 if plot_flag:
-    plt.figure(figsize=(8, 6))
-    plt.plot(range(len(evs_protein)), evs_protein, marker="o", label="Protein")
-    plt.plot(range(len(evs_rna)), evs_rna, marker="s", label="RNA")
-    plt.xlabel("Number of Archetypes (k)")
-    plt.ylabel("Explained Variance")
-    plt.title("Elbow Plot: Explained Variance vs Number of Archetypes")
-    plt.legend()
-    plt.grid()
+    plot_elbow_method(evs_protein, evs_rna)
 
+# %% Get Cell Type Lists and Compute Archetype Proportions
 # Get cell type lists
 minor_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["cell_types"])))
+if "major_cell_types" not in adata_2_prot.obs.columns:
+    adata_2_prot.obs["major_cell_types"] = adata_2_prot.obs["cell_types"]
 major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
 minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
+if "major_cell_types" not in adata_1_rna.obs.columns:
+    adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
 major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 
 major_cell_types_amount_prot = [
@@ -542,22 +392,10 @@ for archetypes_prot, archetypes_rna in tqdm(
 print(major_cell_types_amount_rna)
 print(major_cell_types_amount_prot)
 
+# %% Plot Archetype Proportions
 # Plot archetype proportions
 if plot_flag:
-    fig = plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    sns.heatmap((archetype_proportion_list_rna[0]), cbar=False)
-    plt.xticks()
-    plt.title("RNA Archetypes")
-    plt.yticks([])
-    plt.ylabel("Archetypes")
-    plt.subplot(1, 2, 2)
-    plt.title("Protein Archetypes")
-    sns.heatmap((archetype_proportion_list_protein[0]), cbar=False)
-    plt.suptitle("Non-Aligned Archetypes Profiles")
-    plt.yticks([])
-    plt.ylabel("Archetypes")
-    plt.show()
+    plot_archetype_proportions(archetype_proportion_list_rna, archetype_proportion_list_protein)
 
     new_order_1 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_rna[0])[1]
     new_order_2 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[1]
@@ -565,6 +403,7 @@ if plot_flag:
     data2 = archetype_proportion_list_protein[0].iloc[new_order_2, :]
     plot_archetypes_matching(data1, data2)
 
+# %% Find Best Matching Archetypes
 # Find best matching archetypes
 (
     best_num_or_archetypes_index,
@@ -583,6 +422,7 @@ print(f"Best total matching cost: {best_total_cost}")
 print(f"Row indices (RNA): {best_rna_archetype_order}")
 print(f"Matched row indices (Protein): {best_protein_archetype_order}")
 
+# %% Reorder and Plot Best Matching Archetypes
 # Reorder archetypes based on best matching
 best_archetype_rna_prop = (
     archetype_proportion_list_rna[best_num_or_archetypes_index]
@@ -619,6 +459,7 @@ if plot_flag:
 
 best_protein_archetype_order
 
+# %% Get Cell Archetype Vectors
 # Get cell archetype vectors
 ordered_best_rna_archetype = archetype_list_rna[best_num_or_archetypes_index][
     best_protein_archetype_order, :
@@ -653,32 +494,18 @@ adata_2_prot.obs["archetype_label"] = pd.Categorical(np.argmax(cells_archetype_v
 adata_1_rna.uns["archetypes"] = ordered_best_rna_archetype
 adata_2_prot.uns["archetypes"] = ordered_best_protein_archetype
 
+# %% Evaluate Distance Metrics
 # Evaluate distance metrics
 metrics = ["euclidean", "cityblock", "cosine", "correlation", "chebyshev"]
 evaluate_distance_metrics(cells_archetype_vec_rna, cells_archetype_vec_prot, metrics)
 
+# %% Plot Archetype Weights
 # Plot archetype weights
 if plot_flag:
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("RNA Archetype Weights vs Cell Types")
-    plt.ylabel("Archetypes")
     _, row_order = reorder_rows_to_maximize_diagonal(best_archetype_rna_prop)
-    sns.heatmap(pd.DataFrame(best_archetype_rna_prop).iloc[row_order], cbar=False)
-    plt.yticks([])
-    plt.ylabel("Archetypes")
-    plt.subplot(1, 2, 2)
-    plt.ylabel("Archetypes")
-    plt.title("Protein Archetype Weights vs Cell Types")
-    sns.heatmap(pd.DataFrame(best_archetype_prot_prop).iloc[row_order], cbar=False)
-    plt.ylabel("Archetypes")
-    plt.suptitle(
-        "Archetype Weight Distribution Across Cell Types (Higher Similarity = Better Alignment)"
-    )
-    plt.yticks([])
-    plt.xticks(rotation=45)
-    plt.show()
+    plot_archetype_weights(best_archetype_rna_prop, best_archetype_prot_prop, row_order)
 
+# %% Create and Plot Archetype AnnData Objects
 # Create archetype AnnData objects
 adata_archetype_rna = AnnData(adata_1_rna.obsm["archetype_vec"])
 adata_archetype_prot = AnnData(adata_2_prot.obsm["archetype_vec"])
@@ -689,44 +516,32 @@ adata_archetype_prot.index = adata_2_prot.obs.index
 
 # Plot archetype visualizations
 if plot_flag:
-    sc.pp.pca(adata_archetype_rna)
-    sc.pp.pca(adata_archetype_prot)
-    sc.pl.pca(adata_archetype_rna, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pl.pca(adata_archetype_prot, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pp.neighbors(adata_archetype_rna)
-    sc.pp.neighbors(adata_archetype_prot)
-    sc.tl.umap(adata_archetype_rna)
-    sc.tl.umap(adata_archetype_prot)
-    sc.pl.umap(adata_archetype_rna, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pl.umap(adata_archetype_prot, color=["major_cell_types", "archetype_label", "cell_types"])
-
-    sc.pp.neighbors(adata_1_rna)
-    sc.pp.neighbors(adata_2_prot)
-    sc.tl.umap(adata_1_rna)
-    sc.tl.umap(adata_2_prot)
-    sc.pl.umap(
-        adata_1_rna, color="archetype_label", title="RNA UMAP Embedding Colored by Archetype Labels"
-    )
-    sc.pl.umap(
-        adata_2_prot,
-        color="archetype_label",
-        title="Protein UMAP Embedding Colored by Archetype Labels",
+    plot_archetype_visualizations(
+        adata_archetype_rna, adata_archetype_prot, adata_1_rna, adata_2_prot
     )
 
+# %% Save Results
 # Save results
 clean_uns_for_h5ad(adata_2_prot)
 clean_uns_for_h5ad(adata_1_rna)
 time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
-adata_1_rna.write(f"data/adata_rna_{time_stamp}.h5ad")
-adata_2_prot.write(f"data/adata_prot_{time_stamp}.h5ad")
-adata_archetype_rna.write(f"data/adata_archetype_rna_{time_stamp}.h5ad")
-adata_archetype_prot.write(f"data/adata_archetype_prot_{time_stamp}.h5ad")
+save_dir = "CODEX_RNA_seq/data/processed_data"
+os.makedirs(save_dir, exist_ok=True)
+adata_1_rna.write(f"{save_dir}/adata_rna_{time_stamp}.h5ad")
+adata_2_prot.write(f"{save_dir}/adata_prot_{time_stamp}.h5ad")
+adata_archetype_rna.write(f"{save_dir}/adata_archetype_rna_{time_stamp}.h5ad")
+adata_archetype_prot.write(f"{save_dir}/adata_archetype_prot_{time_stamp}.h5ad")
 
 # Load latest files
-folder = "CODEX_RNA_seq/data/"
 file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_archetype_prot_"]
-latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
-adata_rna = sc.read(latest_files["adata_rna_"])
-adata_prot = sc.read(latest_files["adata_prot_"])
-adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
-adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
+latest_files = {prefix: get_latest_file(save_dir, prefix) for prefix in file_prefixes}
+
+# Check if any files were found
+if any(v is None for v in latest_files.values()):
+    print("Warning: Some files were not found. Skipping file loading.")
+    print("Missing files:", [k for k, v in latest_files.items() if v is None])
+else:
+    adata_rna = sc.read(latest_files["adata_rna_"])
+    adata_prot = sc.read(latest_files["adata_prot_"])
+    adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
+    adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])

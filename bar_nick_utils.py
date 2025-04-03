@@ -664,12 +664,29 @@ def match_datasets(
 
     n1, n2 = len(adata1), len(adata2)
 
-    # Optimal initial matching using Hungarian algorithm
-    rows, cols = linear_sum_assignment(dist_matrix)
+    # Determine which dataset is smaller
+    smaller_adata = adata1 if n1 <= n2 else adata2
+    larger_adata = adata2 if n1 <= n2 else adata1
+    smaller_is_first = n1 <= n2
 
+    # Get the size of the smaller dataset
+    n_smaller = len(smaller_adata)
+    n_larger = len(larger_adata)
+
+    # Reshape dist_matrix if needed to ensure it's shaped as [smaller, larger]
+    if not smaller_is_first:
+        dist_matrix = dist_matrix.T
+
+    # Use Hungarian algorithm for optimal matching
+    row_ind, col_ind = linear_sum_assignment(dist_matrix)
+
+    # Get the distances for the matched pairs
+    match_quality = dist_matrix[row_ind, col_ind]
+
+    # Filter out bad matches based on threshold
     if threshold == "auto":
-        num_bins = len(rows) // 20
-        hist, bin_edges = np.histogram(dist_matrix[rows, cols].flatten(), bins=num_bins)
+        num_bins = n_smaller // 20
+        hist, bin_edges = np.histogram(match_quality, bins=num_bins)
         num_cutoffs = num_bins // 2
         bin_edges, hist = bin_edges[num_cutoffs + 1 :], hist[num_cutoffs:]
         # smooth the histogram using a moving average
@@ -678,6 +695,8 @@ def match_datasets(
 
         kneedle = KneeLocator(bin_edges, hist, S=2.0, curve="convex", direction="decreasing")
         threshold = kneedle.knee
+        if threshold is None:
+            threshold = 0.01
         if plot_flag:
             kneedle.plot_knee()
             plt.xlabel("Cosine Distance")
@@ -687,120 +706,152 @@ def match_datasets(
             )
             plt.show()
 
-    # 1. Primary matching (one-to-one)
-    primary_matches = []
-    for r, c in zip(rows, cols):
-        if dist_matrix[r, c] <= threshold:
-            primary_matches.append((r, c))
+    # Keep only cells with good matches
+    good_match_mask = match_quality <= threshold
+    good_smaller_indices = row_ind[good_match_mask]
+    good_larger_indices = col_ind[good_match_mask]
 
-    # 2. Secondary matching for remaining adata1 cells
-    matched_adata1 = set(r for r, _ in primary_matches)
-    remaining_adata1 = [i for i in range(n1) if i not in matched_adata1]
+    # Check if any cells in larger dataset have matches below threshold
+    larger_has_matches = np.any(dist_matrix <= threshold, axis=0)
+    keep_larger_indices = np.where(larger_has_matches)[0]
 
-    # Find best remaining matches for unpaired adata1 cells
-    secondary_matches = []
-    for r in remaining_adata1:
-        c = np.argmin(dist_matrix[r])
-        if dist_matrix[r, c] <= threshold:
-            secondary_matches.append((r, c))
+    # Remove cells from larger dataset that don't have any good matches
+    if len(keep_larger_indices) < n_larger:
+        print(
+            f"Removing {n_larger - len(keep_larger_indices)} cells from larger dataset with no good matches"
+        )
+        larger_adata = larger_adata[keep_larger_indices].copy()
+        dist_matrix = dist_matrix[:, keep_larger_indices]
+        n_larger = len(larger_adata)
 
-    # Combine matches and remove duplicates
-    combined = primary_matches + secondary_matches
-    unique_adata2 = set(c for _, c in combined)
+        # Recompute Hungarian matching with filtered larger dataset
+        row_ind, col_ind = linear_sum_assignment(dist_matrix)
+        match_quality = dist_matrix[row_ind, col_ind]
+        good_match_mask = match_quality <= threshold
+        good_smaller_indices = row_ind[good_match_mask]
+        good_larger_indices = col_ind[good_match_mask]
 
-    # Create final index arrays
-    adata1_indices = np.array([r for r, _ in combined])
-    adata2_indices = np.array([c for _, c in combined])
-    remaining_adata1 = [i for i in range(n1) if i not in adata1_indices]
-    remaining_adata2 = [i for i in range(n2) if i not in adata2_indices]
+    # Create DataFrame for sorting smaller dataset
+    smaller_df = pd.DataFrame(
+        {
+            "index": good_smaller_indices,
+            "major_cell_types": smaller_adata.obs["major_cell_types"].iloc[good_smaller_indices],
+            "cell_types": smaller_adata.obs["cell_types"].iloc[good_smaller_indices],
+        }
+    )
 
-    adata1.uns["ordered_matching_cells"] = True
-    adata2.uns["ordered_matching_cells"] = True
-    adata1.obs["index_col"] = np.arange(adata1.shape[0])
-    adata2.obs["index_col"] = np.arange(adata2.shape[0])
+    # Sort smaller dataset
+    smaller_df = smaller_df.sort_values(["major_cell_types", "cell_types"])
+    sorted_smaller_indices = smaller_df["index"].values
+
+    # Get corresponding larger indices in the same order as sorted smaller indices
+    sorted_larger_indices = good_larger_indices[
+        np.array([np.where(good_smaller_indices == idx)[0][0] for idx in sorted_smaller_indices])
+    ]
+
+    # Find which cells in the larger dataset were not matched
+    all_larger_indices = np.arange(n_larger)
+    unused_larger_indices = np.setdiff1d(all_larger_indices, sorted_larger_indices)
+
+    # Sort unmatched cells by cell types
+    if len(unused_larger_indices) > 0:
+        larger_df = pd.DataFrame(
+            {
+                "index": unused_larger_indices,
+                "major_cell_types": larger_adata.obs["major_cell_types"].iloc[
+                    unused_larger_indices
+                ],
+                "cell_types": larger_adata.obs["cell_types"].iloc[unused_larger_indices],
+            }
+        )
+        larger_df = larger_df.sort_values(["major_cell_types", "cell_types"])
+        sorted_unused_larger_indices = larger_df["index"].values
+
+        # Combine matched and unmatched indices
+        final_larger_indices = np.concatenate([sorted_larger_indices, sorted_unused_larger_indices])
+    else:
+        final_larger_indices = sorted_larger_indices
+
+    # Get the final indices based on whether adata1 or adata2 was the smaller dataset
+    if smaller_is_first:
+        final_adata1_indices = sorted_smaller_indices
+        final_adata2_indices = final_larger_indices
+    else:
+        final_adata1_indices = final_larger_indices
+        final_adata2_indices = sorted_smaller_indices
 
     # Calculate statistics
     stats = {
         "total_adata1": n1,
         "total_adata2": n2,
-        "matched_adata1": len(adata1_indices),
-        "unique_adata2_used": len(unique_adata2),
-        "adata1_unmatched": n1 - len(adata1_indices),
-        "adata2_unmatched": n2 - len(unique_adata2),
-        "adata2_reuses": len(adata2_indices) - len(unique_adata2),
-        "mean_distance": dist_matrix[adata1_indices, adata2_indices].mean(),
+        "matched_cells": len(good_smaller_indices),
+        "removed_smaller_modality": n_smaller - len(good_smaller_indices),
+        "removed_larger_modality": n2 - len(keep_larger_indices),
+        "mean_distance": match_quality[good_match_mask].mean(),
     }
 
     # Print comprehensive report
+    smaller_name = "adata1" if smaller_is_first else "adata2"
+    larger_name = "adata2" if smaller_is_first else "adata1"
+
     print(
         "Matching Report:\n"
-        f"- Matched {stats['matched_adata1']}/{n1} adata1 cells "
-        f"({stats['adata1_unmatched']} unmatched)\n"
-        f"- Used {stats['unique_adata2_used']}/{n2} adata2 cells "
-        f"({stats['adata2_unmatched']} never matched)\n"
-        f"- adata2 reuses: {stats['adata2_reuses']}\n"
-        f"- Average match distance before matching:{matching_distance_before:.3f}\n"
+        f"- Kept {stats['matched_cells']}/{n_smaller} {smaller_name} cells "
+        f"({stats['removed_smaller_modality']} removed due to poor matching)\n"
+        f"- Kept {len(keep_larger_indices)}/{n2} {larger_name} cells "
+        f"({stats['removed_larger_modality']} removed with no good matches)\n"
+        f"- Average match distance before matching: {matching_distance_before:.3f}\n"
         f"- Average match distance after matching: {stats['mean_distance']:.3f}"
     )
 
     if plot_flag:
-        # Calculate unified bin range for both datasets
-        dist_matrix_data1 = dist_matrix[adata1_indices, adata2_indices].flatten()
-        dist_matrix_data2 = dist_matrix[rows, cols].flatten()
-
-        combined_min = min(dist_matrix_data1.min(), dist_matrix_data2.min())
-        combined_max = max(dist_matrix_data1.max(), dist_matrix_data2.max())
-        bins = np.linspace(combined_min, combined_max, 100)
-
-        # Create figure with dual y-axes
-        fig, ax2 = plt.subplots(figsize=(10, 6))
-        ax1 = ax2.twinx()
-
-        # Plot first histogram
-        counts2, bins2, _ = ax2.hist(
-            dist_matrix_data2, bins=bins, alpha=0.5, color="red", label="Raw Hungarian matches"
+        # Plot distribution of matching distances
+        plt.figure(figsize=(10, 6))
+        plt.hist(match_quality, bins=50, alpha=0.5, color="blue", label="All matches")
+        plt.hist(
+            match_quality[good_match_mask], bins=50, alpha=0.5, color="green", label="Good matches"
         )
-        ax2.set_ylabel("Count (Raw Matches)", color="red")
-        ax2.tick_params(axis="y", labelcolor="red")
-
-        # Plot second histogram using same bins
-        counts1, bins1, _ = ax1.hist(
-            dist_matrix_data1, bins=bins, alpha=0.5, color="blue", label="Final matches"
-        )
-
-        ax1.set_ylabel("Count (Final Matches)", color="blue")
-        ax1.tick_params(axis="y", labelcolor="blue")
-
-        # Set common x-axis label and limits
-        ax1.set_xlabel("Cosine Distance")
-        ax1.set_xlim(combined_min, combined_max)
-
-        # Combine legends
-        lines1, labels1 = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-
+        plt.axvline(x=threshold, color="red", linestyle="--", label=f"Threshold ({threshold:.3f})")
+        plt.xlabel("Cosine Distance")
+        plt.ylabel("Count")
+        plt.legend()
         plt.title("Distribution of Matching Distances")
         plt.show()
+
+        # Plot remaining visualizations if needed
+        unmatched_smaller = np.setdiff1d(np.arange(n_smaller), good_smaller_indices)
+        if smaller_is_first:
+            unmatched_rna_indices = unmatched_smaller
+            unmatched_prot_indices = []
+        else:
+            unmatched_rna_indices = []
+            unmatched_prot_indices = unmatched_smaller
 
         plot_merged_pca_tsne(
             adata1,
             adata2,
-            unmatched_rna_indices=remaining_adata1,
-            unmatched_prot_indices=remaining_adata2,
+            unmatched_rna_indices=unmatched_rna_indices,
+            unmatched_prot_indices=unmatched_prot_indices,
             pca_components=5,
         )
 
     # Create final matched AnnData objects
-    matched_adata1 = adata1[adata1_indices].copy()
-    matched_adata2 = adata2[adata2_indices].copy()
+    matched_adata1 = adata1[final_adata1_indices].copy()
+    matched_adata2 = larger_adata[final_adata2_indices].copy()
 
-    # For matched_adata2, mark duplicates (i.e. cells reused more than once)
-    # This creates a boolean array: True if the element appears more than once
-    dup_flags = pd.Series(adata1_indices).duplicated(keep="first").values
-    matched_adata1.obs["duplicate"] = dup_flags
-    dup_flags = pd.Series(adata2_indices).duplicated(keep="first").values
-    matched_adata2.obs["duplicate"] = dup_flags
+    # Set metadata to indicate the datasets are ordered
+    matched_adata1.uns["ordered_matching_cells"] = True
+    matched_adata2.uns["ordered_matching_cells"] = True
+    matched_adata1.obs["index_col"] = np.arange(matched_adata1.shape[0])
+    matched_adata2.obs["index_col"] = np.arange(matched_adata2.shape[0])
+
+    # Verify alignment of matched cells
+    n_matched = len(sorted_smaller_indices)
+    if not (
+        matched_adata1.obs["cell_types"].values[:n_matched]
+        == matched_adata2.obs["cell_types"].values[:n_matched]
+    ).all():
+        print("Warning: Cell types of matched cells are not aligned!")
 
     return matched_adata1, matched_adata2
 
