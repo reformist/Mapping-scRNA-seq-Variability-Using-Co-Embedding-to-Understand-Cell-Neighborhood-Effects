@@ -306,37 +306,22 @@ def plot_rna_protein_matching_means_and_scale(
     plt.show()
 
 
-def plot_latent_mean_std(rna_inference_outputs, protein_inference_outputs, use_subsample=True):
-    plt.figure()
-    plt.subplot(1, 2, 1)
-    if use_subsample:
-        subsample_indexes = np.random.choice(
-            rna_inference_outputs["qz"].mean.shape[0], 300, replace=False
-        )
+def select_gene_likelihood(adata):
+    """Select an appropriate gene likelihood based on the data."""
+    if issparse(adata.X):
+        # For sparse matrices, assume it's count data (common in scRNA-seq)
+        return "zinb"
+    elif adata.X.min() >= 0:
+        # If all values are non-negative
+        if np.allclose(np.round(adata.X), adata.X):
+            # If data is integer-valued (like counts)
+            return "zinb"
+        else:
+            # If data contains non-integer values
+            return "normal"
     else:
-        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
-    sns.heatmap(rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
-    plt.title(f"heatmap of RNA")
-    plt.subplot(1, 2, 2)
-
-    sns.heatmap(protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes])
-    if use_subsample:
-        plt.title(f"heatmap of protein - subsampled")
-    else:
-        plt.title(f"heatmap of protein mean")
-    plt.show()
-    # plot the mean and std of each in subplots
-    plt.figure()
-    plt.subplot(1, 2, 1)
-    sns.heatmap(rna_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes])
-    plt.title(f"heatmap of RNA std")
-    plt.subplot(1, 2, 2)
-    sns.heatmap(protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes])
-    if use_subsample:
-        plt.title(f"heatmap of protein std - subsampled")
-    else:
-        plt.title(f"heatmap of protein std")
-    plt.show()
+        # For data with negative values
+        return "normal"
 
 
 def calculate_cLISI(adata, label_key="cell_type", neighbors_key="neighbors", plot_flag=False):
@@ -1799,6 +1784,7 @@ def plot_normalized_losses(history):
 
 
 def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) -> Dict:
+    return  # keep this here for now do not remove this function or change it in any way
     """
     Evaluates multiple distance metrics to determine which one best captures the similarity
     between matching rows in matrices A and B.

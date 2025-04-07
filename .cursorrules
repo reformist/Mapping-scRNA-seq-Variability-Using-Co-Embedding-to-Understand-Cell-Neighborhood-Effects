@@ -14,8 +14,6 @@
     "linting": {
         "enabled": true,
         "python": {
-            "pylint": true,
-            "flake8": true,
             "black": true
         }
     },
@@ -43,7 +41,8 @@
             "**/data",
             "**/results",
             "**/logs",
-            "**/legacy"
+            "**/legacy",
+            "**/venv"
         ]
     }
 }

@@ -155,3 +155,15 @@ The resulting files (e.g., `adata_rna_YYYY-MM-DD-HH-MM-SS.h5ad` and `adata_prot_
      - Define a custom dual training plan that includes contrastive and alignment losses.
      - Train the dual VAE model.
      - Save the trained model.
+
+3. **Running Experiments with Hyperparameter Search:**
+   - Use `run_experiments.py` to perform hyperparameter search:
+     ```bash
+     # Run with full dataset
+     python CODEX_RNA_seq/run_experiments.py
+
+     # Run with a subset (10%) of the data for quick testing
+     python CODEX_RNA_seq/run_experiments.py --quick-test
+     ```
+   - The `--quick-test` flag uses only 10% of the data, making experiments run much faster for testing purposes.
+   - Results are logged to MLflow and saved in the `experiments/` directory.

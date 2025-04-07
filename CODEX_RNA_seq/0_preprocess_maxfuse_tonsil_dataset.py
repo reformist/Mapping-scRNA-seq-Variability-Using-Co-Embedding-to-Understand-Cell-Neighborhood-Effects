@@ -19,7 +19,11 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+print(f"sys.path added: {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}")
+print(f"sys.path added: {os.path.dirname(os.path.abspath(__file__))}")
+print(f"Current working directory: {os.getcwd()}")
 
 # %%
 # Imports
@@ -31,7 +35,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
-import plotting_functions_maxfuse as pf
+import plotting_functions as pf
 import scanpy as sc
 import torch
 from scipy.io import mmread
@@ -106,23 +110,23 @@ def load_protein_data(data_dir):
     protein_adata.obs['cell_types'] = protein['cluster.term'].to_numpy()
 
     return protein_adata
-# fmt: onn
+# fmt: on
+
 
 def load_rna_data(data_dir):
     """Load and process RNA data"""
     print("Loading RNA data...")
     rna = mmread(data_dir / "tonsil/tonsil_rna_counts.txt")
-    rna_names = pd.read_csv(data_dir / 'tonsil/tonsil_rna_names.csv')['names'].to_numpy()
+    rna_names = pd.read_csv(data_dir / "tonsil/tonsil_rna_names.csv")["names"].to_numpy()
 
-    rna_adata = ad.AnnData(
-        rna.tocsr(), dtype=np.float32
-    )
+    rna_adata = ad.AnnData(rna.tocsr(), dtype=np.float32)
     rna_adata.var_names = rna_names
 
-    metadata_rna = pd.read_csv(data_dir / 'tonsil/tonsil_rna_meta.csv')
-    rna_adata.obs['cell_types'] = metadata_rna['cluster.info'].to_numpy()
+    metadata_rna = pd.read_csv(data_dir / "tonsil/tonsil_rna_meta.csv")
+    rna_adata.obs["cell_types"] = metadata_rna["cluster.info"].to_numpy()
 
     return rna_adata
+
 
 def preprocess_rna_maxfuse(adata):
     """Preprocess RNA data using MaxFuse method"""
@@ -134,12 +138,13 @@ def preprocess_rna_maxfuse(adata):
     sc.pp.scale(adata)
     return adata
 
+
 def filter_and_subsample_data(adata_1, adata_2, num_rna_cells=80000, num_protein_cells=80000):
     """Filter and subsample data"""
     print("Filtering and subsampling data...")
     # Filter out tumor and dead cells
-    adata_2 = adata_2[adata_2.obs['cell_types'] != 'tumor']
-    adata_2 = adata_2[adata_2.obs['cell_types'] != 'dead']
+    adata_2 = adata_2[adata_2.obs["cell_types"] != "tumor"]
+    adata_2 = adata_2[adata_2.obs["cell_types"] != "dead"]
 
     # Subsample cells
     subsample_n_obs_rna = min(adata_1.shape[0], num_rna_cells)
@@ -148,26 +153,28 @@ def filter_and_subsample_data(adata_1, adata_2, num_rna_cells=80000, num_protein
     sc.pp.subsample(adata_2, n_obs=subsample_n_obs_protein)
 
     # Remove NK cells
-    adata_1 = adata_1[adata_1.obs['cell_types'] != 'nk cells']
-    adata_2 = adata_2[adata_2.obs['cell_types'] != 'nk cells']
+    adata_1 = adata_1[adata_1.obs["cell_types"] != "nk cells"]
+    adata_2 = adata_2[adata_2.obs["cell_types"] != "nk cells"]
 
     # Sort by cell types
-    adata_1 = adata_1[adata_1.obs['cell_types'].argsort(), :]
-    adata_2 = adata_2[adata_2.obs['cell_types'].argsort(), :]
+    adata_1 = adata_1[adata_1.obs["cell_types"].argsort(), :]
+    adata_2 = adata_2[adata_2.obs["cell_types"].argsort(), :]
 
     return adata_1, adata_2
+
 
 def process_spatial_data(adata):
     """Process spatial data for protein dataset"""
     print("Processing spatial data...")
-    x_coor = adata.obsm['spatial'][:, 0]
-    y_coor = adata.obsm['spatial'][:, 1]
-    temp = pd.DataFrame([x_coor, y_coor], index=['x', 'y']).T
+    x_coor = adata.obsm["spatial"][:, 0]
+    y_coor = adata.obsm["spatial"][:, 1]
+    temp = pd.DataFrame([x_coor, y_coor], index=["x", "y"]).T
     temp.index = adata.obs.index
-    adata.obsm['spatial_location'] = temp
-    adata.obs['X'] = x_coor
-    adata.obs['Y'] = y_coor
+    adata.obsm["spatial_location"] = temp
+    adata.obs["X"] = x_coor
+    adata.obs["Y"] = y_coor
     return adata
+
 
 def save_processed_data(adata_1, adata_2, save_dir):
     """Save processed data"""
@@ -179,8 +186,9 @@ def save_processed_data(adata_1, adata_2, save_dir):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    adata_1.write(save_dir / f'preprocessed_adata_rna_maxfuse_{time_stamp}.h5ad')
-    adata_2.write(save_dir / f'preprocessed_adata_prot_maxfuse_{time_stamp}.h5ad')
+    adata_1.write(save_dir / f"preprocessed_adata_rna_maxfuse_{time_stamp}.h5ad")
+    adata_2.write(save_dir / f"preprocessed_adata_prot_maxfuse_{time_stamp}.h5ad")
+
 
 # %%
 # Setup and run preprocessing
@@ -190,8 +198,8 @@ device = setup_environment()
 
 # Setup paths
 root_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-data_dir = root_dir /'CODEX_RNA_seq' /'data'/'raw_data'
-save_dir = root_dir / "CODEX_RNA_seq" /'data'/'processed_data'
+data_dir = root_dir / "CODEX_RNA_seq" / "data" / "raw_data"
+save_dir = root_dir / "CODEX_RNA_seq" / "data" / "processed_data"
 plot_flag = True
 
 # Create data directory if it doesn't exist
@@ -222,10 +230,11 @@ if plot_flag:
 # %%
 # Filter and subsample data
 # %%
-num_rna_cells = 8000  # Adjust these values as needed
-num_protein_cells = 8000
-rna_adata, protein_adata = filter_and_subsample_data(rna_adata, protein_adata,
-                                                    num_rna_cells, num_protein_cells)
+num_rna_cells = 400  # Reduced from 8000 for testing
+num_protein_cells = 400  # Reduced from 8000 for testing
+rna_adata, protein_adata = filter_and_subsample_data(
+    rna_adata, protein_adata, num_rna_cells, num_protein_cells
+)
 
 # %%
 # Preprocess RNA data
@@ -258,3 +267,5 @@ if plot_flag:
     pf.plot_preprocessing_results(rna_adata, protein_adata)
 
 print("Preprocessing completed successfully!")
+
+# %%

@@ -1,0 +1,24 @@
+digraph DualVAE_PlateModel {
+	graph [rankdir=LR]
+	thetaRNA [label="θ_RNA" fillcolor="#f5f5f5" shape=box style="filled,rounded"]
+	thetaProt [label="θ_Protein" fillcolor="#f5f5f5" shape=box style="filled,rounded"]
+	zRNA_dist [label="z_RNA ~ N(0,I)" shape=ellipse style=dashed]
+	zProt_dist [label="z_Protein ~ N(0,I)" shape=ellipse style=dashed]
+	subgraph cluster_cells {
+		label="N cells"
+		zRNA_i [label=z_RNA_i shape=circle]
+		zProt_i [label=z_Protein_i shape=circle]
+		X_RNA_i [label="X^RNA_i" shape=box style=rounded]
+		X_Prot_i [label="X^Protein_i" shape=box style=rounded]
+		zRNA_i -> X_RNA_i [label="p(X^RNA_i | z_RNA_i, θ_RNA)"]
+		zProt_i -> X_Prot_i [label="p(X^Protein_i | z_Protein_i, θ_Protein)"]
+		Factor_align [label="Contrastive
+Alignment" fillcolor="#ffd57f" shape=diamond style="rounded,filled"]
+		zRNA_i -> Factor_align
+		zProt_i -> Factor_align
+	}
+	zRNA_dist -> zRNA_i
+	zProt_dist -> zProt_i
+	thetaRNA -> X_RNA_i
+	thetaProt -> X_Prot_i
+}

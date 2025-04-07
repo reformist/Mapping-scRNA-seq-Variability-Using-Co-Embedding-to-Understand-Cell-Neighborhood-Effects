@@ -42,13 +42,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cell_lists
-import plotting_functions
+import plotting_functions as pf
 
 import bar_nick_utils
 import covet_utils
 
 importlib.reload(cell_lists)
-importlib.reload(plotting_functions)
+importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 importlib.reload(covet_utils)
 
@@ -78,7 +78,7 @@ from bar_nick_utils import (
 np.random.seed(8)
 
 # Global variables
-plot_flag = False
+plot_flag = True
 
 # %% Load and Preprocess Data
 # Load data
@@ -93,7 +93,7 @@ adata_2_prot = sc.read(latest_files["preprocessed_adata_prot_"])
 # Subsample data
 num_rna_cells = 80000
 num_protein_cells = 80000
-num_rna_cells = num_protein_cells = 2000
+num_rna_cells = num_protein_cells = 500
 subsample_n_obs_rna = min(adata_1_rna.shape[0], num_rna_cells)
 subsample_n_obs_protein = min(adata_2_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_1_rna, n_obs=subsample_n_obs_rna)
@@ -112,6 +112,7 @@ assert np.array_equal(
 )
 if plot_flag:
     sns.heatmap(connectivities.todense()[:1000, :1000])
+    plt.show()
 
 # Compute neighbor means
 neighbor_sums = connectivities.dot(adata_2_prot.X)  # get the sum of all neighbors
@@ -213,6 +214,17 @@ sc.pp.pca(adata_2_prot)
 print(f"New adata shape (protein features + cell neighborhood vector): {adata_2_prot.shape}")
 
 # %% Compute PCA and UMAP for Both Modalities
+
+
+minor_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["cell_types"])))
+if "major_cell_types" not in adata_2_prot.obs.columns:
+    adata_2_prot.obs["major_cell_types"] = adata_2_prot.obs["cell_types"]
+major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
+minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
+if "major_cell_types" not in adata_1_rna.obs.columns:
+    adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
+major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
+
 # Compute PCA and UMAP for both modalities
 sc.pp.pca(adata_1_rna)
 sc.pp.pca(adata_2_prot)
@@ -248,14 +260,14 @@ sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
 
 # Select PCA components based on variance explained
 max_dim = 50
-variance_ration_selected = 0.75
+variance_ratio_selected = 0.75
 
 cumulative_variance_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])
-n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ration_selected) + 1
+n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
 n_comps_thresh = min(n_comps_thresh, max_dim)
 if n_comps_thresh == 1:
     raise ValueError(
-        "n_comps_thresh is 1, this is not good, try to lower the variance_ration_selected"
+        "n_comps_thresh is 1, this is not good, try to lower the variance_ratio_selected"
     )
 real_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])[n_comps_thresh]
 sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
@@ -263,14 +275,14 @@ print(f"\nNumber of components explaining {real_ratio} of rna variance: {n_comps
 
 sc.pp.pca(adata_2_prot)
 cumulative_variance_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])
-n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ration_selected) + 1
+n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
 n_comps_thresh = min(n_comps_thresh, max_dim)
 real_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])[n_comps_thresh]
-sc.pp.pca(adata_2_rna, n_comps=n_comps_thresh)
+sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of protein variance: {n_comps_thresh}")
 if n_comps_thresh == 1:
     raise ValueError(
-        "n_comps_thresh is 1, this is not good, try to lower the variance_ration_selected"
+        "n_comps_thresh is 1, this is not good, try to lower the variance_ratio_selected"
     )
 
 # %% Find Archetypes
@@ -324,14 +336,6 @@ if plot_flag:
 
 # %% Get Cell Type Lists and Compute Archetype Proportions
 # Get cell type lists
-minor_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["cell_types"])))
-if "major_cell_types" not in adata_2_prot.obs.columns:
-    adata_2_prot.obs["major_cell_types"] = adata_2_prot.obs["cell_types"]
-major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
-minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
-if "major_cell_types" not in adata_1_rna.obs.columns:
-    adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
-major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 
 major_cell_types_amount_prot = [
     adata_2_prot.obs["major_cell_types"].value_counts()[cell_type]
@@ -548,3 +552,5 @@ else:
     adata_prot = sc.read(latest_files["adata_prot_"])
     adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
     adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
+
+# %%

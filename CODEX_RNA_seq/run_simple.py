@@ -14,12 +14,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cell_lists
-import plotting_functions
+import plotting_functions as pf
 
 import bar_nick_utils
 
 importlib.reload(cell_lists)
-importlib.reload(plotting_functions)
+importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 
 
@@ -29,10 +29,10 @@ os.chdir(project_root)
 
 # Run each script
 scripts = [
-    "CODEX_RNA_seq/preprocess_maxfuse_tonsil_dataset.py",
-    "CODEX_RNA_seq/archetype_generation_neighbors_means_maxfuse.py",
-    "CODEX_RNA_seq/prepare_data_for_training.py",
-    "CODEX_RNA_seq/train_vae_with_archetypes_vectors.py",
+    "CODEX_RNA_seq/0_preprocess_maxfuse_tonsil_dataset.py",
+    "CODEX_RNA_seq/1_archetype_generation_neighbors_means_maxfuse.py",
+    "CODEX_RNA_seq/2_prepare_data_for_training.py",
+    "CODEX_RNA_seq/3_train_vae_with_archetypes_vectors.py",
 ]
 
 for script in scripts:

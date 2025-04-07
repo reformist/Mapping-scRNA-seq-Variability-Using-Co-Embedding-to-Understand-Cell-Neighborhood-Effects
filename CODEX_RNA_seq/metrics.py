@@ -7,7 +7,10 @@ import os
 import sys
 
 import numpy as np
+import scanpy as sc
 from anndata import AnnData, concat
+from scipy.spatial.distance import cdist
+from sklearn.metrics import adjusted_rand_score, f1_score, silhouette_score
 
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,13 +21,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cell_lists
-import plotting_functions
+import plotting_functions as pf
 
 import bar_nick_utils
 
-importlib.reload(cell_lists)
-importlib.reload(plotting_functions)
+importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 
 
@@ -87,3 +88,25 @@ def matching_accuracy(adata_rna, adata_prot):
             correct_matches += 1
     accuracy = correct_matches / len(nn_celltypes_prot)
     return accuracy
+
+
+if __name__ == "__main__":
+    import os
+    from pathlib import Path
+
+    import scanpy as sc
+
+    # Set working directory to project root
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # Load trained data
+    save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
+    adata_rna = sc.read_h5ad(save_dir / "rna_vae_trained.h5ad")
+    adata_prot = sc.read_h5ad(save_dir / "protein_vae_trained.h5ad")
+
+    # Calculate and print all metrics
+    print("\nCalculating metrics...")
+    print(f"Silhouette Score: {silhouette_score_calc(adata_rna, adata_prot):.3f}")
+    print(f"F1 Score: {f1_score_calc(adata_rna, adata_prot):.3f}")
+    print(f"ARI Score: {ari_score_calc(adata_rna, adata_prot):.3f}")
+    print(f"Matching Accuracy: {matching_accuracy(adata_rna, adata_prot):.3f}")

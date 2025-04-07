@@ -15,24 +15,61 @@
 # ---
 
 # %%
-"""
-TO use this script, you need to add the training plan to use the DualVAETrainingPlan class in scVI library.
+""" DO NOT REMOVE THIS COMMENT!!!
+TO use this script, you need to add the training plan to use the DualVAETrainingPlan (version 1.2.2.post2) class in scVI library.
 in _training_mixin.py, line 131, you need to change the line:
 training_plan = self._training_plan_cls(self.module, **plan_kwargs) # existing line
 self._training_plan = training_plan # add this line
 
 """
-import os
-import sys
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Set working directory to project root
-os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import importlib
 import os
 import sys
+
+
+def validate_scvi_training_mixin():
+    """Validate that the required line exists in scVI's _training_mixin.py file."""
+    try:
+        # Import scvi to get the actual module path
+        import scvi
+
+        scvi_path = scvi.__file__
+        base_dir = os.path.dirname(os.path.dirname(scvi_path))
+        training_mixin_path = os.path.join(base_dir, "scvi", "model", "base", "_training_mixin.py")
+
+        if not os.path.exists(training_mixin_path):
+            raise FileNotFoundError(f"Could not find _training_mixin.py at {training_mixin_path}")
+
+        # Read the file
+        with open(training_mixin_path, "r") as f:
+            lines = f.readlines()
+
+        # Check if the required line exists
+        required_line = "self._training_plan = training_plan"
+        line_found = any(required_line in line for line in lines)
+
+        if not line_found:
+            raise RuntimeError(
+                f"Required line '{required_line}' not found in {training_mixin_path}. "
+                "Please add this line after the training_plan assignment."
+            )
+        print("✓ scVI training mixin validation passed")
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to validate scVI training mixin: {str(e)}\n"
+            "Please ensure you have modified the scVI library as described in the comment above."
+        )
+
+
+# Validate scVI training mixin before proceeding
+validate_scvi_training_mixin()
+
+# Set up paths once
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(project_root)
+
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -40,46 +77,40 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+import plotting_functions as pf
 import scanpy as sc
 import scvi
+import torch
+import torch.nn.functional as F
 from anndata import AnnData
 from pytorch_lightning.loggers import TensorBoardLogger
 from scipy.sparse import issparse
-
-# import torch F
-from torch.nn.functional import normalize
-
-# Add repository root to Python path without changing working directory
-
-importlib.reload(scvi)
-
-import torch
-import torch.nn.functional as F
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
 from sklearn.metrics import adjusted_mutual_info_score
+from torch.nn.functional import normalize
 
 import bar_nick_utils
 
+# Force reimport internal modules
+importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 
-# Import plotting functions
-import CODEX_RNA_seq.plotting_functions_vae
-
-importlib.reload(CODEX_RNA_seq.plotting_functions_vae)
-
-# Import logging functions
+# Force reimport logging functions
 import CODEX_RNA_seq.logging_functions
-from bar_nick_utils import (
-    clean_uns_for_h5ad,
-    compare_distance_distributions,
-    compute_pairwise_kl,
-    compute_pairwise_kl_two_items,
-    get_umap_filtered_fucntion,
-    mixing_score,
-    select_gene_likelihood,
+from CODEX_RNA_seq.logging_functions import (
+    log_epoch_end,
+    log_step_metrics,
+    log_training_metrics,
+    log_validation_metrics,
+    print_training_metrics,
+    setup_logging,
+    update_log,
 )
-from CODEX_RNA_seq.plotting_functions_vae import (
+
+importlib.reload(CODEX_RNA_seq.logging_functions)
+
+from plotting_functions import (
     plot_archetype_vectors,
     plot_cell_type_distributions,
     plot_combined_latent_space,
@@ -93,18 +124,17 @@ from CODEX_RNA_seq.plotting_functions_vae import (
     plot_spatial_data,
 )
 
-importlib.reload(CODEX_RNA_seq.logging_functions)
-from CODEX_RNA_seq.logging_functions import (
-    log_epoch_end,
-    log_step_metrics,
-    log_training_metrics,
-    log_validation_metrics,
-    print_training_metrics,
-    setup_logging,
-    update_log,
+from bar_nick_utils import (
+    clean_uns_for_h5ad,
+    compare_distance_distributions,
+    compute_pairwise_kl,
+    compute_pairwise_kl_two_items,
+    get_latest_file,
+    get_umap_filtered_fucntion,
+    mixing_score,
+    plot_inference_outputs,
+    select_gene_likelihood,
 )
-
-# reimport the two above too
 
 if not hasattr(sc.tl.umap, "_is_wrapped"):
     sc.tl.umap = get_umap_filtered_fucntion()
@@ -127,8 +157,13 @@ plot_flag = True
 cwd = os.getcwd()
 save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
 
-adata_rna_subset = sc.read_h5ad(f"{save_dir}/adata_rna_subset_prepared_for_training.h5ad")
-adata_prot_subset = sc.read_h5ad(f"{save_dir}/adata_prot_subset_prepared_for_training.h5ad")
+# Use get_latest_file to find the most recent files
+adata_rna_subset = sc.read_h5ad(
+    get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
+)
+adata_prot_subset = sc.read_h5ad(
+    get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
+)
 
 # Subsample the data for faster testing
 print(f"Original RNA dataset shape: {adata_rna_subset.shape}")
@@ -161,6 +196,9 @@ class DualVAETrainingPlan(TrainingPlan):
         contrastive_weight = kwargs.pop("contrastive_weight", 1.0)
         self.batch_size = kwargs.pop("batch_size", 1000)
         n_epochs = kwargs.pop("n_epochs", 1)
+        self.similarity_weight = kwargs.pop(
+            "similarity_weight"
+        )  # Remove default to use config value
         super().__init__(rna_module, **kwargs)
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
@@ -177,7 +215,6 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_loss_history = []
         self.steady_state_window = 50
         self.steady_state_tolerance = 0.5
-        self.similarity_weight = 100000
         self.similarity_active = True
         self.reactivation_threshold = 0.1
         self.active_similarity_loss_active_history = []
@@ -246,9 +283,10 @@ class DualVAETrainingPlan(TrainingPlan):
             plot_latent_mean_std(
                 rna_inference_outputs,
                 protein_inference_outputs,
-                adata_rna_subset,
-                adata_prot_subset,
-                index=protein_batch["labels"],
+                self.rna_vae.adata,
+                self.protein_vae.adata,
+                indices_rna,
+                indices_prot,
             )
 
             plot_rna_protein_matching_means_and_scale(
@@ -402,7 +440,7 @@ class DualVAETrainingPlan(TrainingPlan):
             similarity_loss_raw = torch.sum(distances * (-same_cn_mask.float())) / (
                 torch.sum(-same_cn_mask.float()) + 1e-10
             )
-            ratio = self.similarity_weight / 1000
+            ratio = self.similarity_weight / 1000  # Restore original ratio calculation
             similarity_loss = similarity_loss_raw * self.similarity_weight
         else:
             similarity_loss_raw = torch.tensor(0.0).to(device)
@@ -459,9 +497,10 @@ class DualVAETrainingPlan(TrainingPlan):
             plot_latent_mean_std(
                 rna_inference_outputs,
                 protein_inference_outputs,
-                adata_rna_subset,
-                adata_prot_subset,
-                index=protein_batch["labels"],
+                self.rna_vae.adata,
+                self.protein_vae.adata,
+                indices_rna,
+                indices_prot,
             )
 
             plot_rna_protein_matching_means_and_scale(
@@ -732,6 +771,7 @@ def train_vae(
 training_kwargs = {
     "contrastive_weight": 10.0,
     "plot_x_times": 5,
+    "similarity_weight": 1000.0,
 }
 
 # %%
@@ -814,21 +854,28 @@ combined_latent.obs["CN"] = pd.concat(
     (rna_vae_new.adata.obs["CN"], protein_vae.adata.obs["CN"]), join="outer"
 )
 sc.pp.pca(combined_latent)
-sc.pp.neighbors(combined_latent)
-sc.tl.umap(combined_latent, min_dist=0.1)
+sc.pp.neighbors(combined_latent, n_neighbors=15)
+try:
+    sc.tl.umap(combined_latent, min_dist=0.1)
+    print("✓ UMAP computed successfully")
+except Exception as e:
+    print(f"Warning: UMAP computation failed: {str(e)}")
+    print("Continuing with other visualizations...")
 print("✓ Latent spaces combined")
 # %%
 print("\nMatching cells between modalities...")
 # Calculate pairwise distances between RNA and protein cells in latent space
-latent_distances = torch.cdist(torch.tensor(rna_latent.X), torch.tensor(prot_latent.X))
+from scipy.spatial.distance import cdist
+
+latent_distances = cdist(rna_latent.X, prot_latent.X)
 
 # Find closest matches for RNA cells to protein cells
-rna_to_prot_matches = torch.argmin(latent_distances, dim=0).type(torch.int)
-prot_to_rna_matches = torch.argmin(latent_distances, dim=1).type(torch.int)
+rna_to_prot_matches = np.argmin(latent_distances, axis=0).astype(np.int32)
+prot_to_rna_matches = np.argmin(latent_distances, axis=1).astype(np.int32)
 
 # Calculate matching distances
-rna_matching_distances = torch.min(latent_distances, dim=0)[0]
-prot_matching_distances = torch.min(latent_distances, dim=1)[0]
+rna_matching_distances = np.min(latent_distances, axis=0)
+prot_matching_distances = np.min(latent_distances, axis=1)
 
 # Generate random matches for comparison
 n_rna = len(rna_latent)
@@ -843,21 +890,20 @@ rand_rna_to_prot_matches = torch.tensor(np.random.permutation(n_prot)[:n_rna], d
 rand_prot_to_rna_matches = torch.tensor(np.random.permutation(n_rna)[:n_prot], dtype=torch.long)
 # %%
 # Calculate random matching distances
-# todo i think i need to change this for the pca of the rna
-rand_rna_matching_distances = torch.mean(latent_distances, dim=1)[0]
-rand_prot_matching_distances = torch.mean(latent_distances, dim=0)[0]
+rand_rna_matching_distances = np.mean(latent_distances, axis=1)
+rand_prot_matching_distances = np.mean(latent_distances, axis=0)
 # Store matching information in combined_latent.uns
 combined_latent.uns["cell_matching"] = {
-    "rna_to_prot_matches": rna_to_prot_matches.numpy(),
-    "prot_to_rna_matches": prot_to_rna_matches.numpy(),
-    "rna_matching_distances": rna_matching_distances.numpy(),
-    "prot_matching_distances": prot_matching_distances.numpy(),
-    "latent_distances": latent_distances.numpy(),
+    "rna_to_prot_matches": rna_to_prot_matches,
+    "prot_to_rna_matches": prot_to_rna_matches,
+    "rna_matching_distances": rna_matching_distances,
+    "prot_matching_distances": prot_matching_distances,
+    "latent_distances": latent_distances,
     # Add random matching information
     "rand_rna_to_prot_matches": rand_rna_to_prot_matches.numpy(),
     "rand_prot_to_rna_matches": rand_prot_to_rna_matches.numpy(),
-    "rand_rna_matching_distances": rand_rna_matching_distances.numpy(),
-    "rand_prot_matching_distances": rand_prot_matching_distances.numpy(),
+    "rand_rna_matching_distances": rand_rna_matching_distances,
+    "rand_prot_matching_distances": rand_prot_matching_distances,
 }
 
 print(f"✓ Matched {len(rna_latent)} RNA cells to protein cells")
@@ -879,7 +925,7 @@ print("✓ Training losses plotted")
 
 # Plot spatial data
 print("\nPlotting spatial data...")
-plot_spatial_data(rna_vae_new.adata, protein_vae.adata)
+plot_spatial_data(protein_vae.adata)
 print("✓ Spatial data plotted")
 # %%
 # Plot latent representations
@@ -957,24 +1003,25 @@ nmi_cell_types_cn_rna = adjusted_mutual_info_score(
 nmi_cell_types_cn_prot = adjusted_mutual_info_score(
     protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
 )
+# %%
 if rna_larger:
     nmi_cell_types_modalities = adjusted_mutual_info_score(
         rna_vae_new.adata.obs["cell_types"].values,
-        protein_vae.adata.obs["cell_types"].values[rna_to_prot_matches.numpy()],
+        protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches],
     )
     matches = (
         rna_vae_new.adata.obs["cell_types"].values
-        == protein_vae.adata.obs["cell_types"].values[rna_to_prot_matches.numpy()]
+        == protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches]
     )
 
 else:
     nmi_cell_types_modalities = adjusted_mutual_info_score(
-        protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches.numpy()],
         rna_vae_new.adata.obs["cell_types"].values,
+        protein_vae.adata.obs["cell_types"].values[rna_to_prot_matches],
     )
     matches = (
-        protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches.numpy()]
-        == rna_vae_new.adata.obs["cell_types"].values
+        rna_vae_new.adata.obs["cell_types"].values[prot_to_rna_matches]
+        == protein_vae.adata.obs["cell_types"].values
     )
 
 accuracy = matches.sum() / len(matches)
@@ -991,8 +1038,10 @@ print("\nSaving results...")
 clean_uns_for_h5ad(rna_vae_new.adata)
 clean_uns_for_h5ad(protein_vae.adata)
 save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
-sc.write(Path(f"{save_dir}/rna_vae_trained.h5ad"), rna_vae_new.adata)
-sc.write(Path(f"{save_dir}/protein_vae_trained.h5ad"), protein_vae.adata)
+time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
+os.makedirs(save_dir, exist_ok=True)
+sc.write(Path(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad"), rna_vae_new.adata)
+sc.write(Path(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad"), protein_vae.adata)
 print("✓ Results saved")
 
 print("\nAll visualization and analysis steps completed!")

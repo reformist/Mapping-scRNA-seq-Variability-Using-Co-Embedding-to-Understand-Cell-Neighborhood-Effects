@@ -28,41 +28,20 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # %%
 import importlib
 import warnings
-from datetime import datetime
 from pathlib import Path
 
-import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotting_functions as pf
 import scanpy as sc
 import scipy
-import scvi
-import seaborn as sns
 import torch
-import torch.nn.functional as F
-from anndata import AnnData
-from matplotlib.patches import Arc
-from pytorch_lightning.loggers import TensorBoardLogger
-from scipy.optimize import linear_sum_assignment
-from scipy.sparse import issparse
-from scvi.model import SCVI
-from scvi.train import TrainingPlan
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.metrics import (
-    adjusted_mutual_info_score,
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 
 import bar_nick_utils
 
+importlib.reload(pf)
 importlib.reload(bar_nick_utils)
-
-import plotting_functions
-
-importlib.reload(plotting_functions)
 
 from plotting_functions import (
     plot_archetype_heatmaps,
@@ -75,26 +54,10 @@ from plotting_functions import (
 )
 
 from bar_nick_utils import (
-    archetype_vs_latent_distances_plot,
-    calculate_cLISI,
-    calculate_iLISI,
     clean_uns_for_h5ad,
-    compare_distance_distributions,
-    compute_pairwise_kl,
-    compute_pairwise_kl_two_items,
     get_latest_file,
     get_umap_filtered_fucntion,
     match_datasets,
-    mixing_score,
-    plot_cosine_distance,
-    plot_inference_outputs,
-    plot_latent,
-    plot_latent_mean_std,
-    plot_normalized_losses,
-    plot_rna_protein_matching_means_and_scale,
-    plot_similarity_loss_history,
-    select_gene_likelihood,
-    verify_gradients,
 )
 
 if not hasattr(sc.tl.umap, "_is_wrapped"):
@@ -188,9 +151,16 @@ def save_processed_data(adata_rna_subset, adata_prot_subset, save_dir):
     clean_uns_for_h5ad(adata_prot_subset)
     clean_uns_for_h5ad(adata_rna_subset)
     save_dir = Path(save_dir).absolute()
-
-    sc.write(Path(f"{save_dir}/adata_rna_subset_prepared_for_training.h5ad"), adata_rna_subset)
-    sc.write(Path(f"{save_dir}/adata_prot_subset_prepared_for_training.h5ad"), adata_prot_subset)
+    time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
+    os.makedirs(save_dir, exist_ok=True)
+    sc.write(
+        Path(f"{save_dir}/adata_rna_subset_prepared_for_training_{time_stamp}.h5ad"),
+        adata_rna_subset,
+    )
+    sc.write(
+        Path(f"{save_dir}/adata_prot_subset_prepared_for_training_{time_stamp}.h5ad"),
+        adata_prot_subset,
+    )
 
 
 def load_and_subsample_data(folder, file_prefixes, sample_size=2000):
@@ -209,8 +179,8 @@ file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_arc
 sample_size = 8000  # Adjust this value as needed
 
 adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefixes, sample_size)
-adata_rna_subset = adata_rna_subset[:2000]  # todo remove
-adata_prot_subset = adata_prot_subset[:1200]  # todo remove
+# adata_rna_subset = adata_rna_subset[:2000]  # todo remove
+# adata_prot_subset = adata_prot_subset[:1200]  # todo remove
 # %%
 # Process and visualize data
 # %%
@@ -265,7 +235,7 @@ if plot_flag:
     plot_pca_and_umap(adata_rna_subset, adata_prot_subset)
     plot_b_cells_analysis(adata_rna_subset)
     one_cell_type = plot_protein_umap(adata_prot_subset)
-    plot_cell_type_distribution(adata_prot_subset, one_cell_type)
+    plot_cell_type_distribution(adata_rna_subset, adata_prot_subset)
     plot_original_data_visualizations(adata_rna_subset, adata_prot_subset)
 
 # %%
