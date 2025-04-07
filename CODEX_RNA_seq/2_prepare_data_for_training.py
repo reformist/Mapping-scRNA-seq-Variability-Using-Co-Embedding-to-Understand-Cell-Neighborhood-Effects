@@ -14,6 +14,8 @@
 #     name: python3
 # ---
 
+import json
+
 # %%
 # Setup paths
 # %%
@@ -63,6 +65,18 @@ from bar_nick_utils import (
 if not hasattr(sc.tl.umap, "_is_wrapped"):
     sc.tl.umap = get_umap_filtered_fucntion()
     sc.tl.umap._is_wrapped = True
+
+# Load config if exists
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+if os.path.exists(config_path):
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    num_rna_cells = config["subsample"]["num_rna_cells"]
+    num_protein_cells = config["subsample"]["num_protein_cells"]
+    plot_flag = config["plot_flag"]
+else:
+    num_rna_cells = num_protein_cells = 2000
+    plot_flag = True
 
 
 def setup_environment():
@@ -153,6 +167,14 @@ def save_processed_data(adata_rna_subset, adata_prot_subset, save_dir):
     save_dir = Path(save_dir).absolute()
     time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
     os.makedirs(save_dir, exist_ok=True)
+
+    print(
+        f"\nRNA subset dimensions: {adata_rna_subset.shape[0]} samples x {adata_rna_subset.shape[1]} features"
+    )
+    print(
+        f"Protein subset dimensions: {adata_prot_subset.shape[0]} samples x {adata_prot_subset.shape[1]} features\n"
+    )
+
     sc.write(
         Path(f"{save_dir}/adata_rna_subset_prepared_for_training_{time_stamp}.h5ad"),
         adata_rna_subset,
@@ -184,7 +206,6 @@ adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefi
 # %%
 # Process and visualize data
 # %%
-plot_flag = True  # Set to False to skip all visualizations
 
 sc.pp.pca(adata_rna_subset)
 sc.pp.pca(adata_prot_subset)

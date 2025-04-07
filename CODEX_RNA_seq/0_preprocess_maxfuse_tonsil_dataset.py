@@ -15,6 +15,7 @@
 # %%
 # preprocess the real data from Elham lab and peprform the archetype analysis
 
+import json
 import os
 import sys
 
@@ -24,6 +25,18 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(f"sys.path added: {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}")
 print(f"sys.path added: {os.path.dirname(os.path.abspath(__file__))}")
 print(f"Current working directory: {os.getcwd()}")
+
+# Load config if exists
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+if os.path.exists(config_path):
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    num_rna_cells = config["subsample"]["num_rna_cells"]
+    num_protein_cells = config["subsample"]["num_protein_cells"]
+    plot_flag = config["plot_flag"]
+else:
+    num_rna_cells = num_protein_cells = 2000
+    plot_flag = True
 
 # %%
 # Imports
@@ -139,7 +152,7 @@ def preprocess_rna_maxfuse(adata):
     return adata
 
 
-def filter_and_subsample_data(adata_1, adata_2, num_rna_cells=80000, num_protein_cells=80000):
+def filter_and_subsample_data(adata_1, adata_2, num_rna_cells=None, num_protein_cells=None):
     """Filter and subsample data"""
     print("Filtering and subsampling data...")
     # Filter out tumor and dead cells
@@ -149,8 +162,10 @@ def filter_and_subsample_data(adata_1, adata_2, num_rna_cells=80000, num_protein
     # Subsample cells
     subsample_n_obs_rna = min(adata_1.shape[0], num_rna_cells)
     subsample_n_obs_protein = min(adata_2.shape[0], num_protein_cells)
-    sc.pp.subsample(adata_1, n_obs=subsample_n_obs_rna)
-    sc.pp.subsample(adata_2, n_obs=subsample_n_obs_protein)
+    if num_rna_cells is not None:
+        sc.pp.subsample(adata_1, n_obs=subsample_n_obs_rna)
+    if num_protein_cells is not None:
+        sc.pp.subsample(adata_2, n_obs=subsample_n_obs_protein)
 
     # Remove NK cells
     adata_1 = adata_1[adata_1.obs["cell_types"] != "nk cells"]
@@ -186,8 +201,17 @@ def save_processed_data(adata_1, adata_2, save_dir):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    adata_1.write(save_dir / f"preprocessed_adata_rna_maxfuse_{time_stamp}.h5ad")
-    adata_2.write(save_dir / f"preprocessed_adata_prot_maxfuse_{time_stamp}.h5ad")
+    rna_file = save_dir / f"preprocessed_adata_rna_maxfuse_{time_stamp}.h5ad"
+    prot_file = save_dir / f"preprocessed_adata_prot_maxfuse_{time_stamp}.h5ad"
+
+    print(f"\nRNA data dimensions: {adata_1.shape[0]} samples x {adata_1.shape[1]} features")
+    print(f"Protein data dimensions: {adata_2.shape[0]} samples x {adata_2.shape[1]} features\n")
+
+    adata_1.write(rna_file)
+    adata_2.write(prot_file)
+
+    print(f"Saved RNA data: {rna_file} ({rna_file.stat().st_size / (1024*1024):.2f} MB)")
+    print(f"Saved protein data: {prot_file} ({prot_file.stat().st_size / (1024*1024):.2f} MB)")
 
 
 # %%
@@ -200,7 +224,6 @@ device = setup_environment()
 root_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 data_dir = root_dir / "CODEX_RNA_seq" / "data" / "raw_data"
 save_dir = root_dir / "CODEX_RNA_seq" / "data" / "processed_data"
-plot_flag = True
 
 # Create data directory if it doesn't exist
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -230,8 +253,6 @@ if plot_flag:
 # %%
 # Filter and subsample data
 # %%
-num_rna_cells = 400  # Reduced from 8000 for testing
-num_protein_cells = 400  # Reduced from 8000 for testing
 rna_adata, protein_adata = filter_and_subsample_data(
     rna_adata, protein_adata, num_rna_cells, num_protein_cells
 )

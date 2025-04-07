@@ -18,6 +18,7 @@
 # %% Imports and Setup
 import copy
 import importlib
+import json
 import os
 import sys
 
@@ -40,6 +41,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load config if exists
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+if os.path.exists(config_path):
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    num_rna_cells = config["subsample"]["num_rna_cells"]
+    num_protein_cells = config["subsample"]["num_protein_cells"]
+    plot_flag = config["plot_flag"]
+else:
+    num_rna_cells = num_protein_cells = 2000
+    plot_flag = True
 
 import cell_lists
 import plotting_functions as pf
@@ -78,7 +91,7 @@ from bar_nick_utils import (
 np.random.seed(8)
 
 # Global variables
-plot_flag = True
+# plot_flag = True  # Removed as it's now loaded from config
 
 # %% Load and Preprocess Data
 # Load data
@@ -91,9 +104,6 @@ adata_1_rna = sc.read(latest_files["preprocessed_adata_rna_"])
 adata_2_prot = sc.read(latest_files["preprocessed_adata_prot_"])
 
 # Subsample data
-num_rna_cells = 80000
-num_protein_cells = 80000
-num_rna_cells = num_protein_cells = 500
 subsample_n_obs_rna = min(adata_1_rna.shape[0], num_rna_cells)
 subsample_n_obs_protein = min(adata_2_prot.shape[0], num_protein_cells)
 sc.pp.subsample(adata_1_rna, n_obs=subsample_n_obs_rna)
@@ -253,12 +263,14 @@ if plot_flag:
 
 # %% Compute PCA Dimensions
 # Compute PCA dimensions
+print("\nComputing PCA dimensions...")
 max_possible_pca_dim_rna = min(adata_1_rna.X.shape[1], adata_1_rna.X.shape[0])
 max_possible_pca_dim_prot = min(adata_2_prot.X.shape[1], adata_2_prot.X.shape[0])
 sc.pp.pca(adata_1_rna, n_comps=max_possible_pca_dim_rna - 1)
 sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
 
 # Select PCA components based on variance explained
+print("Selecting PCA components...")
 max_dim = 50
 variance_ratio_selected = 0.75
 
@@ -286,7 +298,7 @@ if n_comps_thresh == 1:
     )
 
 # %% Find Archetypes
-# Find archetypes
+print("\nFinding archetypes...")
 archetype_list_protein = []
 archetype_list_rna = []
 converge = 1e-5
@@ -299,6 +311,7 @@ evs_protein = []
 evs_rna = []
 
 # Protein archetype detection
+print("Computing protein archetypes...")
 X_protein = adata_2_prot.obsm["X_pca"].T
 total = (max_k - min_k) / step_size
 for i, k in tqdm(
@@ -312,6 +325,7 @@ for i, k in tqdm(
         break
 
 # RNA archetype detection
+print("Computing RNA archetypes...")
 X_rna = adata_1_rna.obsm["X_pca"].T
 for j, k in tqdm(
     enumerate(range(min_k, max_k, step_size)), total=total, desc="RNA Archetypes Detection"
@@ -335,8 +349,7 @@ if plot_flag:
     plot_elbow_method(evs_protein, evs_rna)
 
 # %% Get Cell Type Lists and Compute Archetype Proportions
-# Get cell type lists
-
+print("\nComputing archetype proportions...")
 major_cell_types_amount_prot = [
     adata_2_prot.obs["major_cell_types"].value_counts()[cell_type]
     for cell_type in major_cell_types_list_prot
@@ -349,6 +362,7 @@ assert set(adata_1_rna.obs["major_cell_types"]) == set(adata_2_prot.obs["major_c
 archetype_proportion_list_rna, archetype_proportion_list_protein = [], []
 
 # Compute archetype proportions
+print("Generating archetype proportions...")
 for archetypes_prot, archetypes_rna in tqdm(
     zip(archetype_list_protein, archetype_list_rna),
     total=len(archetype_list_protein),
@@ -529,6 +543,7 @@ if plot_flag:
 
 # %% Save Results
 # Save results
+print("\nSaving results...")
 clean_uns_for_h5ad(adata_2_prot)
 clean_uns_for_h5ad(adata_1_rna)
 time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -538,6 +553,16 @@ adata_1_rna.write(f"{save_dir}/adata_rna_{time_stamp}.h5ad")
 adata_2_prot.write(f"{save_dir}/adata_prot_{time_stamp}.h5ad")
 adata_archetype_rna.write(f"{save_dir}/adata_archetype_rna_{time_stamp}.h5ad")
 adata_archetype_prot.write(f"{save_dir}/adata_archetype_prot_{time_stamp}.h5ad")
+print(f"\nRNA data dimensions: {adata_1_rna.shape[0]} samples x {adata_1_rna.shape[1]} features")
+print(
+    f"Protein data dimensions: {adata_2_prot.shape[0]} samples x {adata_2_prot.shape[1]} features"
+)
+print(
+    f"RNA archetype dimensions: {adata_archetype_rna.shape[0]} samples x {adata_archetype_rna.shape[1]} features"
+)
+print(
+    f"Protein archetype dimensions: {adata_archetype_prot.shape[0]} samples x {adata_archetype_prot.shape[1]} features\n"
+)
 
 # Load latest files
 file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_archetype_prot_"]

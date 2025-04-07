@@ -920,9 +920,6 @@ def match_datasets(
     ).all():
         print("Warning: Cell types of matched cells are not aligned!")
         # Print some diagnostic information
-        print("\nFirst few cell types in dataset 1:")
-        print(matched_adata1.obs["cell_types"].astype(str).values[:5])
-        print("\nFirst few cell types in dataset 2:")
         print(matched_adata2.obs["cell_types"].astype(str).values[:5])
         print("\nUnique cell types in dataset 1:")
         print(np.unique(matched_adata1.obs["cell_types"].astype(str).values))
