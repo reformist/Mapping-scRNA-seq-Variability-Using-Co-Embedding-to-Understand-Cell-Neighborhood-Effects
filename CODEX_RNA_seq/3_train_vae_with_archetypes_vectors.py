@@ -859,7 +859,7 @@ plt.title("Training Curves")
 plt.legend()
 plt.tight_layout()
 mlflow.log_figure(plt.gcf(), "training_curves.png")
-plt.close()
+
 
 print("\nPreparing models for visualization...")
 rna_vae_new.module.to(device)
@@ -987,14 +987,14 @@ print("\nPlotting training results...")
 plot_normalized_losses(history)
 print("✓ Training losses plotted")
 mlflow.log_figure(plt.gcf(), "normalized_losses.png")
-plt.close()
+
 
 # Plot spatial data
 print("\nPlotting spatial data...")
 plot_spatial_data(protein_vae.adata)
 print("✓ Spatial data plotted")
 mlflow.log_figure(plt.gcf(), "spatial_data.png")
-plt.close()
+
 
 # Plot latent representations
 print("\nPlotting latent representations...")
@@ -1008,28 +1008,28 @@ plot_latent(
 )
 print("✓ Latent representations plotted")
 mlflow.log_figure(plt.gcf(), "latent_representations.png")
-plt.close()
+
 
 # Plot distance distributions
 print("\nPlotting distance distributions...")
 compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances)
 print("✓ Distance distributions plotted")
 mlflow.log_figure(plt.gcf(), "distance_distributions.png")
-plt.close()
+
 
 # Plot combined visualizations
 print("\nPlotting combined visualizations...")
 plot_combined_latent_space(combined_latent)
 mlflow.log_figure(plt.gcf(), "combined_latent_space.png")
-plt.close()
+
 
 plot_combined_latent_space_umap(combined_latent)
 mlflow.log_figure(plt.gcf(), "combined_latent_space_umap.png")
-plt.close()
+
 
 plot_cell_type_distributions(combined_latent, 3)
 mlflow.log_figure(plt.gcf(), "cell_type_distributions.png")
-plt.close()
+
 print("✓ Combined visualizations plotted")
 
 # Plot UMAP visualizations
@@ -1041,7 +1041,7 @@ sc.pl.umap(
     alpha=0.5,
 )
 mlflow.log_figure(plt.gcf(), "umap_cn_modality.png")
-plt.close()
+
 
 sc.pl.umap(
     combined_latent,
@@ -1054,7 +1054,7 @@ sc.pl.umap(
     alpha=0.5,
 )
 mlflow.log_figure(plt.gcf(), "umap_cn_modality_cell_types.png")
-plt.close()
+
 
 sc.pl.pca(
     combined_latent,
@@ -1063,18 +1063,18 @@ sc.pl.pca(
     alpha=0.5,
 )
 mlflow.log_figure(plt.gcf(), "pca_cn_modality.png")
-plt.close()
+
 print("✓ UMAP visualizations plotted")
 
 # Plot archetype and embedding visualizations
 print("\nPlotting archetype and embedding visualizations...")
 plot_archetype_vectors(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "archetype_vectors.png")
-plt.close()
+
 
 plot_rna_protein_embeddings(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "rna_protein_embeddings.png")
-plt.close()
+
 print("✓ Archetype and embedding visualizations plotted")
 
 # Calculate and display final metrics

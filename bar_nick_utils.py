@@ -73,7 +73,6 @@ def plot_similarity_loss_history(
     )
     plt.legend(handles=[red_patch, blue_patch])
     plt.show()
-    plt.close()
 
 
 def get_umap_filtered_fucntion():
@@ -661,7 +660,6 @@ def match_datasets(
         plt.suptitle("Initial Data")
         plt.tight_layout()
         plt.show()
-        plt.close()
 
     n1, n2 = len(adata_rna), len(adata_prot)
 
@@ -684,7 +682,6 @@ def match_datasets(
         sns.heatmap(dist_matrix, cmap="viridis")
         plt.title("Initial Distance Matrix")
         plt.show()
-        plt.close()
 
     # First evaluate each cell's worst match
     smaller_best_matches = np.min(dist_matrix, axis=1)
@@ -698,7 +695,7 @@ def match_datasets(
         plt.plot(sorted(larger_best_matches))
         plt.title(f"sorted {larger_name} Dataset")
         plt.show()
-        plt.close()
+
     # Print diagnostic information
     print("\nDistance Distribution Statistics:")
     print(f"cells worst match percentiles:")
@@ -764,7 +761,6 @@ def match_datasets(
         plt.legend()
         plt.tight_layout()
         plt.show()
-        plt.close()
 
     # Create DataFrame for sorting smaller dataset
     smaller_df = pd.DataFrame(
@@ -800,7 +796,6 @@ def match_datasets(
         plt.legend()
         plt.tight_layout()
         plt.show()
-        plt.close()
 
     # Find which cells in the larger dataset were not matched
     all_larger_indices = np.arange(n_larger)
@@ -852,7 +847,6 @@ def match_datasets(
         plt.suptitle("Final Matched Data")
         plt.tight_layout()
         plt.show()
-        plt.close()
 
         min_len = min(len(final_adata_rna_indices), len(final_adata_prot_indices))
         plt.figure(figsize=(12, 5))
@@ -869,7 +863,6 @@ def match_datasets(
         plt.suptitle("Final Matched Data min length")
         plt.tight_layout()
         plt.show()
-        plt.close()
 
     # Calculate statistics
     stats = {
@@ -934,7 +927,6 @@ def match_datasets(
             unmatched_prot_indices=unmatched_prot_indices,
             pca_components=5,
         )
-        plt.close()
 
     # Create final matched AnnData objects
     matched_smaller = smaller_adata[sorted_smaller_indices].copy()
