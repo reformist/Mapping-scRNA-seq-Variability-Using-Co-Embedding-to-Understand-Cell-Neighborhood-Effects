@@ -67,6 +67,8 @@ param_grid = {
     "n_hidden_prot": [32, 64, 128],
     "n_layers": [1, 2, 3],
     "latent_dim": [10],
+    "kl_weight_rna": [1.0, 2.0],
+    "kl_weight_prot": [1.0, 2.0],
 }
 
 # %%

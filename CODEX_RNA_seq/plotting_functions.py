@@ -593,7 +593,10 @@ def plot_normalized_losses(history):
 
     # Plot each normalized loss
     for key, values in normalized_losses.items():
-        plt.plot(values, label=key, alpha=0.7)
+        min_val = np.min(values)
+        max_val = np.max(values)
+        label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
+        plt.plot(values, label=label, alpha=0.7)
 
     plt.title("Normalized Training Losses")
     plt.xlabel("Step")

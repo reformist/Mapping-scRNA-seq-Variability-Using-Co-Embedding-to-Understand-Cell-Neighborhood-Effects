@@ -28,7 +28,6 @@ import os
 import sys
 
 import mlflow
-from matplotlib import pyplot as plt
 
 
 def validate_scvi_training_mixin():
@@ -211,6 +210,8 @@ class DualVAETrainingPlan(TrainingPlan):
             "similarity_weight"
         )  # Remove default to use config value
         self.lr = kwargs.pop("lr", 0.001)
+        self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
+        self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
         super().__init__(rna_module, **kwargs)
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
@@ -235,6 +236,16 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_losses = []  # Store similarity losses
         self.similarity_losses_raw = []  # Store raw similarity losses
         self.similarity_weights = []  # Store similarity weights
+        self.train_rna_losses = []
+        self.train_protein_losses = []
+        self.train_matching_losses = []
+        self.train_contrastive_losses = []
+        self.train_adv_losses = []
+        self.val_rna_losses = []
+        self.val_protein_losses = []
+        self.val_matching_losses = []
+        self.val_contrastive_losses = []
+        self.val_adv_losses = []
         self.early_stopping_callback = None  # Will be set by trainer
 
         # Setup logging
@@ -268,12 +279,12 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         indices_prot = np.sort(indices_prot)
         rna_batch = self._get_rna_batch(batch, indices_rna)
-        kl_weight = 2
-        self.loss_kwargs.update({"kl_weight": kl_weight})
-        _, _, rna_loss_output = self.rna_vae.module(rna_batch, loss_kwargs={"kl_weight": kl_weight})
+        _, _, rna_loss_output = self.rna_vae.module(
+            rna_batch, loss_kwargs={"kl_weight": self.kl_weight_rna}
+        )
         protein_batch = self._get_protein_batch(batch, indices_prot)
         _, _, protein_loss_output = self.protein_vae.module(
-            protein_batch, loss_kwargs={"kl_weight": kl_weight}
+            protein_batch, loss_kwargs={"kl_weight": self.kl_weight_prot}
         )
 
         rna_inference_outputs = self.rna_vae.module.inference(
@@ -521,12 +532,12 @@ class DualVAETrainingPlan(TrainingPlan):
         self.active_similarity_loss_active_history.append(self.similarity_active)
 
         total_loss = (
-            # rna_loss_output.loss
-            # + protein_loss_output.loss
+            rna_loss_output.loss
+            + protein_loss_output.loss
             # + contrastive_loss
             # + adv_loss # dont remove comment for now
             # + matching_loss
-            +similarity_loss
+            # +similarity_loss
             # + diversity_loss # dont remove comment for now
         )
 
@@ -587,6 +598,11 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         self.train_losses.append(total_loss.item())
+        self.train_rna_losses.append(rna_loss_output.loss.item())
+        self.train_protein_losses.append(protein_loss_output.loss.item())
+        self.train_matching_losses.append(matching_loss.item())
+        self.train_contrastive_losses.append(contrastive_loss.item())
+        self.train_adv_losses.append(adv_loss.item())
         return total_loss
 
     def validation_step(self, batch, batch_idx):
@@ -706,6 +722,11 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         self.val_losses.append(validation_total_loss.item())
+        self.val_rna_losses.append(rna_loss_output.loss.item())
+        self.val_protein_losses.append(protein_loss_output.loss.item())
+        self.val_matching_losses.append(matching_loss.item())
+        # self.val_contrastive_losses.append(contrastive_loss.item())
+        self.val_adv_losses.append(adv_loss.item())
         return validation_total_loss
 
     def on_epoch_end(self):
@@ -769,9 +790,14 @@ class DualVAETrainingPlan(TrainingPlan):
         return {
             "train_similarity_loss": self.similarity_losses,
             "train_similarity_loss_raw": self.similarity_losses_raw,
-            "train_similarity_weight": self.similarity_weights,
             "train_total_loss": self.train_losses,
+            "train_rna_loss": self.train_rna_losses,
+            "train_protein_loss": self.train_protein_losses,
+            "train_matching_loss": self.train_matching_losses,
+            "train_contrastive_loss": self.train_contrastive_losses,
+            "train_adv_loss": self.train_adv_losses,
             "val_total_loss": self.val_losses,
+            "val_rna_loss": self.val_rna_losses,
         }
 
     def on_early_stopping(self):
@@ -788,7 +814,6 @@ def train_vae(
     max_epochs=1,
     batch_size=128,
     lr=1e-3,
-    use_gpu=True,
     contrastive_weight=1.0,
     similarity_weight=1000.0,
     diversity_weight=0.1,
@@ -803,6 +828,8 @@ def train_vae(
     validation_size=0.1,
     gradient_clip_val=1.0,
     accumulate_grad_batches=1,
+    kl_weight_rna=1.0,
+    kl_weight_prot=1.0,
     **kwargs,
 ):
     """Train the VAE models."""
@@ -864,6 +891,8 @@ def train_vae(
         "batch_size": batch_size,
         "max_epochs": max_epochs,
         "lr": lr,
+        "kl_weight_rna": kl_weight_rna,
+        "kl_weight_prot": kl_weight_prot,
     }
     train_kwargs = {
         "max_epochs": max_epochs,
@@ -950,7 +979,7 @@ adata_prot_subset = sc.AnnData(
 
 
 training_kwargs = {
-    "max_epochs": 2,
+    "max_epochs": 5,
     "batch_size": 1200,
     "train_size": 0.9,
     "validation_size": 0.1,
@@ -1010,23 +1039,11 @@ mlflow.log_metrics(
     {
         "final_train_similarity_loss": history["train_similarity_loss"][-1],
         "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
-        "final_train_similarity_weight": history["train_similarity_weight"][-1],
+        # "final_train_similarity_weight": history["train_similarity_weight"][-1],
         "final_train_total_loss": history["train_total_loss"][-1],
         "final_val_total_loss": history["val_total_loss"][-1],
     }
 )
-
-# Log training curves
-plt.figure(figsize=(10, 6))
-plt.plot(history["train_similarity_loss"], label="Similarity Loss")
-plt.plot(history["train_total_loss"], label="Total Loss")
-plt.plot(history["val_total_loss"], label="Validation Loss")
-plt.xlabel("Step")
-plt.ylabel("Loss")
-plt.title("Training Curves")
-plt.legend()
-plt.tight_layout()
-mlflow.log_figure(plt.gcf(), "training_curves.png")
 
 
 print("\nPreparing models for visualization...")
