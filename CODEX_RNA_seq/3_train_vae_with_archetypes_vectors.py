@@ -115,7 +115,7 @@ from CODEX_RNA_seq.logging_functions import (
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
 from plotting_functions import (
-    plot_archetype_vectors,
+    plot_archetype_embedding,
     plot_cell_type_distributions,
     plot_combined_latent_space,
     plot_combined_latent_space_umap,
@@ -123,7 +123,7 @@ from plotting_functions import (
     plot_latent,
     plot_latent_mean_std,
     plot_normalized_losses,
-    plot_rna_protein_embeddings,
+    plot_rna_protein_cn_cell_type_umap,
     plot_rna_protein_matching_means_and_scale,
     plot_spatial_data,
 )
@@ -1068,11 +1068,11 @@ print("✓ UMAP visualizations plotted")
 
 # Plot archetype and embedding visualizations
 print("\nPlotting archetype and embedding visualizations...")
-plot_archetype_vectors(rna_vae_new, protein_vae)
+plot_archetype_embedding(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "archetype_vectors.png")
 
 
-plot_rna_protein_embeddings(rna_vae_new, protein_vae)
+plot_rna_protein_cn_cell_type_umap(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "rna_protein_embeddings.png")
 
 print("✓ Archetype and embedding visualizations plotted")

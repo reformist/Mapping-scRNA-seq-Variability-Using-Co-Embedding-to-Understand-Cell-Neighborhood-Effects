@@ -183,82 +183,31 @@ def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_prot=None,
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Convert categorical CN to numeric codes
     cn_rna = adata_rna.obs["CN"].cat.codes.values
     cn_prot = adata_prot.obs["CN"].cat.codes.values
+
     pca_latent_rna = PCA(n_components=2).fit_transform(latent_rna)
     pca_latent_prot = PCA(n_components=2).fit_transform(latent_prot)
-    # Plot RNA latent space
     scatter = axes[0].scatter(
         pca_latent_rna[:, 0],
         pca_latent_rna[:, 1],
         c=cn_rna,
-        cmap="viridis",
         alpha=0.5,
     )
     axes[0].set_title("RNA Latent Space")
     axes[0].set_xlabel("Latent Dimension 1")
     axes[0].set_ylabel("Latent Dimension 2")
-    plt.colorbar(scatter, ax=axes[0], label="CN")
 
     # Plot protein latent space
     scatter = axes[1].scatter(
         pca_latent_prot[:, 0],
         pca_latent_prot[:, 1],
         c=cn_prot,
-        cmap="viridis",
         alpha=0.5,
     )
     axes[1].set_title("Protein Latent Space")
     axes[1].set_xlabel("Latent Dimension 1")
     axes[1].set_ylabel("Latent Dimension 2")
-    plt.colorbar(scatter, ax=axes[1], label="CN")
-
-    plt.tight_layout()
-    plt.show()
-    return fig
-
-    # Create AnnData objects for visualization
-    rna_ann = AnnData(X=latent_rna)
-    prot_ann = AnnData(X=latent_prot)
-
-    # Add metadata
-    rna_ann.obs = adata_rna.obs.iloc[index_rna].copy()
-    prot_ann.obs = adata_prot.obs.iloc[index_prot].copy()
-
-    # Compute PCA
-    sc.pp.pca(rna_ann)
-    sc.pp.pca(prot_ann)
-
-    # Plot PCA
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-
-    # RNA PCA
-    axes[0].scatter(
-        rna_ann.obsm["X_pca"][:, 0],
-        rna_ann.obsm["X_pca"][:, 1],
-        c=rna_ann.obs["CN"],
-        cmap="tab10",
-        alpha=0.6,
-    )
-    axes[0].set_title("RNA Latent Space")
-    axes[0].set_xlabel("Latent Dimension 1")
-    axes[0].set_ylabel("Latent Dimension 2")
-    plt.colorbar(scatter, ax=axes[0], label="CN")
-
-    # Plot protein latent space
-    scatter = axes[1].scatter(
-        latent_prot[:, 0],
-        latent_prot[:, 1],
-        c=cn_prot,
-        cmap="viridis",
-        alpha=0.5,
-    )
-    axes[1].set_title("Protein Latent Space")
-    axes[1].set_xlabel("Latent Dimension 1")
-    axes[1].set_ylabel("Latent Dimension 2")
-    plt.colorbar(scatter, ax=axes[1], label="CN")
-
     plt.tight_layout()
     plt.show()
     return fig
@@ -637,27 +586,27 @@ def plot_cell_type_distributions(combined_latent, top_n=3):
             cell_type_data,
             color=["CN", "modality", "cell_types"],
             title=[
-                f"UMAP {cell_type} CN",
-                f"UMAP {cell_type} modality",
-                f"UMAP {cell_type} cell types",
+                f"Combined latent space UMAP {cell_type}, CN",
+                f"Combined latent space UMAP {cell_type}, modality",
+                f"Combined latent space UMAP {cell_type}, cell types",
             ],
             alpha=0.5,
         )
 
 
-def plot_rna_protein_embeddings(rna_vae_new, protein_vae):
+def plot_rna_protein_cn_cell_type_umap(rna_vae_new, protein_vae):
     """Plot RNA and protein embeddings"""
     sc.pl.embedding(
         rna_vae_new.adata,
         color=["CN", "cell_types"],
         basis="X_scVI",
-        title=["Latent space, CN RNA", "Latent space, minor cell types RNA"],
+        title=["RNA Latent space, CN", "RNA Latent space, cell types"],
     )
     sc.pl.embedding(
         protein_vae.adata,
         color=["CN", "cell_types"],
         basis="X_scVI",
-        title=["Latent space, CN Protein", "Latent space, minor cell types Protein"],
+        title=["Protein Latent space UMAP, CN ", "Protein Latent space UMAP, cell types"],
     )
 
 
@@ -682,9 +631,8 @@ def plot_combined_latent_space_umap(combined_latent):
     )
 
 
-def plot_archetype_vectors(rna_vae_new, protein_vae):
-    """Plot archetype vectors"""
-    # Process archetype vectors
+def plot_archetype_embedding(rna_vae_new, protein_vae):
+    """Plot archetype embedding"""
     rna_archtype = AnnData(rna_vae_new.adata.obsm["archetype_vec"])
     rna_archtype.obs = rna_vae_new.adata.obs
     sc.pp.neighbors(rna_archtype)
@@ -699,12 +647,15 @@ def plot_archetype_vectors(rna_vae_new, protein_vae):
     sc.pl.umap(
         rna_archtype,
         color=["CN", "cell_types"],
-        title=["RNA Archetype UMAP CN", "RNA Archetype UMAP cell types"],
+        title=["RNA Archetype embedding UMAP CN", "RNA Archetype embedding UMAP cell types"],
     )
     sc.pl.umap(
         prot_archtype,
         color=["CN", "cell_types"],
-        title=["Protein Archetype UMAP CN", "Protein Archetype UMAP cell types"],
+        title=[
+            "Protein Archetype embedding UMAP CN",
+            "Protein Archetype embedding UMAP cell types",
+        ],
     )
 
 
