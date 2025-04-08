@@ -552,12 +552,6 @@ def plot_combined_latent_space(combined_latent):
     sc.tl.umap(combined_latent, min_dist=0.1)
     sc.pl.umap(
         combined_latent,
-        color=["CN", "modality"],
-        title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
-        alpha=0.5,
-    )
-    sc.pl.umap(
-        combined_latent,
         color=["CN", "modality", "cell_types"],
         title=[
             "UMAP Combined Latent space CN",
@@ -607,27 +601,6 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
         color=["CN", "cell_types"],
         basis="X_scVI",
         title=["Protein_latent_CN", "Protein_Laten_CellTypes"],
-    )
-
-
-def plot_combined_latent_space_umap(combined_latent):
-    """Plot UMAP of combined latent space"""
-    sc.tl.umap(combined_latent, min_dist=0.1)
-    sc.pl.umap(
-        combined_latent,
-        color=["CN", "modality"],
-        title=["Combined_Latent_UMAP_CN", "Combined_Latent_UMAP_Modality"],
-        alpha=0.5,
-    )
-    sc.pl.umap(
-        combined_latent,
-        color=["CN", "modality", "cell_types"],
-        title=[
-            "Combined_Latent_UMAP_CN",
-            "Combined_Latent_UMAP_Modality",
-            "Combined_Latent_UMAP_CellTypes",
-        ],
-        alpha=0.5,
     )
 
 

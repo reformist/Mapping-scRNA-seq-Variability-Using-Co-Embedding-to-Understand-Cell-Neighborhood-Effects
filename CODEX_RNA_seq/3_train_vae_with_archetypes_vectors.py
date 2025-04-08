@@ -27,6 +27,7 @@ import json
 import os
 import sys
 
+import mlflow
 from matplotlib import pyplot as plt
 
 
@@ -118,7 +119,6 @@ from plotting_functions import (
     plot_archetype_embedding,
     plot_cell_type_distributions,
     plot_combined_latent_space,
-    plot_combined_latent_space_umap,
     plot_inference_outputs,
     plot_latent,
     plot_latent_mean_std,
@@ -298,10 +298,12 @@ class DualVAETrainingPlan(TrainingPlan):
                 indices_rna,
                 indices_prot,
             )
+            mlflow.log_figure(plt.gcf(), f"latent_mean_std_step_{self.global_step}.png")
 
             plot_rna_protein_matching_means_and_scale(
                 rna_inference_outputs, protein_inference_outputs, archetype_dis
             )
+            mlflow.log_figure(plt.gcf(), f"rna_protein_matching_step_{self.global_step}.png")
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
             print(f"max latent distances: {round(latent_distances.max().item(),3)}")
             print(f"mean latent distances: {round(latent_distances.mean().item(),3)}")
@@ -931,12 +933,12 @@ from scipy.spatial.distance import cdist
 latent_distances = cdist(rna_latent.X, prot_latent.X)
 
 # Find closest matches for RNA cells to protein cells
-rna_to_prot_matches = np.argmin(latent_distances, axis=0).astype(np.int32)
-prot_to_rna_matches = np.argmin(latent_distances, axis=1).astype(np.int32)
+rna_to_prot_matches = np.argmin(latent_distances, axis=1).astype(np.int32)
+prot_to_rna_matches = np.argmin(latent_distances, axis=0).astype(np.int32)
 
 # Calculate matching distances
-rna_matching_distances = np.min(latent_distances, axis=0)
-prot_matching_distances = np.min(latent_distances, axis=1)
+rna_matching_distances = np.min(latent_distances, axis=1)
+prot_matching_distances = np.min(latent_distances, axis=0)
 
 # Generate random matches for comparison
 n_rna = len(rna_latent)
@@ -951,8 +953,6 @@ rand_rna_to_prot_matches = torch.tensor(np.random.permutation(n_prot)[:n_rna], d
 rand_prot_to_rna_matches = torch.tensor(np.random.permutation(n_rna)[:n_prot], dtype=torch.long)
 # %%
 # Calculate random matching distances
-rand_rna_matching_distances = np.mean(latent_distances, axis=1)
-rand_prot_matching_distances = np.mean(latent_distances, axis=0)
 # Store matching information in combined_latent.uns
 combined_latent.uns["cell_matching"] = {
     "rna_to_prot_matches": rna_to_prot_matches,
@@ -963,8 +963,6 @@ combined_latent.uns["cell_matching"] = {
     # Add random matching information
     "rand_rna_to_prot_matches": rand_rna_to_prot_matches.numpy(),
     "rand_prot_to_rna_matches": rand_prot_to_rna_matches.numpy(),
-    "rand_rna_matching_distances": rand_rna_matching_distances,
-    "rand_prot_matching_distances": rand_prot_matching_distances,
 }
 
 print(f"✓ Matched {len(rna_latent)} RNA cells to protein cells")
@@ -1020,24 +1018,10 @@ plot_combined_latent_space(combined_latent)
 mlflow.log_figure(plt.gcf(), "combined_latent_space.png")
 
 
-plot_combined_latent_space_umap(combined_latent)
-mlflow.log_figure(plt.gcf(), "combined_latent_space_umap.png")
-
-
 plot_cell_type_distributions(combined_latent, 3)
 mlflow.log_figure(plt.gcf(), "cell_type_distributions.png")
 
 print("✓ Combined visualizations plotted")
-
-# Plot UMAP visualizations
-print("\nPlotting UMAP visualizations...")
-sc.pl.umap(
-    combined_latent,
-    color=["CN", "modality"],
-    title=["Combined_Latent_UMAP_CN", "Combined_Latent_UMAP_Modality"],
-    alpha=0.5,
-)
-mlflow.log_figure(plt.gcf(), "umap_cn_modality.png")
 
 
 sc.pl.umap(
