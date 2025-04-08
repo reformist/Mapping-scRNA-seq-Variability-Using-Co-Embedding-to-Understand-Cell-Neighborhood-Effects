@@ -300,7 +300,7 @@ class DualVAETrainingPlan(TrainingPlan):
             )
 
             plot_rna_protein_matching_means_and_scale(
-                rna_inference_outputs, protein_inference_outputs
+                rna_inference_outputs, protein_inference_outputs, archetype_dis
             )
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
             print(f"max latent distances: {round(latent_distances.max().item(),3)}")
@@ -513,9 +513,6 @@ class DualVAETrainingPlan(TrainingPlan):
                 indices_prot,
             )
 
-            plot_rna_protein_matching_means_and_scale(
-                rna_inference_outputs, protein_inference_outputs
-            )
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
             print(f"max latent distances: {round(latent_distances.max().item(),3)}")
             print(f"mean latent distances: {round(latent_distances.mean().item(),3)}")

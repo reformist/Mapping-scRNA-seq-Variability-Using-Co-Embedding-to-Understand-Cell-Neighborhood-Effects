@@ -215,28 +215,42 @@ def compare_distance_distributions(rand_distances, rna_latent, prot_latent, dist
 
 
 def plot_rna_protein_matching_means_and_scale(
-    rna_inference_outputs,
-    protein_inference_outputs,
-    unmatched_rna_indices=None,
-    unmatched_prot_indices=None,
-    use_subsample=True,
+    rna_inference_outputs, protein_inference_outputs, archetype_dis_mat, use_subsample=True
 ):
-    plt.figure(figsize=(15, 5))
-    plt.subplot(1, 3, 1)
-    plt.title("RNA Mean vs Protein Mean\nCorrelation Distribution")
+    """
+    Plot the means and scales as halo  and lines between the best matches
+    of the RNA and protein
+    Args:
+        rna_inference_outputs: the output of the RNA inference
+        protein_inference_outputs: the output of the protein inference
+        archetype_dis_mat: the archetype distance matrix
+        use_subsample: whether to use subsampling
 
-    n_samples = rna_inference_outputs["qz"].mean.shape[0]
+
+    """
     if use_subsample:
-        n_subsample = min(1000, n_samples)  # Changed from 300 to 1000 to match batch size
-        subsample_indexes = np.random.choice(n_samples, n_subsample, replace=False)
+        subsample_indexes = np.random.choice(
+            rna_inference_outputs["qz"].mean.shape[0], 300, replace=False
+        )
     else:
-        subsample_indexes = np.arange(n_samples)
+        subsample_indexes = np.arange(rna_inference_outputs["qz"].mean.shape[0])
+    prot_new_order = archetype_dis_mat.argmin(axis=0).detach().cpu().numpy()
 
     rna_means = rna_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
     rna_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
-    protein_means = protein_inference_outputs["qz"].mean.detach().cpu().numpy()[subsample_indexes]
-    protein_scales = protein_inference_outputs["qz"].scale.detach().cpu().numpy()[subsample_indexes]
-
+    protein_means = (
+        protein_inference_outputs["qz"]
+        .mean.detach()
+        .cpu()
+        .numpy()[prot_new_order][subsample_indexes]
+    )
+    protein_scales = (
+        protein_inference_outputs["qz"]
+        .scale.detach()
+        .cpu()
+        .numpy()[prot_new_order][subsample_indexes]
+    )
+    # match the order of the means to the archetype_dis
     # Combine means for PCA
     combined_means = np.concatenate([rna_means, protein_means], axis=0)
 
@@ -249,8 +263,9 @@ def plot_rna_protein_matching_means_and_scale(
     scales_transformed = pca.transform(combined_scales)
 
     # Plot with halos
-    plt.subplot(1, 3, 2)
-    plt.title("RNA Scale vs Protein Scale\nCorrelation Distribution")
+    plt.figure(figsize=(8, 6))
+
+    # Plot RNA points and halos
     for i in range(rna_means.shape[0]):
         # Add halo using scale information
         circle = plt.Circle(
@@ -287,23 +302,6 @@ def plot_rna_protein_matching_means_and_scale(
     plt.title("PCA of RNA and Protein with Scale Halos")
     plt.legend()
     plt.gca().set_aspect("equal")
-
-    plt.subplot(1, 3, 3)
-    plt.title("RNA-Protein Cross-Modal\nCorrelation Distribution")
-    plt.suptitle("RNA-Protein Matching Analysis: Distribution of Correlations")
-    plt.scatter(rna_means, protein_means, c="blue", label="Matched", alpha=0.5)
-    if unmatched_rna_indices is not None and unmatched_prot_indices is not None:
-        plt.scatter(
-            rna_means[unmatched_rna_indices],
-            protein_means[unmatched_prot_indices],
-            c="green",
-            label="Unmatched",
-            alpha=0.5,
-        )
-    plt.xlabel("RNA Mean")
-    plt.ylabel("Protein Mean")
-    plt.title("Correlation between RNA and Protein Means")
-    plt.legend()
     plt.show()
 
 
