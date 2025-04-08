@@ -37,7 +37,6 @@ import scanpy as sc
 import seaborn as sns
 from anndata import AnnData, concat
 from scipy.sparse import issparse
-from scipy.spatial import distance as scipy
 from sklearn.decomposition import PCA
 
 import bar_nick_utils
@@ -174,46 +173,68 @@ def plot_spatial_data_comparison(adata_rna, adata_prot):
 # This module contains functions for plotting VAE-specific visualizations.
 
 
-def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_prot=None, index_rna=None):
-    """Plot latent space representations."""
-    if index_rna is None:
-        index_rna = range(len(adata_rna.obs.index))
-    if index_prot is None:
-        index_prot = range(len(adata_prot.obs.index))
+def plot_latent_pca_both_modalities(
+    rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index_rna, index_prot
+):
+    plt.figure(figsize=(10, 5))
+    pca = PCA(n_components=3)
+    # concatenate the means
+    combined_mean = np.concatenate([rna_mean, protein_mean], axis=0)
+    pca.fit(combined_mean)
+    combined_pca = pca.transform(combined_mean)
+    num_rna = len(rna_mean)
+    plt.subplot(1, 3, 1)
+    sns.scatterplot(
+        x=combined_pca[:num_rna, 0],
+        y=combined_pca[:num_rna, 1],
+        hue=adata_rna_subset[index_rna].obs["CN"],
+    )
+    plt.title("RNA")
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    plt.subplot(1, 3, 2)
+    sns.scatterplot(
+        x=combined_pca[num_rna:, 0],
+        y=combined_pca[num_rna:, 1],
+        hue=adata_prot_subset[index_prot].obs["CN"],
+    )
+    plt.title("protein")
+    plt.suptitle("PCA of latent space during training\nColor by CN label")
 
-    cn_rna = adata_rna.obs["CN"].cat.codes.values
-    cn_prot = adata_prot.obs["CN"].cat.codes.values
-
-    pca_latent_rna = PCA(n_components=2).fit_transform(latent_rna)
-    pca_latent_prot = PCA(n_components=2).fit_transform(latent_prot)
-    scatter = axes[0].scatter(
-        pca_latent_rna[:, 0],
-        pca_latent_rna[:, 1],
-        c=cn_rna,
+    ax = plt.subplot(1, 3, 3, projection="3d")
+    ax.scatter(
+        combined_pca[:num_rna, 0],
+        combined_pca[:num_rna, 1],
+        combined_pca[:num_rna, 2],
+        c="red",
+        label="RNA",
+    )
+    ax.scatter(
+        combined_pca[num_rna:, 0],
+        combined_pca[num_rna:, 1],
+        combined_pca[num_rna:, 2],
+        c="blue",
+        label="protein",
         alpha=0.5,
     )
-    axes[0].set_title("RNA Latent Space")
-    axes[0].set_xlabel("Latent Dimension 1")
-    axes[0].set_ylabel("Latent Dimension 2")
-
-    # Plot protein latent space
-    scatter = axes[1].scatter(
-        pca_latent_prot[:, 0],
-        pca_latent_prot[:, 1],
-        c=cn_prot,
-        alpha=0.5,
-    )
-    axes[1].set_title("Protein Latent Space")
-    axes[1].set_xlabel("Latent Dimension 1")
-    axes[1].set_ylabel("Latent Dimension 2")
+    for rna_point, prot_point in zip(combined_pca[:num_rna], combined_pca[num_rna:]):
+        ax.plot(
+            [rna_point[0], prot_point[0]],
+            [rna_point[1], prot_point[1]],
+            [rna_point[2], prot_point[2]],
+            "k--",
+            alpha=0.6,
+            lw=0.5,
+        )
+    ax.set_title("merged RNA and protein")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.set_zlabel("PC3")
+    ax.legend()
     plt.tight_layout()
     plt.show()
-    return fig
 
 
-def plot_latent_mean_std(
+def plot_latent_mean_std_legacy(
     rna_inference_outputs,
     protein_inference_outputs,
     adata_rna,
@@ -332,52 +353,87 @@ def plot_latent_mean_std(
     plt.show()
 
 
-def plot_rna_protein_matching_means_and_scale(rna_inference_outputs, protein_inference_outputs):
-    """Plot RNA and protein matching means and scales"""
-    plt.figure(figsize=(15, 5))
+def plot_rna_protein_matching_means_and_scale(
+    rna_latent_mean,
+    protein_latent_mean,
+    rna_latent_std,
+    protein_latent_std,
+    archetype_dis_mat,
+    use_subsample=True,
+):
+    """
+    Plot the means and scales as halo  and lines between the best matches
+    of the RNA and protein
+    Args:
+        rna_inference_outputs: the output of the RNA inference
+        protein_inference_outputs: the output of the protein inference
+        archetype_dis_mat: the archetype distance matrix
+        use_subsample: whether to use subsampling
 
-    # Plot means
-    plt.subplot(131)
-    plt.scatter(
-        rna_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
-        protein_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
-        alpha=0.1,
-    )
-    plt.xlabel("RNA Latent Mean")
-    plt.ylabel("Protein Latent Mean")
-    plt.title("Latent Means Comparison")
 
-    # Plot scales
-    plt.subplot(132)
-    plt.scatter(
-        rna_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
-        protein_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
-        alpha=0.1,
-    )
-    plt.xlabel("RNA Latent Scale")
-    plt.ylabel("Protein Latent Scale")
-    plt.title("Latent Scales Comparison")
+    """
+    if use_subsample:
+        subsample_indexes = np.random.choice(rna_latent_mean.shape[0], 300, replace=False)
+    else:
+        subsample_indexes = np.arange(rna_latent_mean.shape[0])
+    prot_new_order = archetype_dis_mat.argmin(axis=0).detach().cpu().numpy()
 
-    # Plot mean vs scale
-    plt.subplot(133)
-    plt.scatter(
-        rna_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
-        rna_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
-        alpha=0.1,
-        label="RNA",
-    )
-    plt.scatter(
-        protein_inference_outputs["qz"].mean.detach().cpu().numpy().flatten(),
-        protein_inference_outputs["qz"].scale.detach().cpu().numpy().flatten(),
-        alpha=0.1,
-        label="Protein",
-    )
-    plt.xlabel("Latent Mean")
-    plt.ylabel("Latent Scale")
-    plt.title("Mean vs Scale")
+    rna_means = rna_latent_mean[subsample_indexes]
+    rna_scales = rna_latent_std[subsample_indexes]
+    protein_means = protein_latent_mean[prot_new_order][subsample_indexes]
+    protein_scales = protein_latent_std[prot_new_order][subsample_indexes]
+    # match the order of the means to the archetype_dis
+    # Combine means for PCA
+    combined_means = np.concatenate([rna_means, protein_means], axis=0)
+
+    # Fit PCA on means
+    pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(combined_means)
+
+    # Transform scales using the same PCA transformation
+    combined_scales = np.concatenate([rna_scales, protein_scales], axis=0)
+    scales_transformed = pca.transform(combined_scales)
+
+    # Plot with halos
+    plt.figure(figsize=(8, 6))
+
+    # Plot RNA points and halos
+    for i in range(rna_means.shape[0]):
+        # Add halo using scale information
+        circle = plt.Circle(
+            (pca_result[i, 0], pca_result[i, 1]),
+            radius=np.linalg.norm(scales_transformed[i]) * 0.05,
+            color="blue",
+            alpha=0.1,
+        )
+        plt.gca().add_patch(circle)
+    # Plot Protein points and halos
+    for i in range(protein_means.shape[0]):
+        # Add halo using scale information
+        circle = plt.Circle(
+            (pca_result[rna_means.shape[0] + i, 0], pca_result[rna_means.shape[0] + i, 1]),
+            radius=np.linalg.norm(scales_transformed[rna_means.shape[0] + i]) * 0.05,
+            color="orange",
+            alpha=0.1,
+        )
+        plt.gca().add_patch(circle)
+
+    # Add connecting lines
+    for i in range(rna_means.shape[0]):
+        color = "red" if (i % 2 == 0) else "green"
+        plt.plot(
+            [pca_result[i, 0], pca_result[rna_means.shape[0] + i, 0]],
+            [pca_result[i, 1], pca_result[rna_means.shape[0] + i, 1]],
+            "k-",
+            alpha=0.2,
+            color=color,
+        )
+
+    plt.xlabel("PCA Component 1")
+    plt.ylabel("PCA Component 2")
+    plt.title("PCA of RNA and Protein with Scale Halos")
     plt.legend()
-
-    plt.tight_layout()
+    plt.gca().set_aspect("equal")
     plt.show()
 
 
@@ -432,25 +488,53 @@ def plot_inference_outputs(
     plt.show()
 
 
-def plot_similarity_loss_history(similarity_loss_history, active_history):
-    """Plot similarity loss history and active state"""
-    plt.figure(figsize=(15, 5))
-
-    # Plot similarity loss
-    plt.subplot(121)
-    plt.plot(similarity_loss_history)
-    plt.title("Similarity Loss History")
+def plot_similarity_loss_history(
+    similarity_loss_all_history, active_similarity_loss_active_history
+):
+    """
+    Plot the similarity loss history and highlight active steps
+    """
+    if len(similarity_loss_all_history) < 10:
+        return
+    plt.figure()
+    colors = [
+        "red" if active else "blue" for active in active_similarity_loss_active_history[-1000:]
+    ]
+    num_samples = len(similarity_loss_all_history[-1000:])
+    dot_size = max(1, 1000 // num_samples)  # Adjust dot size based on the number of samples
+    plt.scatter(np.arange(num_samples), similarity_loss_all_history[-1000:], c=colors, s=dot_size)
+    plt.title("Similarity loss history (last 1000 steps)")
     plt.xlabel("Step")
-    plt.ylabel("Loss")
-
-    # Plot active state
-    plt.subplot(122)
-    plt.plot(active_history)
-    plt.title("Similarity Loss Active State")
-    plt.xlabel("Step")
-    plt.ylabel("Active (1) / Inactive (0)")
-
-    plt.tight_layout()
+    plt.ylabel("Similarity Loss")
+    plt.xticks(
+        np.arange(0, num_samples, step=max(1, num_samples // 10)),
+        np.arange(
+            max(0, len(similarity_loss_all_history) - 1000),
+            len(similarity_loss_all_history),
+            step=max(1, num_samples // 10),
+        ),
+    )
+    red_patch = plt.Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor="red",
+        markersize=10,
+        label="Active",
+        alpha=0.5,
+    )
+    blue_patch = plt.Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor="blue",
+        markersize=10,
+        label="Inactive",
+        alpha=0.5,
+    )
+    plt.legend(handles=[red_patch, blue_patch])
     plt.show()
 
 
@@ -489,20 +573,33 @@ def plot_normalized_losses(history):
 
 
 def plot_cosine_distance(rna_batch, protein_batch):
-    """Plot cosine distance between archetype vectors"""
-    print("\nPlotting cosine distances...")
-    archetype_dis = scipy.cdist(
-        rna_batch["archetype_vec"].detach().cpu().numpy(),
-        protein_batch["archetype_vec"].detach().cpu().numpy(),
-        metric="cosine",
-    )
+    umap_model = UMAP(n_components=2, random_state=42).fit(rna_batch["archetype_vec"], min_dist=5)
+    # Transform both modalities using the same UMAP model
+    rna_archetype_2pc = umap_model.transform(rna_batch["archetype_vec"])
+    prot_archetype_2pc = umap_model.transform(protein_batch["archetype_vec"])
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(archetype_dis.flatten(), bins=50)
-    plt.title("Cosine Distance Distribution")
-    plt.xlabel("Distance")
-    plt.ylabel("Count")
-    plt.tight_layout()
+    rna_norm = rna_archetype_2pc / np.linalg.norm(rna_archetype_2pc, axis=1)[:, None]
+    scale = 1.2
+    prot_norm = scale * prot_archetype_2pc / np.linalg.norm(prot_archetype_2pc, axis=1)[:, None]
+    plt.scatter(rna_norm[:, 0], rna_norm[:, 1], label="RNA", alpha=0.7)
+    plt.scatter(prot_norm[:, 0], prot_norm[:, 1], label="Protein", alpha=0.7)
+
+    for rna, prot in zip(rna_norm, prot_norm):
+        plt.plot([rna[0], prot[0]], [rna[1], prot[1]], "k--", alpha=0.6, lw=0.5)
+
+    # Add unit circle for reference
+    theta = np.linspace(0, 2 * np.pi, 100)
+
+    plt.plot(np.cos(theta), np.sin(theta), "grey", linestyle="--", alpha=0.3)
+    plt.axis("equal")
+    theta = np.linspace(0, 2 * np.pi, 100)
+    plt.plot(scale * np.cos(theta), scale * np.sin(theta), "grey", linestyle="--", alpha=0.3)
+    plt.axis("equal")
+
+    plt.title("Normalized Vector Alignment\n(Euclidean Distance ∝ Cosine Distance)")
+    plt.xlabel("PC1 (Normalized)")
+    plt.ylabel("PC2 (Normalized)")
+    plt.legend()
     plt.show()
 
 
@@ -979,7 +1076,7 @@ def plot_latent_single(means, adata, index, color_label="CN", title=""):
     plt.scatter(
         rna_pca[:, 0],
         rna_pca[:, 1],
-        c=adata[index_cpu].obs[color_label].values.astype(float),
+        c=pd.Categorical(adata[index_cpu].obs[color_label].values).codes,
         cmap="jet",
     )
     plt.title(title)

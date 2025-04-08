@@ -90,6 +90,7 @@ import torch.nn.functional as F
 from anndata import AnnData
 from pytorch_lightning.loggers import TensorBoardLogger
 from scipy.sparse import issparse
+from scipy.spatial.distance import cdist
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
 from sklearn.metrics import adjusted_mutual_info_score
@@ -120,11 +121,11 @@ from plotting_functions import (
     plot_cell_type_distributions,
     plot_combined_latent_space,
     plot_inference_outputs,
-    plot_latent,
-    plot_latent_mean_std,
+    plot_latent_pca_both_modalities,
     plot_normalized_losses,
     plot_rna_protein_latent_cn_cell_type_umap,
     plot_rna_protein_matching_means_and_scale,
+    plot_similarity_loss_history,
     plot_spatial_data,
 )
 
@@ -136,7 +137,6 @@ from bar_nick_utils import (
     get_latest_file,
     get_umap_filtered_fucntion,
     mixing_score,
-    plot_inference_outputs,
     select_gene_likelihood,
 )
 
@@ -265,10 +265,17 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
         )
         index = rna_batch["labels"]
-
+        rna_latent_mean = rna_inference_outputs["qz"].mean
+        rna_latent_std = rna_inference_outputs["qz"].scale
+        rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
+        rna_latent_std_numpy = rna_latent_std.detach().cpu().numpy()
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
+        protein_latent_mean = protein_inference_outputs["qz"].mean
+        protein_latent_std = protein_inference_outputs["qz"].scale
+        protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
+        protein_latent_std_numpy = protein_latent_std.detach().cpu().numpy()
 
         archetype_dis = torch.cdist(
             normalize(rna_batch["archetype_vec"], dim=1),
@@ -276,10 +283,10 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         latent_distances = compute_pairwise_kl_two_items(
-            rna_inference_outputs["qz"].mean,
-            protein_inference_outputs["qz"].mean,
-            rna_inference_outputs["qz"].scale,
-            protein_inference_outputs["qz"].scale,
+            rna_latent_mean,
+            protein_latent_mean,
+            rna_latent_std,
+            protein_latent_std,
         )
         latent_distances = torch.clamp(latent_distances, max=torch.quantile(latent_distances, 0.90))
 
@@ -290,18 +297,22 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         if should_plot:
-            plot_latent_mean_std(
-                rna_inference_outputs,
-                protein_inference_outputs,
+            plot_latent_pca_both_modalities(
+                rna_latent_mean_numpy,
+                protein_latent_mean_numpy,
                 self.rna_vae.adata,
                 self.protein_vae.adata,
-                indices_rna,
-                indices_prot,
+                index_rna=indices_rna,
+                index_prot=indices_prot,
             )
             mlflow.log_figure(plt.gcf(), f"latent_mean_std_step_{self.global_step}.png")
 
             plot_rna_protein_matching_means_and_scale(
-                rna_inference_outputs, protein_inference_outputs, archetype_dis
+                rna_latent_mean_numpy,
+                protein_latent_mean_numpy,
+                rna_latent_std_numpy,
+                protein_latent_std_numpy,
+                archetype_dis,
             )
             mlflow.log_figure(plt.gcf(), f"rna_protein_matching_step_{self.global_step}.png")
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
@@ -329,18 +340,12 @@ class DualVAETrainingPlan(TrainingPlan):
         reward_strength = 0
         reward = reward_strength * (num_acceptable.float() / num_cells)
         matching_loss = stress_loss - reward + exact_pairs
-        rna_distances = compute_pairwise_kl(
-            rna_inference_outputs["qz"].mean, rna_inference_outputs["qz"].scale
-        )
-        prot_distances = compute_pairwise_kl(
-            protein_inference_outputs["qz"].mean, protein_inference_outputs["qz"].scale
-        )
+        rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
+        prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
         distances = 5 * prot_distances + rna_distances
 
         rna_size = prot_size = rna_batch["X"].shape[0]
-        mixed_latent = torch.cat(
-            [rna_inference_outputs["qz"].mean, protein_inference_outputs["qz"].mean], dim=0
-        )
+        mixed_latent = torch.cat([rna_latent_mean, protein_latent_mean], dim=0)
         batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(device)
         batch_pred = self.batch_classifier(mixed_latent)
         adv_loss = -F.cross_entropy(batch_pred, batch_labels.long())
@@ -478,13 +483,11 @@ class DualVAETrainingPlan(TrainingPlan):
             # + diversity_loss # dont remove comment for now
         )
 
-        should_plot = (
-            self.global_step > -1
-            and self.global_step % (1 + int(self.total_steps / (self.plot_x_times))) == 0
-            and plot_flag
-        )
-
         if should_plot:
+            plot_similarity_loss_history(
+                self.similarity_losses, self.active_similarity_loss_active_history
+            )
+
             print_training_metrics(
                 self.global_step,
                 self.current_epoch,
@@ -504,15 +507,6 @@ class DualVAETrainingPlan(TrainingPlan):
                 num_acceptable,
                 num_cells,
                 exact_pairs,
-            )
-
-            plot_latent_mean_std(
-                rna_inference_outputs,
-                protein_inference_outputs,
-                self.rna_vae.adata,
-                self.protein_vae.adata,
-                indices_rna,
-                indices_prot,
             )
 
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
@@ -576,12 +570,16 @@ class DualVAETrainingPlan(TrainingPlan):
         protein_inference_outputs = self.protein_vae.module.inference(
             protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
         )
+        rna_latent_mean = rna_inference_outputs["qz"].mean
+        rna_latent_std = rna_inference_outputs["qz"].scale
+        protein_latent_mean = protein_inference_outputs["qz"].mean
+        protein_latent_std = protein_inference_outputs["qz"].scale
 
         latent_distances = compute_pairwise_kl_two_items(
-            rna_inference_outputs["qz"].mean,
-            protein_inference_outputs["qz"].mean,
-            rna_inference_outputs["qz"].scale,
-            protein_inference_outputs["qz"].scale,
+            rna_latent_mean,
+            protein_latent_mean,
+            rna_latent_std,
+            protein_latent_std,
         )
 
         validation_total_loss = rna_loss_output.loss + protein_loss_output.loss
@@ -778,6 +776,15 @@ def train_vae(
 
 
 # %%
+# Setup MLflow
+mlflow.set_tracking_uri("file:./mlruns")
+experiment_name = "vae_training"
+try:
+    experiment_id = mlflow.get_experiment_by_name(experiment_name).experiment_id
+except:
+    experiment_id = mlflow.create_experiment(experiment_name)
+mlflow.set_experiment(experiment_name)
+
 # Setup VAEs and training parameters
 training_kwargs = {
     "contrastive_weight": 10.0,
@@ -791,11 +798,10 @@ print("\nStarting training...")
 print("Current working directory:", os.getcwd())
 print("Python path:", sys.path)
 
-
 rna_vae, protein_vae = train_vae(
     adata_rna_subset=adata_rna_subset,
     adata_prot_subset=adata_prot_subset,
-    n_epochs=10,
+    n_epochs=5,
     batch_size=1000,
     lr=1e-3,
     use_gpu=True,
@@ -808,7 +814,6 @@ rna_vae_new = rna_vae
 mlflow.set_tracking_uri("file:./mlruns")
 mlflow.set_experiment("vae_training")
 run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-mlflow.start_run(run_name=run_name)
 
 # Log parameters
 mlflow.log_params(
@@ -928,17 +933,17 @@ print("✓ Latent spaces combined")
 # %%
 print("\nMatching cells between modalities...")
 # Calculate pairwise distances between RNA and protein cells in latent space
-from scipy.spatial.distance import cdist
 
 latent_distances = cdist(rna_latent.X, prot_latent.X)
+rand_latent_distances = latent_distances[np.random.permutation(len(rna_latent)), :]
 
 # Find closest matches for RNA cells to protein cells
-rna_to_prot_matches = np.argmin(latent_distances, axis=1).astype(np.int32)
-prot_to_rna_matches = np.argmin(latent_distances, axis=0).astype(np.int32)
+prot_matches_in_rna = np.argmin(latent_distances, axis=0).astype(
+    np.int32
+)  # size of prot use to index rna
 
 # Calculate matching distances
-rna_matching_distances = np.min(latent_distances, axis=1)
-prot_matching_distances = np.min(latent_distances, axis=0)
+matching_distances = np.min(latent_distances, axis=0)
 
 # Generate random matches for comparison
 n_rna = len(rna_latent)
@@ -949,32 +954,30 @@ if n_rna < n_prot:
 else:
     rna_larger = False
 
-rand_rna_to_prot_matches = torch.tensor(np.random.permutation(n_prot)[:n_rna], dtype=torch.long)
-rand_prot_to_rna_matches = torch.tensor(np.random.permutation(n_rna)[:n_prot], dtype=torch.long)
+rand_prot_matches_in_rna = np.argmin(rand_latent_distances, axis=0)
+rand_matching_distances = np.min(rand_latent_distances, axis=0)
+
+
 # %%
+
+
 # Calculate random matching distances
 # Store matching information in combined_latent.uns
 combined_latent.uns["cell_matching"] = {
-    "rna_to_prot_matches": rna_to_prot_matches,
-    "prot_to_rna_matches": prot_to_rna_matches,
-    "rna_matching_distances": rna_matching_distances,
-    "prot_matching_distances": prot_matching_distances,
-    "latent_distances": latent_distances,
-    # Add random matching information
-    "rand_rna_to_prot_matches": rand_rna_to_prot_matches.numpy(),
-    "rand_prot_to_rna_matches": rand_prot_to_rna_matches.numpy(),
+    "prot_matches_in_rna": prot_matches_in_rna,
+    "matching_distances": matching_distances,
+    "rand_prot_matches_in_rna": rand_prot_matches_in_rna,
+    "rand_matching_distances": rand_matching_distances,
 }
-
 print(f"✓ Matched {len(rna_latent)} RNA cells to protein cells")
 print(f"✓ Matched {len(prot_latent)} protein cells to RNA cells")
-print(f"Average matching distance: {rna_matching_distances.mean().item():.3f}")
-print(f"Average random matching distance: {rand_rna_matching_distances.mean().item():.3f}")
-
+print(f"Average random matching distance: {rand_matching_distances.mean().item():.3f}")
+print(f"Average matching distance: {matching_distances.mean().item():.3f}")
 # Calculate distances and metrics
 print("\nCalculating distances and metrics...")
 # Use the stored matching distances instead of recalculating
-distances = combined_latent.uns["cell_matching"]["rna_matching_distances"]
-rand_distances = combined_latent.uns["cell_matching"]["rand_rna_matching_distances"]
+distances = combined_latent.uns["cell_matching"]["matching_distances"]
+rand_distances = combined_latent.uns["cell_matching"]["rand_matching_distances"]
 print("✓ Distances calculated")
 
 # Plot training results
@@ -993,13 +996,13 @@ mlflow.log_figure(plt.gcf(), "spatial_data.png")
 
 # Plot latent representations
 print("\nPlotting latent representations...")
-plot_latent(
+plot_latent_pca_both_modalities(
     latent_rna,
     latent_prot,
     rna_vae_new.adata,
     protein_vae.adata,
-    index_prot=range(len(protein_vae.adata.obs.index)),
     index_rna=range(len(rna_vae_new.adata.obs.index)),
+    index_prot=range(len(protein_vae.adata.obs.index)),
 )
 print("✓ Latent representations plotted")
 mlflow.log_figure(plt.gcf(), "latent_representations.png")
@@ -1078,25 +1081,15 @@ nmi_cell_types_cn_prot = adjusted_mutual_info_score(
     protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
 )
 # %%
-if rna_larger:
-    nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae_new.adata.obs["cell_types"].values,
-        protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches],
-    )
-    matches = (
-        rna_vae_new.adata.obs["cell_types"].values
-        == protein_vae.adata.obs["cell_types"].values[prot_to_rna_matches]
-    )
+nmi_cell_types_modalities = adjusted_mutual_info_score(
+    rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna],
+    protein_vae.adata.obs["cell_types"].values,
+)
+matches = (
+    rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna]
+    == protein_vae.adata.obs["cell_types"].values
+)
 
-else:
-    nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae_new.adata.obs["cell_types"].values[rna_to_prot_matches],
-        protein_vae.adata.obs["cell_types"].values,
-    )
-    matches = (
-        rna_vae_new.adata.obs["cell_types"].values[rna_to_prot_matches]
-        == protein_vae.adata.obs["cell_types"].values
-    )
 
 accuracy = matches.sum() / len(matches)
 
