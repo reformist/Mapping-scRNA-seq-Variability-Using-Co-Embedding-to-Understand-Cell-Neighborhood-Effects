@@ -13,9 +13,6 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # %%
 # Imports
 # %%
-import numpy as np
-import torch
-import torch.nn.functional as F
 
 
 def setup_logging(log_dir="logs"):
@@ -157,11 +154,10 @@ def log_batch_metrics(
     contrastive_loss,
 ):
     """Log batch metrics"""
-    if batch_idx == 0:
-        update_log(log_file, "batch_total_loss", validation_total_loss.item())
-        update_log(log_file, "batch_rna_loss", rna_loss_output.loss.item())
-        update_log(log_file, "batch_protein_loss", protein_loss_output.loss.item())
-        update_log(log_file, "batch_contrastive_loss", contrastive_loss.item())
+    update_log(log_file, "batch_total_loss", validation_total_loss.item())
+    update_log(log_file, "batch_rna_loss", rna_loss_output.loss.item())
+    update_log(log_file, "batch_protein_loss", protein_loss_output.loss.item())
+    update_log(log_file, "batch_contrastive_loss", contrastive_loss.item())
 
 
 def log_step_metrics(
@@ -175,14 +171,13 @@ def log_step_metrics(
     similarity_loss,
 ):
     """Log step metrics"""
-    if global_step % 10 == 0:
-        update_log(log_file, "step", global_step)
-        update_log(log_file, "step_total_loss", total_loss.item())
-        update_log(log_file, "step_rna_loss", rna_loss_output.loss.item())
-        update_log(log_file, "step_protein_loss", protein_loss_output.loss.item())
-        update_log(log_file, "step_contrastive_loss", contrastive_loss.item())
-        update_log(log_file, "step_matching_loss", matching_loss.item())
-        update_log(log_file, "step_similarity_loss", similarity_loss.item())
+    update_log(log_file, "step", global_step)
+    update_log(log_file, "step_total_loss", total_loss.item())
+    update_log(log_file, "step_rna_loss", rna_loss_output.loss.item())
+    update_log(log_file, "step_protein_loss", protein_loss_output.loss.item())
+    update_log(log_file, "step_contrastive_loss", contrastive_loss.item())
+    update_log(log_file, "step_matching_loss", matching_loss.item())
+    update_log(log_file, "step_similarity_loss", similarity_loss.item())
 
 
 def print_distance_metrics(
@@ -255,7 +250,6 @@ def print_training_metrics(
     latent_distances,
     similarity_loss_raw,
     similarity_weight,
-    ratio,
     similarity_active,
     num_acceptable,
     num_cells,
@@ -295,7 +289,6 @@ def print_training_metrics(
     print("-" * 40)
     print(f"Similarity Loss Raw: {similarity_loss_raw.item():.3f}")
     print(f"Similarity Weight: {similarity_weight}")
-    print(f"Similarity Ratio: {ratio:.3f}")
     print(f"Similarity Active: {similarity_active}")
 
     print("\nMatching Metrics:")

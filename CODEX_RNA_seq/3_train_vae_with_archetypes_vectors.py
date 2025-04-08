@@ -130,6 +130,7 @@ from plotting_functions import (
 )
 
 from bar_nick_utils import (
+    calculate_iLISI,
     clean_uns_for_h5ad,
     compare_distance_distributions,
     compute_pairwise_kl,
@@ -209,6 +210,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_weight = kwargs.pop(
             "similarity_weight"
         )  # Remove default to use config value
+        self.lr = kwargs.pop("lr", 0.001)
         super().__init__(rna_module, **kwargs)
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
@@ -233,11 +235,23 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_losses = []  # Store similarity losses
         self.similarity_losses_raw = []  # Store raw similarity losses
         self.similarity_weights = []  # Store similarity weights
-        self.similarity_ratios = []  # Store similarity ratios
         self.early_stopping_callback = None  # Will be set by trainer
 
         # Setup logging
         self.log_file = setup_logging()
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            list(self.rna_vae.module.parameters()) + list(self.protein_vae.module.parameters()),
+            lr=self.lr,
+            # weight_decay=1e-5,
+        )
+        d = {  # maybe add this?
+            "optimizer": optimizer,
+            "gradient_clip_val": 1.0,  # Critical for stability
+            "gradient_clip_algorithm": "value",
+        }
+        return d
 
     def training_step(self, batch, batch_idx):
         indices = batch["labels"].detach().cpu().numpy().flatten()
@@ -438,49 +452,81 @@ class DualVAETrainingPlan(TrainingPlan):
             )
         contrastive_loss = contrastive_loss * self.contrastive_weight
 
-        # Calculate similarity loss
-        is_steady_state = False
-        if len(self.similarity_loss_history) > self.steady_state_window:
-            recent_history = self.similarity_loss_history[-self.steady_state_window :]
-            variation = np.std(recent_history) / (np.mean(recent_history) + 1e-10)
-            is_steady_state = variation < self.steady_state_tolerance
+        in_steady_state = False
+        coeff_of_variation = 0  # default value
+        if len(self.similarity_loss_history) == self.steady_state_window:
+            # Calculate mean and standard deviation over the window
+            mean_loss = sum(self.similarity_loss_history) / self.steady_state_window
+            std_loss = (
+                sum((x - mean_loss) ** 2 for x in self.similarity_loss_history)
+                / self.steady_state_window
+            ) ** 0.5
 
-        if is_steady_state and self.similarity_active:
+            # Check if variation is small enough to be considered steady state
+            coeff_of_variation = std_loss / mean_loss
+            if coeff_of_variation < self.steady_state_tolerance:
+                in_steady_state = True
+
+        # Determine if loss has increased significantly from steady state
+        rna_dis = torch.cdist(rna_latent_mean, rna_latent_mean)
+        prot_dis = torch.cdist(protein_latent_mean, protein_latent_mean)
+        rna_prot_dis = torch.cdist(rna_latent_mean, protein_latent_mean)
+        similarity_loss_raw = torch.abs(
+            ((rna_dis.abs().mean() + prot_dis.abs().mean()) / 2) - rna_prot_dis.abs().mean()
+        )
+        loss_increased = False
+        if not self.similarity_active and len(self.similarity_loss_history) > 0:
+            recent_loss = similarity_loss_raw.item()
+            min_steady_loss = min(self.similarity_loss_history)
+            if recent_loss > min_steady_loss * (1 + self.reactivation_threshold):
+                loss_increased = True
+        # Update the weight based on steady state detection
+        if in_steady_state and self.similarity_active:
+            current_similarity_weight = (
+                self.similarity_weight / 1000
+            )  # Zero out weight when in steady state
             self.similarity_active = False
-        elif not self.similarity_active and self.global_step % 50 == 0:
-            if self.global_step > 50:
-                recent_loss = np.mean(self.similarity_loss_history[-50:])
-                if recent_loss > self.reactivation_threshold:
-                    self.similarity_active = True
-                    self.similarity_weight = 1000
-
-        if self.similarity_active:
-            similarity_loss_raw = torch.sum(distances * (-same_cn_mask.float())) / (
-                torch.sum(-same_cn_mask.float()) + 1e-10
-            )
-            ratio = self.similarity_weight / 1000  # Restore original ratio calculation
-            similarity_loss = similarity_loss_raw * self.similarity_weight
+        elif loss_increased and not self.similarity_active:
+            current_similarity_weight = self.similarity_weight  # Reactivate with full weight
+            self.similarity_active = True
         else:
-            similarity_loss_raw = torch.tensor(0.0).to(device)
-            ratio = 0.0
-            similarity_loss = torch.tensor(0.0).to(device)
+            current_similarity_weight = self.similarity_weight if self.similarity_active else 0
 
+        if self.global_step % 50 == 0:
+            combined_latent = ad.concat(
+                [
+                    AnnData(rna_latent_mean.detach().cpu().numpy()),
+                    AnnData(protein_latent_mean.detach().cpu().numpy()),
+                ],
+                join="outer",
+                label="modality",
+                keys=["RNA", "Protein"],
+            )
+            sc.pp.pca(combined_latent, n_comps=5)
+            sc.pp.neighbors(combined_latent, use_rep="X_pca", n_neighbors=10)
+            iLISI_score = calculate_iLISI(combined_latent, "modality", plot_flag=True)
+            print(f"iLISI score: {iLISI_score}, similarity weight: {self.similarity_weight}")
+            if iLISI_score < 1.9 and self.similarity_weight > 1e8:
+                self.similarity_weight = self.similarity_weight * 10
+            elif self.similarity_weight > 100:  # make it smaller only if it is not too small
+                self.similarity_weight = self.similarity_weight / 10
         # Store similarity metrics
+        similarity_loss = current_similarity_weight * similarity_loss_raw
+
         self.similarity_losses.append(similarity_loss.item())
         self.similarity_losses_raw.append(similarity_loss_raw.item())
         self.similarity_weights.append(self.similarity_weight)
-        self.similarity_ratios.append(ratio)
 
         self.similarity_loss_history.append(similarity_loss_raw.item())
         self.active_similarity_loss_active_history.append(self.similarity_active)
 
         total_loss = (
-            rna_loss_output.loss
-            + protein_loss_output.loss
-            + contrastive_loss
+            # rna_loss_output.loss
+            # + protein_loss_output.loss
+            # + contrastive_loss
             # + adv_loss # dont remove comment for now
-            + matching_loss
-            + similarity_loss
+            # + matching_loss
+            +similarity_loss
             # + diversity_loss # dont remove comment for now
         )
 
@@ -503,7 +549,6 @@ class DualVAETrainingPlan(TrainingPlan):
                 latent_distances,
                 similarity_loss_raw,
                 self.similarity_weight,
-                ratio,
                 self.similarity_active,
                 num_acceptable,
                 num_cells,
@@ -517,7 +562,6 @@ class DualVAETrainingPlan(TrainingPlan):
         update_log(self.log_file, "train_similarity_loss_raw", similarity_loss_raw.item())
         update_log(self.log_file, "train_similarity_weighted", similarity_loss.item())
         update_log(self.log_file, "train_similarity_weight", self.similarity_weight)
-        update_log(self.log_file, "train_similarity_ratio", ratio)
 
         log_training_metrics(
             self.log_file,
@@ -726,7 +770,6 @@ class DualVAETrainingPlan(TrainingPlan):
             "train_similarity_loss": self.similarity_losses,
             "train_similarity_loss_raw": self.similarity_losses_raw,
             "train_similarity_weight": self.similarity_weights,
-            "train_similarity_ratio": self.similarity_ratios,
             "train_total_loss": self.train_losses,
             "val_total_loss": self.val_losses,
         }
@@ -836,10 +879,22 @@ def train_vae(
     # Create training plan instance
     print("Creating training plan...")
     training_plan = DualVAETrainingPlan(rna_vae.module, **plan_kwargs)
+    rna_vae._training_plan = training_plan
     print("Training plan created")
 
     # Train the model
     print("Starting training...")
+    rna_vae.is_trained_ = True
+    protein_vae.is_trained_ = True
+    rna_vae.module.cpu()
+    protein_vae.module.cpu()
+    latent_rna_before = rna_vae.get_latent_representation()
+    latent_prot_before = protein_vae.get_latent_representation()
+    rna_vae.module.to(device)
+    protein_vae.module.to(device)
+    rna_vae.is_trained_ = False
+    protein_vae.is_trained_ = False
+
     rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
 
     print("Training completed")
@@ -849,7 +904,7 @@ def train_vae(
     protein_vae.is_trained_ = True
     print("Training flags set")
 
-    return rna_vae, protein_vae
+    return rna_vae, protein_vae, latent_rna_before, latent_prot_before
 
 
 # %%
@@ -873,7 +928,7 @@ print("Python path:", sys.path)
 adata_rna_subset_original = adata_rna_subset.copy()
 # Create new AnnData with PCA values
 adata_rna_subset = sc.AnnData(
-    X=adata_rna_subset_original.obsm["X_pca"],
+    X=adata_rna_subset_original.obsm["X_pca"] - np.min(adata_rna_subset_original.obsm["X_pca"]),
     obs=adata_rna_subset_original.obs.copy(),
     var=pd.DataFrame(
         index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
@@ -884,7 +939,7 @@ adata_rna_subset = sc.AnnData(
 # Create new AnnData with PCA values for protein data
 adata_prot_subset_original = adata_prot_subset.copy()
 adata_prot_subset = sc.AnnData(
-    X=adata_prot_subset_original.obsm["X_pca"],
+    X=adata_prot_subset_original.obsm["X_pca"] - np.min(adata_prot_subset_original.obsm["X_pca"]),
     obs=adata_prot_subset_original.obs.copy(),
     var=pd.DataFrame(
         index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
@@ -895,8 +950,8 @@ adata_prot_subset = sc.AnnData(
 
 
 training_kwargs = {
-    "max_epochs": 500,
-    "batch_size": 1000,
+    "max_epochs": 2,
+    "batch_size": 1200,
     "train_size": 0.9,
     "validation_size": 0.1,
     "check_val_every_n_epoch": 1,
@@ -906,13 +961,14 @@ training_kwargs = {
     "devices": 1,
     "gradient_clip_val": 1.0,
     "accumulate_grad_batches": 1,
-    "lr": 1e-3,
+    "lr": 1e-4,
     "use_gpu": True,
     "plot_x_times": 10,
     "contrastive_weight": 10.0,
     "similarity_weight": 1000.0,
+    "matching_weight": 1.0,
 }
-rna_vae, protein_vae = train_vae(
+rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
     adata_rna_subset=adata_rna_subset,
     adata_prot_subset=adata_prot_subset,
     **training_kwargs,
@@ -920,6 +976,7 @@ rna_vae, protein_vae = train_vae(
 print("Training completed")
 rna_vae_new = rna_vae
 
+# %%
 # Setup MLflow
 mlflow.set_tracking_uri("file:./mlruns")
 mlflow.set_experiment("vae_training")
@@ -928,19 +985,17 @@ run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 # Log parameters
 mlflow.log_params(
     {
-        "max_epochs": training_kwargs["max_epochs"],
         "batch_size": training_kwargs["batch_size"],
-        "lr": training_kwargs["lr"],
         "use_gpu": training_kwargs["use_gpu"],
         "contrastive_weight": training_kwargs["contrastive_weight"],
         "similarity_weight": training_kwargs["similarity_weight"],
-        "diversity_weight": training_kwargs["diversity_weight"],
+        # "diversity_weight": training_kwargs["diversity_weight"],
         "matching_weight": training_kwargs["matching_weight"],
-        "adv_weight": training_kwargs["adv_weight"],
-        "n_hidden_rna": training_kwargs["n_hidden_rna"],
-        "n_hidden_prot": training_kwargs["n_hidden_prot"],
-        "n_layers": training_kwargs["n_layers"],
-        "latent_dim": training_kwargs["latent_dim"],
+        "adv_weight": training_kwargs.get("adv_weight", None),
+        "n_hidden_rna": training_kwargs.get("n_hidden_rna", None),
+        "n_hidden_prot": training_kwargs.get("n_hidden_prot", None),
+        "n_layers": training_kwargs.get("n_layers", None),
+        "latent_dim": training_kwargs.get("latent_dim", None),
     }
 )
 
@@ -956,7 +1011,6 @@ mlflow.log_metrics(
         "final_train_similarity_loss": history["train_similarity_loss"][-1],
         "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
         "final_train_similarity_weight": history["train_similarity_weight"][-1],
-        "final_train_similarity_ratio": history["train_similarity_ratio"][-1],
         "final_train_total_loss": history["train_total_loss"][-1],
         "final_val_total_loss": history["val_total_loss"][-1],
     }
@@ -981,13 +1035,29 @@ protein_vae.module.to(device)
 rna_vae_new.module.eval()
 protein_vae.module.eval()
 print("✓ Models prepared")
-
+# %%
 # Generate latent representatiindices = np.clip(indtensor(self.protein_vae.adata[indexices, 0, max_idx)ons
 print("\nGenerating latent representations...")
 with torch.no_grad():
-    latent_rna = rna_vae_new.get_latent_representation()
-    latent_prot = protein_vae.get_latent_representation()
-print("✓ Latent representations generated")
+    batch = torch.tensor(rna_vae_new.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device)
+    latent_rna = rna_vae_new.module.inference(
+        torch.tensor(rna_vae_new.adata.X), batch_index=batch, n_samples=1
+    )
+    latent_rna = latent_rna["z"]
+    latent_rna = latent_rna.cpu().numpy()
+
+    latent_prot = protein_vae.module.inference(
+        torch.tensor(protein_vae.adata.X), batch_index=batch, n_samples=1
+    )
+    latent_prot = latent_prot["z"]
+    latent_prot = latent_prot.cpu().numpy()
+    if latent_rna_before is not None:
+        # chekc if latent_rna_before is the same as latent_rna
+        if np.allclose(latent_rna_before, latent_rna):
+            raise ValueError("Latent representations are the same as before training")
+    if latent_prot_before is not None:
+        if np.allclose(latent_prot_before, latent_prot):
+            raise ValueError("Latent representations are the same as before training")
 
 # Store latent representations
 print("\nStoring latent representations...")
@@ -1089,7 +1159,7 @@ print("\nCalculating distances and metrics...")
 distances = combined_latent.uns["cell_matching"]["matching_distances"]
 rand_distances = combined_latent.uns["cell_matching"]["rand_matching_distances"]
 print("✓ Distances calculated")
-
+# %%
 # Plot training results
 print("\nPlotting training results...")
 plot_normalized_losses(history)
