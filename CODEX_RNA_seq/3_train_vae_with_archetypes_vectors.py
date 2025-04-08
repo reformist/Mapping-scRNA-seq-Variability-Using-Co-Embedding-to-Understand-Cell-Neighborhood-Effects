@@ -205,7 +205,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.plot_x_times = kwargs.pop("plot_x_times", 5)
         contrastive_weight = kwargs.pop("contrastive_weight", 1.0)
         self.batch_size = kwargs.pop("batch_size", 1000)
-        n_epochs = kwargs.pop("n_epochs", 1)
+        max_epochs = kwargs.pop("max_epochs", 1)
         self.similarity_weight = kwargs.pop(
             "similarity_weight"
         )  # Remove default to use config value
@@ -221,7 +221,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.first_step = True
         n_samples = len(self.rna_vae.adata)
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
-        self.total_steps = steps_per_epoch * n_epochs
+        self.total_steps = steps_per_epoch * max_epochs
         self.similarity_loss_history = []
         self.steady_state_window = 50
         self.steady_state_tolerance = 0.5
@@ -234,6 +234,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_losses_raw = []  # Store raw similarity losses
         self.similarity_weights = []  # Store similarity weights
         self.similarity_ratios = []  # Store similarity ratios
+        self.early_stopping_callback = None  # Will be set by trainer
 
         # Setup logging
         self.log_file = setup_logging()
@@ -582,13 +583,80 @@ class DualVAETrainingPlan(TrainingPlan):
             protein_latent_std,
         )
 
-        validation_total_loss = rna_loss_output.loss + protein_loss_output.loss
+        # Calculate matching loss
+        archetype_dis = torch.cdist(
+            normalize(rna_batch["archetype_vec"], dim=1),
+            normalize(protein_batch["archetype_vec"], dim=1),
+        )
+        archetype_dis_tensor = torch.tensor(
+            archetype_dis, dtype=torch.float, device=latent_distances.device
+        )
+        threshold = 0.0005
+        archetype_dis_tensor = (archetype_dis_tensor - archetype_dis_tensor.min()) / (
+            archetype_dis_tensor.max() - archetype_dis_tensor.min()
+        )
+        latent_distances = (latent_distances - latent_distances.min()) / (
+            latent_distances.max() - latent_distances.min()
+        )
+        squared_diff = (latent_distances - archetype_dis_tensor) ** 2
+        acceptable_range_mask = (archetype_dis_tensor < threshold) & (latent_distances < threshold)
+        stress_loss = squared_diff.mean()
+        num_cells = squared_diff.numel()
+        num_acceptable = acceptable_range_mask.sum()
+        exact_pairs = 10 * torch.diag(latent_distances).mean()
+        reward_strength = 0
+        reward = reward_strength * (num_acceptable.float() / num_cells)
+        matching_loss = stress_loss - reward + exact_pairs
+
+        # Calculate contrastive loss
+        rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
+        prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
+        distances = 5 * prot_distances + rna_distances
+
+        rna_size = prot_size = rna_batch["X"].shape[0]
+        mixed_latent = torch.cat([rna_latent_mean, protein_latent_mean], dim=0)
+        batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(device)
+        batch_pred = self.batch_classifier(mixed_latent)
+        adv_loss = -F.cross_entropy(batch_pred, batch_labels.long())
+
+        # Calculate similarity loss
+        cell_neighborhood_info_protein = torch.tensor(
+            self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
+        ).to(device)
+        cell_neighborhood_info_rna = torch.tensor(
+            self.rna_vae.adata[indices_rna].obs["CN"].cat.codes.values
+        ).to(device)
+        same_cn_mask = cell_neighborhood_info_rna.unsqueeze(
+            0
+        ) == cell_neighborhood_info_protein.unsqueeze(1)
+
+        if self.similarity_active:
+            similarity_loss_raw = torch.sum(distances * (-same_cn_mask.float())) / (
+                torch.sum(-same_cn_mask.float()) + 1e-10
+            )
+            similarity_loss = similarity_loss_raw * self.similarity_weight
+        else:
+            similarity_loss = torch.tensor(0.0).to(device)
+
+        # Calculate total validation loss with same components as training
+        validation_total_loss = (
+            rna_loss_output.loss
+            + protein_loss_output.loss
+            + self.contrastive_weight * distances.mean()
+            + matching_loss
+            + similarity_loss
+        )
+
+        # Log the validation loss metric
+        self.log(
+            "val_total_loss", validation_total_loss, on_step=False, on_epoch=True, prog_bar=True
+        )
 
         log_validation_metrics(
             self.log_file,
             rna_loss_output,
             protein_loss_output,
-            torch.tensor(0.0),  # contrastive loss not used in validation
+            self.contrastive_weight * distances.mean(),
             validation_total_loss,
             latent_distances,
         )
@@ -663,12 +731,18 @@ class DualVAETrainingPlan(TrainingPlan):
             "val_total_loss": self.val_losses,
         }
 
+    def on_early_stopping(self):
+        """Called when early stopping is triggered."""
+        print("\nEarly stopping triggered!")
+
+        print("✓ Early stopping artifacts saved")
+
 
 # %%
 def train_vae(
     adata_rna_subset,
     adata_prot_subset,
-    n_epochs=1,
+    max_epochs=1,
     batch_size=128,
     lr=1e-3,
     use_gpu=True,
@@ -676,11 +750,16 @@ def train_vae(
     similarity_weight=1000.0,
     diversity_weight=0.1,
     matching_weight=1.0,
+    train_size=0.9,
+    check_val_every_n_epoch=1,
     adv_weight=0.1,
     n_hidden_rna=128,
     n_hidden_prot=50,
     n_layers=3,
     latent_dim=10,
+    validation_size=0.1,
+    gradient_clip_val=1.0,
+    accumulate_grad_batches=1,
     **kwargs,
 ):
     """Train the VAE models."""
@@ -728,19 +807,6 @@ def train_vae(
     print("TensorBoard logger setup complete")
 
     # Set up training parameters
-    train_kwargs = {
-        "max_epochs": n_epochs,
-        "batch_size": batch_size,
-        "train_size": 0.9,
-        "validation_size": 0.1,
-        "early_stopping": False,
-        "check_val_every_n_epoch": 1,
-        "accelerator": "gpu" if use_gpu and torch.cuda.is_available() else "cpu",
-        "devices": 1,
-        "gradient_clip_val": 1.0,
-        "accumulate_grad_batches": 4,
-    }
-    print("Training parameters:", train_kwargs)
 
     # Create training plan with both VAEs
     plan_kwargs = {
@@ -753,9 +819,17 @@ def train_vae(
         "adv_weight": adv_weight,
         "plot_x_times": kwargs.pop("plot_x_times", 5),
         "batch_size": batch_size,
-        "n_epochs": n_epochs,
-        "early_stopping": True,
-        "early_stopping_patience": 10,
+        "max_epochs": max_epochs,
+        "lr": lr,
+    }
+    train_kwargs = {
+        "max_epochs": max_epochs,
+        "batch_size": batch_size,
+        "train_size": train_size,
+        "validation_size": validation_size,
+        "check_val_every_n_epoch": check_val_every_n_epoch,
+        "gradient_clip_val": gradient_clip_val,
+        "accumulate_grad_batches": accumulate_grad_batches,
     }
     print("Plan parameters:", plan_kwargs)
 
@@ -767,6 +841,7 @@ def train_vae(
     # Train the model
     print("Starting training...")
     rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
+
     print("Training completed")
 
     # Manually set trained flag
@@ -788,25 +863,58 @@ except:
 mlflow.set_experiment(experiment_name)
 
 # Setup VAEs and training parameters
-training_kwargs = {
-    "contrastive_weight": 10.0,
-    "plot_x_times": 5,
-    "similarity_weight": 1000.0,
-}
+
 
 # %%
 # Train the model
 print("\nStarting training...")
 print("Current working directory:", os.getcwd())
 print("Python path:", sys.path)
+adata_rna_subset_original = adata_rna_subset.copy()
+# Create new AnnData with PCA values
+adata_rna_subset = sc.AnnData(
+    X=adata_rna_subset_original.obsm["X_pca"],
+    obs=adata_rna_subset_original.obs.copy(),
+    var=pd.DataFrame(
+        index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
+    ),
+    obsm=adata_rna_subset_original.obsm.copy(),
+    uns=adata_rna_subset_original.uns.copy(),
+)
+# Create new AnnData with PCA values for protein data
+adata_prot_subset_original = adata_prot_subset.copy()
+adata_prot_subset = sc.AnnData(
+    X=adata_prot_subset_original.obsm["X_pca"],
+    obs=adata_prot_subset_original.obs.copy(),
+    var=pd.DataFrame(
+        index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
+    ),
+    obsm=adata_prot_subset_original.obsm.copy(),
+    uns=adata_prot_subset_original.uns.copy(),
+)
 
+
+training_kwargs = {
+    "max_epochs": 500,
+    "batch_size": 1000,
+    "train_size": 0.9,
+    "validation_size": 0.1,
+    "check_val_every_n_epoch": 1,
+    "early_stopping": True,
+    "early_stopping_patience": 20,
+    "early_stopping_monitor": "val_total_loss",
+    "devices": 1,
+    "gradient_clip_val": 1.0,
+    "accumulate_grad_batches": 1,
+    "lr": 1e-3,
+    "use_gpu": True,
+    "plot_x_times": 10,
+    "contrastive_weight": 10.0,
+    "similarity_weight": 1000.0,
+}
 rna_vae, protein_vae = train_vae(
     adata_rna_subset=adata_rna_subset,
     adata_prot_subset=adata_prot_subset,
-    n_epochs=5,
-    batch_size=1000,
-    lr=1e-3,
-    use_gpu=True,
     **training_kwargs,
 )
 print("Training completed")
@@ -820,19 +928,19 @@ run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 # Log parameters
 mlflow.log_params(
     {
-        "n_epochs": 10,
-        "batch_size": 1000,
-        "lr": 1e-3,
-        "use_gpu": True,
-        "contrastive_weight": 10.0,
-        "similarity_weight": 1000.0,
-        "diversity_weight": 0.1,
-        "matching_weight": 1.0,
-        "adv_weight": 0.1,
-        "n_hidden_rna": 128,
-        "n_hidden_prot": 50,
-        "n_layers": 3,
-        "latent_dim": 10,
+        "max_epochs": training_kwargs["max_epochs"],
+        "batch_size": training_kwargs["batch_size"],
+        "lr": training_kwargs["lr"],
+        "use_gpu": training_kwargs["use_gpu"],
+        "contrastive_weight": training_kwargs["contrastive_weight"],
+        "similarity_weight": training_kwargs["similarity_weight"],
+        "diversity_weight": training_kwargs["diversity_weight"],
+        "matching_weight": training_kwargs["matching_weight"],
+        "adv_weight": training_kwargs["adv_weight"],
+        "n_hidden_rna": training_kwargs["n_hidden_rna"],
+        "n_hidden_prot": training_kwargs["n_hidden_prot"],
+        "n_layers": training_kwargs["n_layers"],
+        "latent_dim": training_kwargs["latent_dim"],
     }
 )
 

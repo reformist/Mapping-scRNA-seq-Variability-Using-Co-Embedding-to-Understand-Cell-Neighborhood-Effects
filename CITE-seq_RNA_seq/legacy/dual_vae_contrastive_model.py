@@ -65,6 +65,7 @@ class DualVAETrainingPlan(TrainingPlan):
     def __init__(self, rna_module, **kwargs):
         protein_vae = kwargs.pop('protein_vae')
         rna_vae = kwargs.pop('rna_vae')
+        lr = kwargs.pop('lr', 0.001)
         contrastive_weight = kwargs.pop('contrastive_weight', 1.0)
         super().__init__(rna_vae.module, **kwargs)
         super().__init__(protein_vae.module, **kwargs)
@@ -82,7 +83,7 @@ class DualVAETrainingPlan(TrainingPlan):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             list(self.rna_vae.module.parameters()) + list(self.protein_vae.module.parameters()),
-            lr=0.001,
+            lr=self.lr,
             weight_decay=1e-5,
         )
         return optimizer
