@@ -31,6 +31,7 @@ import importlib
 
 import cell_lists
 import matplotlib.pyplot as plt
+import mlflow
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -43,6 +44,16 @@ import bar_nick_utils
 
 importlib.reload(cell_lists)
 importlib.reload(bar_nick_utils)
+
+
+def safe_mlflow_log_figure(fig, filename):
+    """Safely log a figure to MLflow if an experiment is active."""
+    try:
+        mlflow.log_figure(fig, filename)
+    except Exception as e:
+        print(f"Warning: Could not log figure to MLflow: {str(e)}")
+        print("Continuing without MLflow logging...")
+
 
 # %% MaxFuse Plotting Functions
 # This module contains functions for plotting MaxFuse-specific visualizations.
@@ -111,6 +122,7 @@ def plot_spatial_data(adata_prot):
     plt.ylabel("Y coordinate")
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0.0)
     plt.tight_layout()
+    safe_mlflow_log_figure(plt.gcf(), "protein_spatial_data.png")
     plt.show()
 
 
@@ -174,7 +186,13 @@ def plot_spatial_data_comparison(adata_rna, adata_prot):
 
 
 def plot_latent_pca_both_modalities(
-    rna_mean, protein_mean, adata_rna_subset, adata_prot_subset, index_rna, index_prot
+    rna_mean,
+    protein_mean,
+    adata_rna_subset,
+    adata_prot_subset,
+    index_rna,
+    index_prot,
+    global_step=None,
 ):
     plt.figure(figsize=(10, 5))
     pca = PCA(n_components=3)
@@ -231,6 +249,11 @@ def plot_latent_pca_both_modalities(
     ax.set_zlabel("PC3")
     ax.legend()
     plt.tight_layout()
+
+    if global_step is not None:
+        safe_mlflow_log_figure(plt.gcf(), f"step_{global_step}_latent_pca_both_modalities.png")
+    else:
+        safe_mlflow_log_figure(plt.gcf(), "latent_pca_both_modalities.png")
     plt.show()
 
 
@@ -360,6 +383,7 @@ def plot_rna_protein_matching_means_and_scale(
     protein_latent_std,
     archetype_dis_mat,
     use_subsample=True,
+    global_step=None,
 ):
     """
     Plot the means and scales as halo  and lines between the best matches
@@ -369,8 +393,7 @@ def plot_rna_protein_matching_means_and_scale(
         protein_inference_outputs: the output of the protein inference
         archetype_dis_mat: the archetype distance matrix
         use_subsample: whether to use subsampling
-
-
+        global_step: the current training step, if None then not during training
     """
     if use_subsample:
         subsample_indexes = np.random.choice(rna_latent_mean.shape[0], 300, replace=False)
@@ -434,6 +457,13 @@ def plot_rna_protein_matching_means_and_scale(
     plt.title("PCA of RNA and Protein with Scale Halos")
     plt.legend()
     plt.gca().set_aspect("equal")
+
+    if global_step is not None:
+        safe_mlflow_log_figure(
+            plt.gcf(), f"step_{global_step}_rna_protein_matching_means_and_scale.png"
+        )
+    else:
+        safe_mlflow_log_figure(plt.gcf(), "rna_protein_matching_means_and_scale.png")
     plt.show()
 
 
@@ -485,6 +515,7 @@ def plot_inference_outputs(
     axes[1, 2].set_title("RNA vs Protein Distances")
 
     plt.tight_layout()
+    safe_mlflow_log_figure(plt.gcf(), "inference_outputs.png")
     plt.show()
 
 
@@ -535,6 +566,7 @@ def plot_similarity_loss_history(
         alpha=0.5,
     )
     plt.legend(handles=[red_patch, blue_patch])
+    safe_mlflow_log_figure(plt.gcf(), "similarity_loss_history.png")
     plt.show()
 
 
@@ -568,7 +600,7 @@ def plot_normalized_losses(history):
     plt.ylabel("Normalized Loss")
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.grid(True)
-    plt.tight_layout()
+    safe_mlflow_log_figure(plt.gcf(), "normalized_losses.png")
     plt.show()
 
 
@@ -657,6 +689,7 @@ def plot_combined_latent_space(combined_latent):
         ],
         alpha=0.5,
     )
+    safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_umap.png")
 
     # Plot PCA
     sc.pl.pca(
@@ -665,6 +698,7 @@ def plot_combined_latent_space(combined_latent):
         title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
         alpha=0.5,
     )
+    safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_pca.png")
 
 
 def plot_cell_type_distributions(combined_latent, top_n=3):
@@ -683,6 +717,7 @@ def plot_cell_type_distributions(combined_latent, top_n=3):
             ],
             alpha=0.5,
         )
+        safe_mlflow_log_figure(plt.gcf(), f"cell_type_distribution_{cell_type}.png")
 
 
 def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
@@ -693,12 +728,15 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
         basis="X_scVI",
         title=["RNA_latent_CN", "RNA_Latent_CellTypes"],
     )
+    safe_mlflow_log_figure(plt.gcf(), "rna_latent_embeddings.png")
+
     sc.pl.embedding(
         protein_vae.adata,
         color=["CN", "cell_types"],
         basis="X_scVI",
         title=["Protein_latent_CN", "Protein_Laten_CellTypes"],
     )
+    safe_mlflow_log_figure(plt.gcf(), "protein_latent_embeddings.png")
 
 
 def plot_archetype_embedding(rna_vae_new, protein_vae):
@@ -719,6 +757,8 @@ def plot_archetype_embedding(rna_vae_new, protein_vae):
         color=["CN", "cell_types"],
         title=["RNA_Archetype_UMAP_CN", "RNA_Archetype_UMAP_CellTypes"],
     )
+    safe_mlflow_log_figure(plt.gcf(), "rna_archetype_umap.png")
+
     sc.pl.umap(
         prot_archtype,
         color=["CN", "cell_types"],
@@ -727,6 +767,7 @@ def plot_archetype_embedding(rna_vae_new, protein_vae):
             "Protein_Archetype_UMAP_CellTypes",
         ],
     )
+    safe_mlflow_log_figure(plt.gcf(), "protein_archetype_umap.png")
 
 
 # %%

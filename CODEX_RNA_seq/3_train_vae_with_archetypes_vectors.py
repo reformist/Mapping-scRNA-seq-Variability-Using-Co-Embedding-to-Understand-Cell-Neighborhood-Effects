@@ -304,8 +304,8 @@ class DualVAETrainingPlan(TrainingPlan):
                 self.protein_vae.adata,
                 index_rna=indices_rna,
                 index_prot=indices_prot,
+                global_step=self.global_step,
             )
-            mlflow.log_figure(plt.gcf(), f"latent_mean_std_step_{self.global_step}.png")
 
             plot_rna_protein_matching_means_and_scale(
                 rna_latent_mean_numpy,
@@ -313,8 +313,8 @@ class DualVAETrainingPlan(TrainingPlan):
                 rna_latent_std_numpy,
                 protein_latent_std_numpy,
                 archetype_dis,
+                global_step=self.global_step,
             )
-            mlflow.log_figure(plt.gcf(), f"rna_protein_matching_step_{self.global_step}.png")
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
             print(f"max latent distances: {round(latent_distances.max().item(),3)}")
             print(f"mean latent distances: {round(latent_distances.mean().item(),3)}")
@@ -754,6 +754,8 @@ def train_vae(
         "plot_x_times": kwargs.pop("plot_x_times", 5),
         "batch_size": batch_size,
         "n_epochs": n_epochs,
+        "early_stopping": True,
+        "early_stopping_patience": 10,
     }
     print("Plan parameters:", plan_kwargs)
 
@@ -984,14 +986,12 @@ print("✓ Distances calculated")
 print("\nPlotting training results...")
 plot_normalized_losses(history)
 print("✓ Training losses plotted")
-mlflow.log_figure(plt.gcf(), "normalized_losses.png")
 
 
 # Plot spatial data
 print("\nPlotting spatial data...")
 plot_spatial_data(protein_vae.adata)
 print("✓ Spatial data plotted")
-mlflow.log_figure(plt.gcf(), "spatial_data.png")
 
 
 # Plot latent representations
@@ -1005,24 +1005,20 @@ plot_latent_pca_both_modalities(
     index_prot=range(len(protein_vae.adata.obs.index)),
 )
 print("✓ Latent representations plotted")
-mlflow.log_figure(plt.gcf(), "latent_representations.png")
 
 
 # Plot distance distributions
 print("\nPlotting distance distributions...")
 compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances)
 print("✓ Distance distributions plotted")
-mlflow.log_figure(plt.gcf(), "distance_distributions.png")
 
 
 # Plot combined visualizations
 print("\nPlotting combined visualizations...")
 plot_combined_latent_space(combined_latent)
-mlflow.log_figure(plt.gcf(), "combined_latent_space.png")
 
 
 plot_cell_type_distributions(combined_latent, 3)
-mlflow.log_figure(plt.gcf(), "cell_type_distributions.png")
 
 print("✓ Combined visualizations plotted")
 
@@ -1037,7 +1033,6 @@ sc.pl.umap(
     ],
     alpha=0.5,
 )
-mlflow.log_figure(plt.gcf(), "umap_cn_modality_cell_types.png")
 
 
 sc.pl.pca(
@@ -1046,18 +1041,15 @@ sc.pl.pca(
     title=["Combined_Latent_PCA_CN", "Combined_Latent_PCA_Modality"],
     alpha=0.5,
 )
-mlflow.log_figure(plt.gcf(), "pca_cn_modality.png")
 
 print("✓ UMAP visualizations plotted")
 
 # Plot archetype and embedding visualizations
 print("\nPlotting archetype and embedding visualizations...")
 plot_archetype_embedding(rna_vae_new, protein_vae)
-mlflow.log_figure(plt.gcf(), "archetype_vectors.png")
 
 
 plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae)
-mlflow.log_figure(plt.gcf(), "rna_protein_embeddings.png")
 
 print("✓ Archetype and embedding visualizations plotted")
 
