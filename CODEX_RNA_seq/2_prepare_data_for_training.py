@@ -242,10 +242,7 @@ plt.figure()
 plt.plot(closest_prot_indices)
 plt.show()
 # Set CN values based on closest protein cells
-adata_rna_subset.obs["CN"] = pd.Categorical(
-    [f"CN_{cn}" for cn in adata_prot_subset.obs["CN"].values[closest_prot_indices]],
-    categories=sorted([f"CN_{cn}" for cn in adata_prot_subset.obs["CN"].unique()]),
-)
+adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
 
 # Compute PCA and UMAP
 adata_rna_subset, adata_prot_subset = compute_pca_and_umap(adata_rna_subset, adata_prot_subset)

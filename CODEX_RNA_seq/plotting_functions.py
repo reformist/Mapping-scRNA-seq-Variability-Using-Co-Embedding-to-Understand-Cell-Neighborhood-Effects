@@ -297,8 +297,8 @@ def plot_latent_mean_std(
             "CN": rna_ann.obs["CN"],  # Add the CN column
         }
     )
-    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN", palette="viridis")
-    pca = PCA(n_components=2)
+    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN")
+    plt.title("RNA Latent Space PCA")
     # pca_result = pca.fit_transform(rna_ann.X)
     # plt.scatter(pca_result[:, 0], pca_result[:, 1], c=rna_ann.obs["CN"])
     # plt.xlabel("PC1")
@@ -316,7 +316,7 @@ def plot_latent_mean_std(
             "CN": protein_ann.obs["CN"],  # Add the CN column
         }
     )
-    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN", palette="viridis")
+    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN")
     plt.title("Protein Latent Space PCA")
 
     # Standard deviation distributions
@@ -594,19 +594,19 @@ def plot_cell_type_distributions(combined_latent, top_n=3):
         )
 
 
-def plot_rna_protein_cn_cell_type_umap(rna_vae_new, protein_vae):
+def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
     """Plot RNA and protein embeddings"""
     sc.pl.embedding(
         rna_vae_new.adata,
         color=["CN", "cell_types"],
         basis="X_scVI",
-        title=["RNA Latent space, CN", "RNA Latent space, cell types"],
+        title=["RNA_latent_CN", "RNA_Latent_CellTypes"],
     )
     sc.pl.embedding(
         protein_vae.adata,
         color=["CN", "cell_types"],
         basis="X_scVI",
-        title=["Protein Latent space UMAP, CN ", "Protein Latent space UMAP, cell types"],
+        title=["Protein_latent_CN", "Protein_Laten_CellTypes"],
     )
 
 
@@ -616,16 +616,16 @@ def plot_combined_latent_space_umap(combined_latent):
     sc.pl.umap(
         combined_latent,
         color=["CN", "modality"],
-        title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
+        title=["Combined_Latent_UMAP_CN", "Combined_Latent_UMAP_Modality"],
         alpha=0.5,
     )
     sc.pl.umap(
         combined_latent,
         color=["CN", "modality", "cell_types"],
         title=[
-            "UMAP Combined Latent space CN",
-            "UMAP Combined Latent space modality",
-            "UMAP Combined Latent space cell types",
+            "Combined_Latent_UMAP_CN",
+            "Combined_Latent_UMAP_Modality",
+            "Combined_Latent_UMAP_CellTypes",
         ],
         alpha=0.5,
     )
@@ -647,14 +647,14 @@ def plot_archetype_embedding(rna_vae_new, protein_vae):
     sc.pl.umap(
         rna_archtype,
         color=["CN", "cell_types"],
-        title=["RNA Archetype embedding UMAP CN", "RNA Archetype embedding UMAP cell types"],
+        title=["RNA_Archetype_UMAP_CN", "RNA_Archetype_UMAP_CellTypes"],
     )
     sc.pl.umap(
         prot_archtype,
         color=["CN", "cell_types"],
         title=[
-            "Protein Archetype embedding UMAP CN",
-            "Protein Archetype embedding UMAP cell types",
+            "Protein_Archetype_UMAP_CN",
+            "Protein_Archetype_UMAP_CellTypes",
         ],
     )
 

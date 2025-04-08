@@ -123,7 +123,7 @@ from plotting_functions import (
     plot_latent,
     plot_latent_mean_std,
     plot_normalized_losses,
-    plot_rna_protein_cn_cell_type_umap,
+    plot_rna_protein_latent_cn_cell_type_umap,
     plot_rna_protein_matching_means_and_scale,
     plot_spatial_data,
 )
@@ -1037,7 +1037,7 @@ print("\nPlotting UMAP visualizations...")
 sc.pl.umap(
     combined_latent,
     color=["CN", "modality"],
-    title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
+    title=["Combined_Latent_UMAP_CN", "Combined_Latent_UMAP_Modality"],
     alpha=0.5,
 )
 mlflow.log_figure(plt.gcf(), "umap_cn_modality.png")
@@ -1047,9 +1047,9 @@ sc.pl.umap(
     combined_latent,
     color=["CN", "modality", "cell_types"],
     title=[
-        "UMAP Combined Latent space CN",
-        "UMAP Combined Latent space modality",
-        "UMAP Combined Latent space cell types",
+        "Combined_Latent_UMAP_CN",
+        "Combined_Latent_UMAP_Modality",
+        "Combined_Latent_UMAP_CellTypes",
     ],
     alpha=0.5,
 )
@@ -1059,7 +1059,7 @@ mlflow.log_figure(plt.gcf(), "umap_cn_modality_cell_types.png")
 sc.pl.pca(
     combined_latent,
     color=["CN", "modality"],
-    title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
+    title=["Combined_Latent_PCA_CN", "Combined_Latent_PCA_Modality"],
     alpha=0.5,
 )
 mlflow.log_figure(plt.gcf(), "pca_cn_modality.png")
@@ -1072,7 +1072,7 @@ plot_archetype_embedding(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "archetype_vectors.png")
 
 
-plot_rna_protein_cn_cell_type_umap(rna_vae_new, protein_vae)
+plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae)
 mlflow.log_figure(plt.gcf(), "rna_protein_embeddings.png")
 
 print("✓ Archetype and embedding visualizations plotted")
