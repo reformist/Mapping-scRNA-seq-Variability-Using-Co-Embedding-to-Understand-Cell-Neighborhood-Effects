@@ -146,7 +146,7 @@ def preprocess_rna_maxfuse(adata):
     print("Preprocessing RNA data...")
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
-    sc.pp.highly_variable_genes(adata, n_top_genes=5000)
+    sc.pp.highly_variable_genes(adata, n_top_genes=2000)  # todo maxfuse uses 5000 may be too much
     adata = adata[:, adata.var.highly_variable].copy()
     sc.pp.scale(adata)
     return adata
@@ -263,7 +263,8 @@ rna_adata, protein_adata = filter_and_subsample_data(
 rna_adata = preprocess_rna_maxfuse(rna_adata)
 
 if plot_flag:
-    pf.plot_highly_variable_genes(rna_adata)
+    sc.pl.highly_variable_genes(rna_adata)
+
 
 # %%
 # Process spatial data

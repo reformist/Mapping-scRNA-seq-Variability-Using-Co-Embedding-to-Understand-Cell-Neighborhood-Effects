@@ -103,19 +103,19 @@ def load_data(folder, file_prefixes):
     print("Loading data files...")
     latest_files = {prefix: get_latest_file(folder, prefix) for prefix in file_prefixes}
     print(latest_files)
-    adata_rna = sc.read(latest_files["adata_rna_"])
+    adata_rna = sc.read(latest_files["adata_rna_archetype_generated_"])
     print("Loaded RNA data:", adata_rna.shape)
-    adata_prot = sc.read(latest_files["adata_prot_"])
+    adata_prot = sc.read(latest_files["adata_prot_archetype_generated_"])
     print("Loaded protein data:", adata_prot.shape)
 
     return adata_rna, adata_prot
 
 
-def subsample_data(adata_rna, adata_prot, sample_size=2000):
+def subsample_data(adata_rna, adata_prot, rna_sample_size, prot_sample_size):
     """Subsample data to specified size"""
     print("\nSubsampling data...")
-    rna_sample_size = min(len(adata_rna), sample_size)
-    prot_sample_size = min(len(adata_prot), sample_size)
+    rna_sample_size = min(len(adata_rna), rna_sample_size)
+    prot_sample_size = min(len(adata_prot), prot_sample_size)
     adata_rna_subset = sc.pp.subsample(adata_rna, n_obs=rna_sample_size, copy=True)
     adata_prot_subset = sc.pp.subsample(adata_prot, n_obs=prot_sample_size, copy=True)
     print(f"Subsampled to {rna_sample_size} RNA cells and {prot_sample_size} protein cells")
@@ -185,24 +185,20 @@ def save_processed_data(adata_rna_subset, adata_prot_subset, save_dir):
     )
 
 
-def load_and_subsample_data(folder, file_prefixes, sample_size=2000):
-    """Load and subsample data files"""
-    device = setup_environment()
-    adata_rna, adata_prot = load_data(folder, file_prefixes)
-    adata_rna_subset, adata_prot_subset = subsample_data(adata_rna, adata_prot, sample_size)
-    del adata_prot, adata_rna
-    return adata_rna_subset, adata_prot_subset
-
-
 # Load and subsample data
 # %%
-folder = "CODEX_RNA_seq/data/processed_data"
-file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_archetype_prot_"]
-sample_size = 8000  # Adjust this value as needed
 
-adata_rna_subset, adata_prot_subset = load_and_subsample_data(folder, file_prefixes, sample_size)
-# adata_rna_subset = adata_rna_subset[:2000]  # todo remove
-# adata_prot_subset = adata_prot_subset[:1200]  # todo remove
+setup_environment()
+
+folder = "CODEX_RNA_seq/data/processed_data"
+file_prefixes = ["adata_rna_archetype_generated_", "adata_prot_archetype_generated_"]
+
+adata_rna, adata_prot = load_data(folder, file_prefixes)
+adata_rna_subset, adata_prot_subset = subsample_data(
+    adata_rna, adata_prot, num_rna_cells, num_protein_cells
+)
+del adata_prot, adata_rna
+
 # %%
 # Process and visualize data
 # %%
@@ -229,7 +225,7 @@ if plot_flag:
 # %%
 # Match datasets
 adata_rna_subset_matched, adata_prot_subset_matched = match_datasets(
-    adata_rna_subset, adata_prot_subset, threshold=0.1, plot_flag=plot_flag
+    adata_rna_subset, adata_prot_subset, threshold=0.2, plot_flag=plot_flag
 )
 
 # %%
@@ -246,7 +242,10 @@ plt.figure()
 plt.plot(closest_prot_indices)
 plt.show()
 # Set CN values based on closest protein cells
-adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
+adata_rna_subset.obs["CN"] = pd.Categorical(
+    [f"CN_{cn}" for cn in adata_prot_subset.obs["CN"].values[closest_prot_indices]],
+    categories=sorted([f"CN_{cn}" for cn in adata_prot_subset.obs["CN"].unique()]),
+)
 
 # Compute PCA and UMAP
 adata_rna_subset, adata_prot_subset = compute_pca_and_umap(adata_rna_subset, adata_prot_subset)
@@ -288,4 +287,5 @@ archetype_distances = compute_archetype_distances(adata_rna_subset, adata_prot_s
 print(f"Initial matching distance: {matching_distance_before:.3f}")
 print(f"Average matching distance: {np.diag(archetype_distances).mean():.3f}")
 
+print("done preparing data for training")
 # %%

@@ -27,6 +27,8 @@ import json
 import os
 import sys
 
+from matplotlib import pyplot as plt
+
 
 def validate_scvi_training_mixin():
     """Validate that the required line exists in scVI's _training_mixin.py file."""
@@ -76,6 +78,7 @@ from datetime import datetime
 from pathlib import Path
 
 import anndata as ad
+import mlflow
 import numpy as np
 import pandas as pd
 import plotting_functions as pf
@@ -191,13 +194,6 @@ adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, c
 
 print(f"Subsampled RNA dataset shape: {adata_rna_subset.shape}")
 print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
-
-adata_rna_subset.X = adata_rna_subset.X.astype(np.float32)
-adata_prot_subset.X = adata_prot_subset.X.astype(np.float32)
-adata_prot_subset.obs["CN"] = adata_prot_subset.obs["CN"].astype(int)
-adata_rna_subset.obs["CN"] = adata_rna_subset.obs["CN"].astype(int)
-adata_prot_subset.obs["CN"] = pd.Categorical(adata_prot_subset.obs["CN"])
-adata_rna_subset.obs["CN"] = pd.Categorical(adata_rna_subset.obs["CN"])
 
 
 # %%
@@ -357,13 +353,13 @@ class DualVAETrainingPlan(TrainingPlan):
             )
             self.first_step = False
         cell_neighborhood_info_protein = torch.tensor(
-            self.protein_vae.adata[indices_prot].obs["CN"].values
+            self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
         ).to(device)
         cell_neighborhood_info_rna = torch.tensor(
-            self.rna_vae.adata[indices_rna].obs["CN"].values
+            self.rna_vae.adata[indices_rna].obs["CN"].cat.codes.values
         ).to(device)
         cell_neighborhood_info_prot = torch.tensor(
-            self.protein_vae.adata[indices_prot].obs["CN"].values
+            self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
         ).to(device)
         rna_major_cell_type = (
             torch.tensor(self.rna_vae.adata[indices_rna].obs["major_cell_types"].values.codes)
@@ -697,6 +693,8 @@ def train_vae(
         adata_rna_subset.X = adata_rna_subset.X - adata_rna_subset.X.min()
     if adata_prot_subset.X.min() < 0:
         adata_prot_subset.X = adata_prot_subset.X - adata_prot_subset.X.min()
+    adata_rna_subset.obs["index_col"] = range(len(adata_rna_subset.obs.index))
+    adata_prot_subset.obs["index_col"] = range(len(adata_prot_subset.obs.index))
     SCVI.setup_anndata(
         adata_rna_subset,
         labels_key="index_col",
@@ -806,11 +804,62 @@ rna_vae, protein_vae = train_vae(
 )
 print("Training completed")
 rna_vae_new = rna_vae
+
+# Setup MLflow
+mlflow.set_tracking_uri("file:./mlruns")
+mlflow.set_experiment("vae_training")
+run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+mlflow.start_run(run_name=run_name)
+
+# Log parameters
+mlflow.log_params(
+    {
+        "n_epochs": 10,
+        "batch_size": 1000,
+        "lr": 1e-3,
+        "use_gpu": True,
+        "contrastive_weight": 10.0,
+        "similarity_weight": 1000.0,
+        "diversity_weight": 0.1,
+        "matching_weight": 1.0,
+        "adv_weight": 0.1,
+        "n_hidden_rna": 128,
+        "n_hidden_prot": 50,
+        "n_layers": 3,
+        "latent_dim": 10,
+    }
+)
+
 # %%
 # Get training history from the training plan
 print("\nGetting training history...")
 history = rna_vae_new._training_plan.get_history()
 print("✓ Training history loaded")
+
+# Log training history metrics
+mlflow.log_metrics(
+    {
+        "final_train_similarity_loss": history["train_similarity_loss"][-1],
+        "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
+        "final_train_similarity_weight": history["train_similarity_weight"][-1],
+        "final_train_similarity_ratio": history["train_similarity_ratio"][-1],
+        "final_train_total_loss": history["train_total_loss"][-1],
+        "final_val_total_loss": history["val_total_loss"][-1],
+    }
+)
+
+# Log training curves
+plt.figure(figsize=(10, 6))
+plt.plot(history["train_similarity_loss"], label="Similarity Loss")
+plt.plot(history["train_total_loss"], label="Total Loss")
+plt.plot(history["val_total_loss"], label="Validation Loss")
+plt.xlabel("Step")
+plt.ylabel("Loss")
+plt.title("Training Curves")
+plt.legend()
+plt.tight_layout()
+mlflow.log_figure(plt.gcf(), "training_curves.png")
+plt.close()
 
 print("\nPreparing models for visualization...")
 rna_vae_new.module.to(device)
@@ -937,12 +986,16 @@ print("✓ Distances calculated")
 print("\nPlotting training results...")
 plot_normalized_losses(history)
 print("✓ Training losses plotted")
+mlflow.log_figure(plt.gcf(), "normalized_losses.png")
+plt.close()
 
 # Plot spatial data
 print("\nPlotting spatial data...")
 plot_spatial_data(protein_vae.adata)
 print("✓ Spatial data plotted")
-# %%
+mlflow.log_figure(plt.gcf(), "spatial_data.png")
+plt.close()
+
 # Plot latent representations
 print("\nPlotting latent representations...")
 plot_latent(
@@ -954,17 +1007,29 @@ plot_latent(
     index_rna=range(len(rna_vae_new.adata.obs.index)),
 )
 print("✓ Latent representations plotted")
+mlflow.log_figure(plt.gcf(), "latent_representations.png")
+plt.close()
 
 # Plot distance distributions
 print("\nPlotting distance distributions...")
 compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances)
 print("✓ Distance distributions plotted")
+mlflow.log_figure(plt.gcf(), "distance_distributions.png")
+plt.close()
 
 # Plot combined visualizations
 print("\nPlotting combined visualizations...")
 plot_combined_latent_space(combined_latent)
+mlflow.log_figure(plt.gcf(), "combined_latent_space.png")
+plt.close()
+
 plot_combined_latent_space_umap(combined_latent)
+mlflow.log_figure(plt.gcf(), "combined_latent_space_umap.png")
+plt.close()
+
 plot_cell_type_distributions(combined_latent, 3)
+mlflow.log_figure(plt.gcf(), "cell_type_distributions.png")
+plt.close()
 print("✓ Combined visualizations plotted")
 
 # Plot UMAP visualizations
@@ -975,6 +1040,9 @@ sc.pl.umap(
     title=["UMAP Combined Latent space CN", "UMAP Combined Latent space modality"],
     alpha=0.5,
 )
+mlflow.log_figure(plt.gcf(), "umap_cn_modality.png")
+plt.close()
+
 sc.pl.umap(
     combined_latent,
     color=["CN", "modality", "cell_types"],
@@ -985,18 +1053,28 @@ sc.pl.umap(
     ],
     alpha=0.5,
 )
+mlflow.log_figure(plt.gcf(), "umap_cn_modality_cell_types.png")
+plt.close()
+
 sc.pl.pca(
     combined_latent,
     color=["CN", "modality"],
     title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
     alpha=0.5,
 )
+mlflow.log_figure(plt.gcf(), "pca_cn_modality.png")
+plt.close()
 print("✓ UMAP visualizations plotted")
 
 # Plot archetype and embedding visualizations
 print("\nPlotting archetype and embedding visualizations...")
 plot_archetype_vectors(rna_vae_new, protein_vae)
+mlflow.log_figure(plt.gcf(), "archetype_vectors.png")
+plt.close()
+
 plot_rna_protein_embeddings(rna_vae_new, protein_vae)
+mlflow.log_figure(plt.gcf(), "rna_protein_embeddings.png")
+plt.close()
 print("✓ Archetype and embedding visualizations plotted")
 
 # Calculate and display final metrics
@@ -1031,11 +1109,11 @@ if rna_larger:
 
 else:
     nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae_new.adata.obs["cell_types"].values,
-        protein_vae.adata.obs["cell_types"].values[rna_to_prot_matches],
+        rna_vae_new.adata.obs["cell_types"].values[rna_to_prot_matches],
+        protein_vae.adata.obs["cell_types"].values,
     )
     matches = (
-        rna_vae_new.adata.obs["cell_types"].values[prot_to_rna_matches]
+        rna_vae_new.adata.obs["cell_types"].values[rna_to_prot_matches]
         == protein_vae.adata.obs["cell_types"].values
     )
 
@@ -1047,6 +1125,18 @@ print(f"Normalized Mutual Information (Protein CN): {nmi_cell_types_cn_prot:.3f}
 print(f"Normalized Mutual Information (Cross-modality): {nmi_cell_types_modalities:.3f}")
 print(f"Cell Type Matching Accuracy: {accuracy:.4f}")
 print("✓ Final metrics calculated")
+
+# Log final metrics
+mlflow.log_metrics(
+    {
+        "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
+        "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
+        "nmi_cell_types_modalities": nmi_cell_types_modalities,
+        "cell_type_matching_accuracy": accuracy,
+        "mixing_score_ilisi": mixing_result["iLISI"],
+        "mixing_score_clisi": mixing_result["cLISI"],
+    }
+)
 
 # Save results
 print("\nSaving results...")
@@ -1066,6 +1156,13 @@ print(
 sc.write(Path(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad"), rna_vae_new.adata)
 sc.write(Path(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad"), protein_vae.adata)
 print("✓ Results saved")
+
+# Log artifacts
+mlflow.log_artifact(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad")
+mlflow.log_artifact(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad")
+
+# End MLflow run
+mlflow.end_run()
 
 print("\nAll visualization and analysis steps completed!")
 

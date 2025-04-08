@@ -170,24 +170,53 @@ def plot_spatial_data_comparison(adata_rna, adata_prot):
     plt.show()
 
 
-def plot_highly_variable_genes(adata):
-    """Plot highly variable genes"""
-    print("\nPlotting highly variable genes...")
-    sc.pl.highly_variable_genes(adata, show=False)
-    plt.title("Highly Variable Genes")
-    plt.show()
-
-
 # %% VAE Plotting Functions
 # This module contains functions for plotting VAE-specific visualizations.
 
 
-def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_rna=None, index_prot=None):
-    """Plot latent space visualization"""
+def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_prot=None, index_rna=None):
+    """Plot latent space representations."""
     if index_rna is None:
         index_rna = range(len(adata_rna.obs.index))
     if index_prot is None:
         index_prot = range(len(adata_prot.obs.index))
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    # Convert categorical CN to numeric codes
+    cn_rna = adata_rna.obs["CN"].cat.codes.values
+    cn_prot = adata_prot.obs["CN"].cat.codes.values
+    pca_latent_rna = PCA(n_components=2).fit_transform(latent_rna)
+    pca_latent_prot = PCA(n_components=2).fit_transform(latent_prot)
+    # Plot RNA latent space
+    scatter = axes[0].scatter(
+        pca_latent_rna[:, 0],
+        pca_latent_rna[:, 1],
+        c=cn_rna,
+        cmap="viridis",
+        alpha=0.5,
+    )
+    axes[0].set_title("RNA Latent Space")
+    axes[0].set_xlabel("Latent Dimension 1")
+    axes[0].set_ylabel("Latent Dimension 2")
+    plt.colorbar(scatter, ax=axes[0], label="CN")
+
+    # Plot protein latent space
+    scatter = axes[1].scatter(
+        pca_latent_prot[:, 0],
+        pca_latent_prot[:, 1],
+        c=cn_prot,
+        cmap="viridis",
+        alpha=0.5,
+    )
+    axes[1].set_title("Protein Latent Space")
+    axes[1].set_xlabel("Latent Dimension 1")
+    axes[1].set_ylabel("Latent Dimension 2")
+    plt.colorbar(scatter, ax=axes[1], label="CN")
+
+    plt.tight_layout()
+    plt.show()
+    return fig
 
     # Create AnnData objects for visualization
     rna_ann = AnnData(X=latent_rna)
@@ -212,24 +241,27 @@ def plot_latent(latent_rna, latent_prot, adata_rna, adata_prot, index_rna=None, 
         cmap="tab10",
         alpha=0.6,
     )
-    axes[0].set_title("RNA Latent Space PCA")
-    axes[0].set_xlabel("PC1")
-    axes[0].set_ylabel("PC2")
+    axes[0].set_title("RNA Latent Space")
+    axes[0].set_xlabel("Latent Dimension 1")
+    axes[0].set_ylabel("Latent Dimension 2")
+    plt.colorbar(scatter, ax=axes[0], label="CN")
 
-    # Protein PCA
-    axes[1].scatter(
-        prot_ann.obsm["X_pca"][:, 0],
-        prot_ann.obsm["X_pca"][:, 1],
-        c=prot_ann.obs["CN"],
-        cmap="tab10",
-        alpha=0.6,
+    # Plot protein latent space
+    scatter = axes[1].scatter(
+        latent_prot[:, 0],
+        latent_prot[:, 1],
+        c=cn_prot,
+        cmap="viridis",
+        alpha=0.5,
     )
-    axes[1].set_title("Protein Latent Space PCA")
-    axes[1].set_xlabel("PC1")
-    axes[1].set_ylabel("PC2")
+    axes[1].set_title("Protein Latent Space")
+    axes[1].set_xlabel("Latent Dimension 1")
+    axes[1].set_ylabel("Latent Dimension 2")
+    plt.colorbar(scatter, ax=axes[1], label="CN")
 
     plt.tight_layout()
     plt.show()
+    return fig
 
 
 def plot_latent_mean_std(
@@ -308,18 +340,34 @@ def plot_latent_mean_std(
     plt.subplot(131)
     pca = PCA(n_components=2)
     pca_result = pca.fit_transform(rna_ann.X)
-    plt.scatter(pca_result[:, 0], pca_result[:, 1], c=rna_ann.obs["CN"])
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title("RNA Latent Space PCA")
+
+    df = pd.DataFrame(
+        {
+            "PC1": pca_result[:, 0],
+            "PC2": pca_result[:, 1],
+            "CN": rna_ann.obs["CN"],  # Add the CN column
+        }
+    )
+    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN", palette="viridis")
+    pca = PCA(n_components=2)
+    # pca_result = pca.fit_transform(rna_ann.X)
+    # plt.scatter(pca_result[:, 0], pca_result[:, 1], c=rna_ann.obs["CN"])
+    # plt.xlabel("PC1")
+    # plt.ylabel("PC2")
+    # plt.title("RNA Latent Space PCA")
 
     # Protein PCA
     plt.subplot(132)
     pca = PCA(n_components=2)
     pca_result = pca.fit_transform(protein_ann.X)
-    plt.scatter(pca_result[:, 0], pca_result[:, 1], c=protein_ann.obs["CN"])
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
+    df = pd.DataFrame(
+        {
+            "PC1": pca_result[:, 0],
+            "PC2": pca_result[:, 1],
+            "CN": protein_ann.obs["CN"],  # Add the CN column
+        }
+    )
+    sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN", palette="viridis")
     plt.title("Protein Latent Space PCA")
 
     # Standard deviation distributions
@@ -991,6 +1039,27 @@ def plot_original_data_visualizations(adata_rna_subset, adata_prot_subset):
             "Original protein data cell types",
         ],
     )
+
+
+# %%
+
+
+def plot_latent_single(means, adata, index, color_label="CN", title=""):
+    plt.figure(figsize=(10, 5))
+    pca = PCA(n_components=3)
+    means_cpu = means.detach().cpu().numpy()
+    index_cpu = index.detach().cpu().numpy().flatten()
+    pca.fit(means_cpu)
+    rna_pca = pca.transform(means_cpu)
+    plt.subplot(1, 1, 1)
+    plt.scatter(
+        rna_pca[:, 0],
+        rna_pca[:, 1],
+        c=adata[index_cpu].obs[color_label].values.astype(float),
+        cmap="jet",
+    )
+    plt.title(title)
+    plt.show()
 
 
 # %%

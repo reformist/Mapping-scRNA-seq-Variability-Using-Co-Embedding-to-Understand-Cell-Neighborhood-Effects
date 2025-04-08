@@ -123,6 +123,7 @@ assert np.array_equal(
 if plot_flag:
     sns.heatmap(connectivities.todense()[:1000, :1000])
     plt.show()
+    plt.close()
 
 # Compute neighbor means
 neighbor_sums = connectivities.dot(adata_2_prot.X)  # get the sum of all neighbors
@@ -131,6 +132,7 @@ if issparse(neighbor_sums):
 neighbor_means = np.asarray(neighbor_sums / connectivities.sum(1))
 if plot_flag:
     plt.show()
+    plt.close()
 
 # %% Spatial Neighbors with Cutoff
 # Compute spatial neighbors with cutoff
@@ -145,6 +147,7 @@ if plot_flag:
     sns.histplot(log_transformed_distances)
     plt.title("Distribution of spatial distances between protein neighbors before cutoff")
     plt.show()
+    plt.close()
 
 # Apply distance cutoff
 distances_mean = log_transformed_distances.mean()
@@ -165,6 +168,7 @@ if plot_flag:
     sns.histplot(adata_2_prot.obsp["spatial_neighbors_distances"].data)
     plt.title("Distribution of spatial distances between protein neighbors after cutoff")
     plt.show()
+    plt.close()
 
 print(
     indices_to_zero_out.max(), adata_2_prot.obsp["spatial_neighbors_connectivities"].data.shape[0]
@@ -187,17 +191,25 @@ num_clusters = len(adata_2_prot.obs["CN"].unique())
 palette = sns.color_palette("tab10", num_clusters)
 adata_2_prot.uns["spatial_clusters_colors"] = palette.as_hex()
 
+# Convert CN to categorical with CN_ prefix
+adata_2_prot.obs["CN"] = pd.Categorical(
+    [f"CN_{cn}" for cn in adata_2_prot.obs["CN"]],
+    categories=sorted([f"CN_{i}" for i in range(num_clusters)]),
+)
+
 if issparse(adata_2_prot.X):
     adata_2_prot.X = adata_2_prot.X.toarray()
 
 # Plot neighbor means
 if plot_flag:
     plot_neighbor_means(adata_2_prot, neighbor_means)
+    plt.close()
 
 # %% Plot Spatial Clusters
 # Plot spatial clusters
 if plot_flag:
     plot_spatial_clusters(adata_2_prot, neighbor_means)
+    plt.close()
 
 # %% Add CN Features to Protein Data
 # Add CN features to protein data
@@ -247,6 +259,7 @@ adata_2_prot.obsm["X_original_umap"] = adata_2_prot.obsm["X_umap"]
 
 if plot_flag:
     plot_modality_embeddings(adata_1_rna, adata_2_prot)
+    plt.close()
 
 # %% Convert Gene Names and Compute Module Scores
 # Convert gene names to uppercase
@@ -260,6 +273,7 @@ sc.tl.score_genes(
 
 if plot_flag:
     sc.pl.umap(adata_1_rna, color="terminal_exhaustion_score", cmap="viridis")
+    plt.close()
 
 # %% Compute PCA Dimensions
 # Compute PCA dimensions
@@ -347,6 +361,7 @@ archetype_list_rna = archetype_list_rna[:min_len]
 # Plot elbow method results
 if plot_flag:
     plot_elbow_method(evs_protein, evs_rna)
+    plt.close()
 
 # %% Get Cell Type Lists and Compute Archetype Proportions
 print("\nComputing archetype proportions...")
@@ -417,12 +432,14 @@ print(major_cell_types_amount_prot)
 # Plot archetype proportions
 if plot_flag:
     plot_archetype_proportions(archetype_proportion_list_rna, archetype_proportion_list_protein)
+    plt.close()
 
     new_order_1 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_rna[0])[1]
     new_order_2 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[1]
     data1 = archetype_proportion_list_rna[0].iloc[new_order_1, :]
     data2 = archetype_proportion_list_protein[0].iloc[new_order_2, :]
     plot_archetypes_matching(data1, data2)
+    plt.close()
 
 # %% Find Best Matching Archetypes
 # Find best matching archetypes
@@ -457,6 +474,7 @@ best_archetype_prot_prop = (
 )
 if plot_flag:
     plot_archetypes_matching(best_archetype_rna_prop, best_archetype_prot_prop, 8)
+    plt.close()
 
 best_archetype_prot_prop.idxmax(axis=0)
 
@@ -471,12 +489,14 @@ if plot_flag:
     plt.ylabel("Proportion")
     plt.xticks(rotation=45)
     plt.show()
+    plt.close()
     compare_matchings(
         archetype_proportion_list_rna,
         archetype_proportion_list_protein,
         metric="cosine",
         num_trials=100,
     )
+    plt.close()
 
 best_protein_archetype_order
 
@@ -525,6 +545,7 @@ evaluate_distance_metrics(cells_archetype_vec_rna, cells_archetype_vec_prot, met
 if plot_flag:
     _, row_order = reorder_rows_to_maximize_diagonal(best_archetype_rna_prop)
     plot_archetype_weights(best_archetype_rna_prop, best_archetype_prot_prop, row_order)
+    plt.close()
 
 # %% Create and Plot Archetype AnnData Objects
 # Create archetype AnnData objects
@@ -540,6 +561,7 @@ if plot_flag:
     plot_archetype_visualizations(
         adata_archetype_rna, adata_archetype_prot, adata_1_rna, adata_2_prot
     )
+    plt.close()
 
 # %% Save Results
 # Save results
@@ -549,10 +571,8 @@ clean_uns_for_h5ad(adata_1_rna)
 time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
 save_dir = "CODEX_RNA_seq/data/processed_data"
 os.makedirs(save_dir, exist_ok=True)
-adata_1_rna.write(f"{save_dir}/adata_rna_{time_stamp}.h5ad")
-adata_2_prot.write(f"{save_dir}/adata_prot_{time_stamp}.h5ad")
-adata_archetype_rna.write(f"{save_dir}/adata_archetype_rna_{time_stamp}.h5ad")
-adata_archetype_prot.write(f"{save_dir}/adata_archetype_prot_{time_stamp}.h5ad")
+adata_1_rna.write(f"{save_dir}/adata_rna_archetype_generated_{time_stamp}.h5ad")
+adata_2_prot.write(f"{save_dir}/adata_prot_archetype_generated_{time_stamp}.h5ad")
 print(f"\nRNA data dimensions: {adata_1_rna.shape[0]} samples x {adata_1_rna.shape[1]} features")
 print(
     f"Protein data dimensions: {adata_2_prot.shape[0]} samples x {adata_2_prot.shape[1]} features"
@@ -565,17 +585,13 @@ print(
 )
 
 # Load latest files
-file_prefixes = ["adata_rna_", "adata_prot_", "adata_archetype_rna_", "adata_archetype_prot_"]
+file_prefixes = ["adata_rna_archetype_generated_", "adata_prot_archetype_generated_"]
 latest_files = {prefix: get_latest_file(save_dir, prefix) for prefix in file_prefixes}
 
 # Check if any files were found
 if any(v is None for v in latest_files.values()):
     print("Warning: Some files were not found. Skipping file loading.")
     print("Missing files:", [k for k, v in latest_files.items() if v is None])
-else:
-    adata_rna = sc.read(latest_files["adata_rna_"])
-    adata_prot = sc.read(latest_files["adata_prot_"])
-    adata_archetype_rna = sc.read(latest_files["adata_archetype_rna_"])
-    adata_archetype_prot = sc.read(latest_files["adata_archetype_prot_"])
+
 
 # %%
