@@ -1136,7 +1136,7 @@ class DualVAETrainingPlan(TrainingPlan):
         return validation_total_loss
 
     def on_validation_epoch_end(self):
-        """Calculate and log metrics at the end of each validation epoch."""
+        """Calculate and store metrics at the end of each validation epoch."""
         # Get latent representations from both VAEs
         with torch.no_grad():
             # Get RNA latent
@@ -1232,31 +1232,104 @@ class DualVAETrainingPlan(TrainingPlan):
         silhouette_vals = silhouette_samples(combined_latent, leiden_clusters)
         normalized_silhouette = CODEX_RNA_seq.metrics.normalize_silhouette(silhouette_vals)
 
-        # Log all metrics to MLflow
-        metrics = {
-            "val_silhouette_score": silhouette,
-            "val_f1_score": f1,
-            "val_ari_score": ari,
-            "val_matching_accuracy": accuracy,
-            "val_mixing_score_ilisi": mixing_result["iLISI"],
-            "val_mixing_score_clisi": mixing_result["cLISI"],
-            "val_nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
-            "val_nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
-            "val_nmi_cell_types_modalities": nmi_cell_types_modalities,
-            "val_normalized_silhouette": normalized_silhouette,
-            "val_num_leiden_clusters": len(np.unique(leiden_clusters)),
+        # Store metrics for this epoch
+        epoch_metrics = {
+            "silhouette_score": silhouette,
+            "f1_score": f1,
+            "ari_score": ari,
+            "matching_accuracy": accuracy,
+            "mixing_score_ilisi": mixing_result["iLISI"],
+            "mixing_score_clisi": mixing_result["cLISI"],
+            "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
+            "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
+            "nmi_cell_types_modalities": nmi_cell_types_modalities,
+            "normalized_silhouette": normalized_silhouette,
+            "num_leiden_clusters": len(np.unique(leiden_clusters)),
+            "val_silhouette_f1_score": silhouette_f1.mean(),
+            "val_ari_f1_score": ari_f1,
         }
 
-        if has_advanced_metrics:
-            metrics.update(
-                {
-                    "val_silhouette_f1_score": silhouette_f1.mean(),
-                    "val_ari_f1_score": ari_f1,
-                }
+        # Store in history
+        if not hasattr(self, "metrics_history"):
+            self.metrics_history = []
+        self.metrics_history.append(epoch_metrics)
+
+        print(f"✓ Validation metrics calculated for epoch {self.current_epoch}")
+
+    def on_train_end(self, plot_flag=True):
+        """Called when training ends."""
+        print("\nTraining completed!")
+
+        # Get final latent representations
+        with torch.no_grad():
+            # Get RNA latent
+            rna_data = self.rna_vae.adata.X
+            if issparse(rna_data):
+                rna_data = rna_data.toarray()
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_batch = torch.tensor(
+                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            rna_inference = self.rna_vae.module.inference(
+                rna_tensor, batch_index=rna_batch, n_samples=1
+            )
+            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+
+            # Get protein latent
+            prot_data = self.protein_vae.adata.X
+            if issparse(prot_data):
+                prot_data = prot_data.toarray()
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_batch = torch.tensor(
+                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            prot_inference = self.protein_vae.module.inference(
+                prot_tensor, batch_index=prot_batch, n_samples=1
+            )
+            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+
+        # Store in adata
+        self.rna_vae.adata.obsm["X_latent"] = rna_latent
+        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+
+        # Plot metrics over time
+        if plot_flag and hasattr(self, "metrics_history"):
+            pf.plot_training_metrics_history(
+                self.metrics_history,
             )
 
-        mlflow.log_metrics(metrics, step=self.global_step)
-        print(f"✓ Validation metrics logged to MLflow")
+        # Find best metrics
+        if hasattr(self, "metrics_history"):
+            best_metrics = {}
+            for metric in self.metrics_history[0].keys():
+                values = [epoch[metric] for epoch in self.metrics_history]
+                if "loss" in metric or "error" in metric:
+                    best_metrics[metric] = min(values)
+                else:
+                    best_metrics[metric] = max(values)
+
+            # Log best metrics to MLflow
+            mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
+            print("✓ Best metrics logged to MLflow")
+
+        # Save model checkpoints
+        rna_adata_save = self.rna_vae.adata.copy()
+        protein_adata_save = self.protein_vae.adata.copy()
+
+        # Clean for h5ad saving
+        clean_uns_for_h5ad(rna_adata_save)
+        clean_uns_for_h5ad(protein_adata_save)
+
+        # Save the AnnData objects
+        checkpoint_path = f"{self.checkpoint_dir}/epoch_{self.current_epoch}"
+        os.makedirs(checkpoint_path, exist_ok=True)
+
+        sc.write(f"{checkpoint_path}/rna_adata_epoch_{self.current_epoch}.h5ad", rna_adata_save)
+        sc.write(
+            f"{checkpoint_path}/protein_adata_epoch_{self.current_epoch}.h5ad", protein_adata_save
+        )
 
     def save_checkpoint(self):
         """Save the model checkpoint including AnnData objects with latent representations."""
@@ -1390,55 +1463,6 @@ class DualVAETrainingPlan(TrainingPlan):
         print("\nEarly stopping triggered!")
 
         print("✓ Early stopping artifacts saved")
-
-    def on_train_end(self, plot_flag=True):
-        """Called when training ends."""
-        print("\nTraining completed!")
-
-        # Get final latent representations
-        with torch.no_grad():
-            # Get RNA latent
-            rna_data = self.rna_vae.adata.X
-            if issparse(rna_data):
-                rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
-            rna_batch = torch.tensor(
-                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
-
-            rna_inference = self.rna_vae.module.inference(
-                rna_tensor, batch_index=rna_batch, n_samples=1
-            )
-            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
-
-            # Get protein latent
-            prot_data = self.protein_vae.adata.X
-            if issparse(prot_data):
-                prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
-            prot_batch = torch.tensor(
-                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
-
-            prot_inference = self.protein_vae.module.inference(
-                prot_tensor, batch_index=prot_batch, n_samples=1
-            )
-            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
-
-        # Store in adata
-        self.rna_vae.adata.obsm["X_latent"] = rna_latent
-        self.protein_vae.adata.obsm["X_latent"] = prot_latent
-
-        # Log final metrics
-        if len(self.train_losses) > 0 and len(self.val_losses) > 0:
-            print(f"Final training loss: {self.train_losses[-1]}")
-            print(f"Final validation loss: {self.val_losses[-1]}")
-
-        # Save model checkpoints
-        save_dir = "model_checkpoints"
-        os.makedirs(save_dir, exist_ok=True)
-        self.rna_vae.save(f"{save_dir}/rna_vae_final", overwrite=True)
-        self.protein_vae.save(f"{save_dir}/protein_vae_final", overwrite=True)
 
     def on_epoch_end(self):
         """Called at the end of each training epoch."""

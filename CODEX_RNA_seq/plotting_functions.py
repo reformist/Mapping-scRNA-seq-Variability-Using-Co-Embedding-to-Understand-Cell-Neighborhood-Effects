@@ -1403,6 +1403,32 @@ def test_plot_latent_pca_both_modalities_by_celltype():
     print("All tests completed!")
 
 
-if __name__ == "__main__":
-    # Execute test function if the script is run directly
-    test_plot_latent_pca_both_modalities_by_celltype()
+def plot_training_metrics_history(metrics_history):
+    """Plot training metrics history over epochs.
+
+    Args:
+        metrics_history (list): List of dictionaries containing metrics for each epoch
+        save_path (str): Path to save the plot
+
+    Returns:
+        matplotlib.figure.Figure: The generated figure
+    """
+    # Convert metrics history to DataFrame
+    metrics_df = pd.DataFrame(metrics_history)
+    metrics_df["epoch"] = range(len(metrics_df))
+
+    # Create subplots based on number of metrics
+    n_metrics = len(metrics_df.columns) - 1  # Subtract 1 for epoch column
+    n_rows = (n_metrics + 2) // 3  # 3 plots per row, round up
+
+    fig = plt.figure(figsize=(15, 5 * n_rows))
+    for i, metric in enumerate(metrics_df.columns.drop("epoch")):
+        plt.subplot(n_rows, 3, i + 1)
+        sns.lineplot(data=metrics_df, x="epoch", y=metric)
+        plt.title(metric)
+        plt.tight_layout()
+
+    safe_mlflow_log_figure(fig, "training_metrics.png")
+    plt.close()
+
+    return fig

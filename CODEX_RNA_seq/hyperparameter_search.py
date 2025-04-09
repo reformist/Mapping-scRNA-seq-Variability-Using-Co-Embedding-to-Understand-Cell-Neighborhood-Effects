@@ -644,8 +644,23 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             print("\nAll visualization and analysis steps completed!")
 
         except Exception as e:
-            print(f"Error in run {run_name}: {str(e)}")
-            mlflow.log_param("error", str(e))
+            import traceback
+
+            error_msg = f"""
+            Error in run {run_name}:
+            Error Type: {type(e).__name__}
+            Error Message: {str(e)}
+            Memory Usage: {get_memory_usage():.2f} GB
+            Stack Trace:
+            {traceback.format_exc()}
+            Parameters used:
+            {params}
+            """
+            print(error_msg)
+            mlflow.log_param("error_type", type(e).__name__)
+            mlflow.log_param("error_message", str(e))
+            mlflow.log_param("error_memory_usage", f"{get_memory_usage():.2f} GB")
+            mlflow.log_param("error_stack_trace", traceback.format_exc())
             clear_memory()  # Clear memory on error
             continue
 
