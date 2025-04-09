@@ -168,7 +168,7 @@ def compute_silhouette_f1(adata_rna, adata_prot):
    slt_mod = 1 - normalize_silhouette(slt_mod_raw)  # We want mixing, so invert
 
    slt_f1 = 2 * (slt_clust * slt_mod) / (slt_clust + slt_mod + 1e-8) # just so we don't divide by zero
-   return slt_f1, slt_clust, slt_mod
+   return slt_f1
 
 
 def compute_ari_f1(adata_rna, adata_prot):
@@ -201,4 +201,5 @@ def compute_ari_f1(adata_rna, adata_prot):
 
 
    ari_f1 = 2 * (ari_clust * ari_mod) / (ari_clust + ari_mod + 1e-8)
-   return ari_f1, ari_clust, ari_mod
+
+   return ari_f1
