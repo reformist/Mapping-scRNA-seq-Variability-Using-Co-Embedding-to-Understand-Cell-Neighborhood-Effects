@@ -43,3 +43,4 @@ external_data/citeseq_pbmc/rna.txt
 external_data/tonsil/tonsil_rna_counts.txt
 mlruns/*
 *.pt
+CODEX_RNA_seq/logs/*
