@@ -598,7 +598,7 @@ def plot_inference_outputs(
 
 
 def plot_similarity_loss_history(
-    similarity_loss_all_history, active_similarity_loss_active_history
+    similarity_loss_all_history, active_similarity_loss_active_history, global_step
 ):
     """
     Plot the similarity loss history and highlight active steps
@@ -612,7 +612,7 @@ def plot_similarity_loss_history(
     num_samples = len(similarity_loss_all_history[-1000:])
     dot_size = max(1, 1000 // num_samples)  # Adjust dot size based on the number of samples
     plt.scatter(np.arange(num_samples), similarity_loss_all_history[-1000:], c=colors, s=dot_size)
-    plt.title("Similarity loss history (last 1000 steps)")
+    plt.title(f"step_{global_step} Similarity loss history (last 1000 steps)")
     plt.xlabel("Step")
     plt.ylabel("Similarity Loss")
     plt.xticks(
@@ -644,7 +644,7 @@ def plot_similarity_loss_history(
         alpha=0.5,
     )
     plt.legend(handles=[red_patch, blue_patch])
-    safe_mlflow_log_figure(plt.gcf(), "similarity_loss_history.png")
+    safe_mlflow_log_figure(plt.gcf(), f"step_{global_step}_similarity_loss_history.png")
     plt.show()
 
 

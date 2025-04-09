@@ -135,14 +135,41 @@ def order_cells_by_type(adata_rna_subset, adata_prot_subset):
     return adata_rna_subset, adata_prot_subset
 
 
-def compute_archetype_distances(adata_rna_subset, adata_prot_subset):
-    """Compute archetype distances between RNA and protein data"""
-    print("Computing archetype distances...")
-    archetype_distances = scipy.spatial.distance.cdist(
-        adata_rna_subset.obsm["archetype_vec"].values,
-        adata_prot_subset.obsm["archetype_vec"].values,
-        metric="cosine",
-    )
+def compute_archetype_distances(adata_rna_subset, adata_prot_subset, batch_size=1000):
+    """Compute archetype distances between RNA and protein data using batched processing to handle large datasets"""
+    print("Computing archetype distances with batched processing...")
+
+    rna_vecs = adata_rna_subset.obsm["archetype_vec"].values
+    prot_vecs = adata_prot_subset.obsm["archetype_vec"].values
+
+    n_rna = rna_vecs.shape[0]
+    n_prot = prot_vecs.shape[0]
+
+    # For very large datasets, compute only diagonal elements (matching pairs)
+    if n_rna > 10000 and n_prot > 10000 and n_rna == n_prot:
+        print(f"Large dataset detected ({n_rna} samples), computing only diagonal distances...")
+        diag_distances = np.zeros(n_rna)
+        for i in range(0, n_rna, batch_size):
+            end_idx = min(i + batch_size, n_rna)
+            diag_distances[i:end_idx] = np.array(
+                [
+                    scipy.spatial.distance.cosine(rna_vecs[j], prot_vecs[j])
+                    for j in range(i, end_idx)
+                ]
+            )
+        # Create a sparse or dummy matrix with just the diagonal populated
+        archetype_distances = np.eye(n_rna)  # Placeholder matrix
+        np.fill_diagonal(archetype_distances, diag_distances)
+    else:
+        # Process in batches to avoid memory issues
+        archetype_distances = np.zeros((n_rna, n_prot))
+        for i in range(0, n_rna, batch_size):
+            end_idx = min(i + batch_size, n_rna)
+            batch_distances = scipy.spatial.distance.cdist(
+                rna_vecs[i:end_idx], prot_vecs, metric="cosine"
+            )
+            archetype_distances[i:end_idx] = batch_distances
+            print(f"Processed batch {i//batch_size + 1}/{(n_rna-1)//batch_size + 1}", end="\r")
 
     return archetype_distances
 
@@ -234,13 +261,21 @@ adata_rna_subset_matched, adata_prot_subset_matched = match_datasets(
 adata_rna_subset, adata_prot_subset = adata_rna_subset_matched, adata_prot_subset_matched
 
 # Find closest protein cells to each RNA cell using archetype vectors
-dist_matrix = scipy.spatial.distance.cdist(
-    adata_rna_subset.obsm["archetype_vec"], adata_prot_subset.obsm["archetype_vec"], metric="cosine"
-)
-closest_prot_indices = np.argmin(dist_matrix, axis=1)
-plt.figure()
-plt.plot(closest_prot_indices)
-plt.show()
+print("Finding closest protein cells with batched processing...")
+batch_size = 1000
+n_rna = adata_rna_subset.shape[0]
+closest_prot_indices = np.zeros(n_rna, dtype=int)
+
+for i in range(0, n_rna, batch_size):
+    end_idx = min(i + batch_size, n_rna)
+    batch_dist = scipy.spatial.distance.cdist(
+        adata_rna_subset.obsm["archetype_vec"][i:end_idx],
+        adata_prot_subset.obsm["archetype_vec"],
+        metric="cosine",
+    )
+    closest_prot_indices[i:end_idx] = np.argmin(batch_dist, axis=1)
+    print(f"Processed batch {i//batch_size + 1}/{(n_rna-1)//batch_size + 1}", end="\r")
+
 # Set CN values based on closest protein cells
 adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
 
@@ -249,6 +284,9 @@ adata_rna_subset, adata_prot_subset = compute_pca_and_umap(adata_rna_subset, ada
 
 # Additional visualizations
 if plot_flag:
+    plt.figure()
+    plt.plot(closest_prot_indices)
+    plt.show()
     plot_pca_and_umap(adata_rna_subset, adata_prot_subset)
     plot_b_cells_analysis(adata_rna_subset)
     one_cell_type = plot_protein_umap(adata_prot_subset)

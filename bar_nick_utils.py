@@ -467,14 +467,25 @@ def match_datasets(
     obs_key1: str = "archetype_vec",
     obs_key2="archetype_vec",
     plot_flag=False,
+    batch_size=1000,
 ):
-    # Compute pairwise distance matrix
-    dist_matrix = scipy.spatial.distance.cdist(
-        adata_rna.obsm[obs_key1], adata_prot.obsm[obs_key2], metric="cosine"
-    )
+    # Compute pairwise distance matrix in batches to prevent memory issues
+    print("Computing distance matrix in batches...")
+    n1, n2 = len(adata_rna), len(adata_prot)
+    dist_matrix = np.zeros((n1, n2))
 
+    for i in range(0, n1, batch_size):
+        end_idx = min(i + batch_size, n1)
+        batch_dist = scipy.spatial.distance.cdist(
+            adata_rna[i:end_idx].obsm[obs_key1], adata_prot.obsm[obs_key2], metric="cosine"
+        )
+        dist_matrix[i:end_idx] = batch_dist
+        print(f"Processed batch {i//batch_size + 1}/{(n1-1)//batch_size + 1}", end="\r")
+
+    print("\nDistance matrix computation complete.")
     matching_distance_before = np.diag(dist_matrix).mean()
 
+    # Rest of the function continues as before
     if plot_flag:
         plt.figure(figsize=(12, 5))
         plt.subplot(121)
@@ -486,8 +497,6 @@ def match_datasets(
         plt.suptitle("Initial Data")
         plt.tight_layout()
         plt.show()
-
-    n1, n2 = len(adata_rna), len(adata_prot)
 
     # Determine which dataset is smaller
     smaller_adata = adata_rna if n1 <= n2 else adata_prot
@@ -509,9 +518,25 @@ def match_datasets(
         plt.title("Initial Distance Matrix")
         plt.show()
 
-    # First evaluate each cell's worst match
-    smaller_best_matches = np.min(dist_matrix, axis=1)
-    larger_best_matches = np.min(dist_matrix, axis=0)
+    # First evaluate each cell's worst match - process in batches for very large matrices
+    print("Computing best matches...")
+    if n_smaller > 10000:
+        smaller_best_matches = np.zeros(n_smaller)
+        for i in range(0, n_smaller, batch_size):
+            end_idx = min(i + batch_size, n_smaller)
+            smaller_best_matches[i:end_idx] = np.min(dist_matrix[i:end_idx], axis=1)
+    else:
+        smaller_best_matches = np.min(dist_matrix, axis=1)
+
+    if n_larger > 10000:
+        larger_best_matches = np.zeros(n_larger)
+        for i in range(0, n_larger, batch_size):
+            end_idx = min(i + batch_size, n_larger)
+            larger_best_matches[i:end_idx] = np.min(dist_matrix[:, i:end_idx], axis=0)
+    else:
+        larger_best_matches = np.min(dist_matrix, axis=0)
+
+    # Continue with the rest of the function
     if plot_flag:
         plt.figure(figsize=(10, 5))
         plt.subplot(121)
