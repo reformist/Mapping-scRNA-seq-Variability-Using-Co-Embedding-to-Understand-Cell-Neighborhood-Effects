@@ -8,7 +8,9 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import torch
-from hyperparameter_search_utils import (
+from sklearn.model_selection import ParameterGrid
+
+from CODEX_RNA_seq.training_utils import (
     Tee,
     calculate_metrics,
     clear_memory,
@@ -21,7 +23,6 @@ from hyperparameter_search_utils import (
     save_results,
     setup_and_train_model,
 )
-from sklearn.model_selection import ParameterGrid
 
 # Create log directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -79,8 +80,8 @@ sys.path.append(str(project_root))
 
 # Define hyperparameter search space
 param_grid = {
-    "plot_x_times": [3],
-    "max_epochs": [500],  # Changed from n_epochs to max_epochs to match train_vae
+    "plot_x_times": [5],
+    "max_epochs": [200],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000, 2000, 3000],
     "lr": [1e-4],
     "contrastive_weight": [1.0, 10.0, 100.0],
@@ -97,7 +98,7 @@ param_grid = {
     "adv_weight": [0.0],
     "train_size": [0.9],
     "validation_size": [0.1],
-    "check_val_every_n_epoch": [1],
+    "check_val_every_n_epoch": [100000],
     "gradient_clip_val": [1.0],
 }
 

@@ -1,7 +1,6 @@
 """Utility functions for hyperparameter search."""
 
 import gc
-import importlib.util
 import os
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import pandas as pd
 import psutil
 import scanpy as sc
 import torch
+from _3_train_vae_with_archetypes_vectors import train_vae
 from anndata import AnnData
 from plotting_functions import (
     plot_archetype_embedding,
@@ -26,15 +26,6 @@ from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_mutual_info_score
 
 from bar_nick_utils import clean_uns_for_h5ad, compare_distance_distributions, mixing_score
-
-# Import the training function using importlib
-spec = importlib.util.spec_from_file_location(
-    "train_vae_module",
-    os.path.join(os.path.dirname(__file__), "3_train_vae_with_archetypes_vectors.py"),
-)
-train_vae_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(train_vae_module)
-train_vae = train_vae_module.train_vae
 
 
 def log_parameters(params, run_index, total_runs):

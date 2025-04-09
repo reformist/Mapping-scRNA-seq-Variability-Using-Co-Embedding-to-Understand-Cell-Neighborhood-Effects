@@ -8,10 +8,8 @@ import os
 import sys
 from datetime import datetime
 
-import anndata
 import numpy as np
 import scanpy as sc
-from anndata import AnnData, concat
 from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_rand_score, f1_score, silhouette_samples, silhouette_score
 from sklearn.preprocessing import LabelEncoder
@@ -33,24 +31,7 @@ importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 
 
-def silhouette_score_calc(adata_rna, adata_prot):
-    embedding_key = "X_scVI"
-    assert (
-        embedding_key in adata_rna.obsm
-    ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
-    assert (
-        embedding_key in adata_prot.obsm
-    ), f"No embeddings found in adata_prot.obsm['{embedding_key}']."
-
-    rna_latent = AnnData(adata_rna.obsm[embedding_key].copy())
-    prot_latent = AnnData(adata_prot.obsm[embedding_key].copy())
-    rna_latent.obs = adata_rna.obs.copy()
-    prot_latent.obs = adata_prot.obs.copy()
-
-    combined_latent = concat(
-        [rna_latent, prot_latent], join="outer", label="modality", keys=["RNA", "Protein"]
-    )
-
+def silhouette_score_calc(combined_latent):
     silhouette_avg = silhouette_score(combined_latent.X, combined_latent.obs["cell_types"])
     # print(f"Silhouette Score (RNA+Protein): {silhouette_avg}")
     return silhouette_avg
@@ -58,20 +39,10 @@ def silhouette_score_calc(adata_rna, adata_prot):
 
 # returns list of indices of proteins that are most aligned with adata_rna.
 # for example, first item in return array (adata_prot) is closest match to adata_rna
-def calc_dist(adata_rna, adata_prot):
-    embedding_key = "X_scVI"
-    assert (
-        embedding_key in adata_rna.obsm
-    ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
-    assert (
-        embedding_key in adata_prot.obsm
-    ), f"No embeddings found in adata_prot.obsm['{embedding_key}']."
-
-    distances = cdist(
-        adata_rna.obsm[embedding_key], adata_prot.obsm[embedding_key], metric="euclidean"
-    )
+def calc_dist(rna_latent, prot_latent):
+    distances = cdist(rna_latent.X, prot_latent.X, metric="euclidean")
     nearest_indices = np.argmin(distances, axis=1)  # protein index
-    nn_celltypes_prot = adata_prot.obs["cell_types"][nearest_indices]
+    nn_celltypes_prot = prot_latent.obs["cell_types"][nearest_indices]
     return nn_celltypes_prot
 
 
@@ -86,43 +57,22 @@ def ari_score_calc(adata_rna, adata_prot):
 
 
 # matching_accuracy 1-1
-def matching_accuracy(adata_rna, adata_prot):
+def matching_accuracy(latent_rna, latent_prot):
     correct_matches = 0
-    nn_celltypes_prot = calc_dist(adata_rna, adata_prot)
-    for index, cell_type in enumerate(adata_rna.obs["cell_types"]):
+    nn_celltypes_prot = calc_dist(latent_rna, latent_prot)
+    for index, cell_type in enumerate(latent_rna.obs["cell_types"]):
         if cell_type == nn_celltypes_prot[index]:
             correct_matches += 1
     accuracy = correct_matches / len(nn_celltypes_prot)
     return accuracy
 
 
-def leiden_from_embeddings(embeddings, resolution=1.0, neighbors=15):
-    """
-    Run Leiden clustering on given embeddings.
-    Parameters:
-        embeddings: np.ndarray of shape (n_cells, n_features)
-        resolution: float, resolution parameter for Leiden
-        neighbors: int, number of neighbors for graph construction
-    Returns:
-        cluster_labels: np.ndarray of Leiden cluster assignments
-    """
-    # Create an AnnData object from embeddings
-    adata = anndata.AnnData(X=embeddings)
-    # Compute neighborhood graph
-    sc.pp.neighbors(adata, n_neighbors=neighbors, use_rep="X")
-    # Run Leiden clustering
-    sc.tl.leiden(adata, resolution=resolution)
-    # Extract cluster labels
-    cluster_labels = adata.obs["leiden"].astype(int).values
-    return cluster_labels
-
-
 def normalize_silhouette(silhouette_vals):
     """Normalize silhouette scores from [-1, 1] to [0, 1]."""
-    return (np.mean(silhouette_vals) + 1) / 2
+    return
 
 
-def compute_silhouette_f1(adata_rna, adata_prot):
+def compute_silhouette_f1(latent_rna, latent_prot):
     """
     Compute the Silhouette F1 score.
 
@@ -132,15 +82,15 @@ def compute_silhouette_f1(adata_rna, adata_prot):
     """
 
     # protein embeddings
-    prot_embeddings = adata_prot.obsm["X_scVI"]
+    prot_embeddings = latent_prot.X
     # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_scVI"]
+    rna_embeddings = latent_rna.X
     embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
     celltype_labels = np.concatenate(
-        [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
+        [latent_rna.obs["cell_types"], latent_prot.obs["cell_types"]], axis=0
     )
     modality_labels = np.concatenate(
-        [["rna"] * len(adata_rna.obs), ["protein"] * len(adata_prot.obs)], axis=0
+        [["rna"] * len(latent_rna.obs), ["protein"] * len(latent_prot.obs)], axis=0
     )
 
     le_ct = LabelEncoder()
@@ -158,7 +108,7 @@ def compute_silhouette_f1(adata_rna, adata_prot):
     return slt_f1
 
 
-def compute_ari_f1(adata_rna, adata_prot):
+def compute_ari_f1(combined_latent):
     """
     Compute the ARI F1 score.
 
@@ -166,18 +116,10 @@ def compute_ari_f1(adata_rna, adata_prot):
     celltype_labels: ground-truth biological labels
     modality_labels: original modality labels
     """
-    prot_embeddings = adata_prot.obsm["X_scVI"]
-    # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_scVI"]
-    embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
-    celltype_labels = np.concatenate(
-        [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
-    )
-    modality_labels = np.concatenate(
-        [["rna"] * len(adata_rna.obs), ["protein"] * len(adata_prot.obs)], axis=0
-    )
-
-    cluster_labels = leiden_from_embeddings(embeddings)
+    celltype_labels = combined_latent.obs["cell_types"]
+    modality_labels = combined_latent.obs["modality"]
+    sc.tl.leiden(combined_latent, resolution=1.0)
+    cluster_labels = combined_latent.obs["leiden"].astype(int).values
 
     le_ct = LabelEncoder()
     le_mod = LabelEncoder()
@@ -223,9 +165,12 @@ if __name__ == "__main__":
     adata_prot = sc.read_h5ad(prot_file)
     print("✓ Data loaded")
 
+    # Combine data for silhouette score
+    combined_latent = sc.concat([adata_rna, adata_prot], join="outer")
+
     # Calculate and print all metrics
     print("\nCalculating metrics...")
-    silhouette = silhouette_score_calc(adata_rna, adata_prot)
+    silhouette = silhouette_score_calc(combined_latent)
     f1 = f1_score_calc(adata_rna, adata_prot)
     ari = ari_score_calc(adata_rna, adata_prot)
     accuracy = matching_accuracy(adata_rna, adata_prot)

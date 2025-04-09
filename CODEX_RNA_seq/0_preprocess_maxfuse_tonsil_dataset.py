@@ -256,6 +256,9 @@ if plot_flag:
 rna_adata, protein_adata = filter_and_subsample_data(
     rna_adata, protein_adata, num_rna_cells, num_protein_cells
 )
+# Subsample protein data to 40k cells
+sc.pp.subsample(protein_adata, n_obs=40000)
+
 
 # %%
 # Preprocess RNA data

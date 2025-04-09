@@ -27,13 +27,12 @@ import json
 import os
 import sys
 
+import anndata
 import mlflow
 import numpy as np
 import pandas as pd
 import scanpy as sc
-from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_mutual_info_score, silhouette_samples
-from tqdm import tqdm
 
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -115,7 +114,6 @@ import torch.nn.functional as F
 from anndata import AnnData
 from pytorch_lightning.loggers import TensorBoardLogger
 from scipy.sparse import issparse
-from scipy.spatial.distance import cdist
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
 from sklearn.metrics import adjusted_mutual_info_score
@@ -146,29 +144,20 @@ from CODEX_RNA_seq.logging_functions import (
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
 from plotting_functions import (
-    plot_archetype_embedding,
-    plot_cell_type_distributions,
-    plot_combined_latent_space,
     plot_inference_outputs,
     plot_latent_pca_both_modalities_by_celltype,
     plot_latent_pca_both_modalities_cn,
-    plot_normalized_losses,
-    plot_rna_protein_latent_cn_cell_type_umap,
     plot_rna_protein_matching_means_and_scale,
     plot_similarity_loss_history,
-    plot_spatial_data,
-    plot_umap_visualizations_original_data,
 )
 
 from bar_nick_utils import (
     calculate_iLISI,
     clean_uns_for_h5ad,
-    compare_distance_distributions,
     compute_pairwise_kl,
     compute_pairwise_kl_two_items,
     get_latest_file,
     get_umap_filtered_fucntion,
-    mixing_score,
     select_gene_likelihood,
 )
 
@@ -238,16 +227,40 @@ class DualVAETrainingPlan(TrainingPlan):
         contrastive_weight = kwargs.pop("contrastive_weight", 1.0)
         self.batch_size = kwargs.pop("batch_size", 1000)
         max_epochs = kwargs.pop("max_epochs", 1)
-        self.similarity_weight = kwargs.pop(
-            "similarity_weight"
-        )  # Remove default to use config value
+        self.similarity_weight = kwargs.pop("similarity_weight")
         self.cell_type_clustering_weight = kwargs.pop("cell_type_clustering_weight", 1000.0)
         self.lr = kwargs.pop("lr", 0.001)
         self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
+        train_size = kwargs.pop("train_size", 0.9)
+        validation_size = kwargs.pop("validation_size", 0.1)
+
+        # Verify train and validation sizes sum to 1
+        if abs(train_size + validation_size - 1.0) > 1e-6:
+            raise ValueError("train_size + validation_size must sum to 1.0")
+
         super().__init__(rna_module, **kwargs)
         self.rna_vae = rna_vae
         self.protein_vae = protein_vae
+
+        # Create train/validation splits
+        n_rna = len(self.rna_vae.adata)
+        n_prot = len(self.protein_vae.adata)
+
+        # Create indices for RNA data
+        rna_indices = np.arange(n_rna)
+        np.random.shuffle(rna_indices)
+        n_train_rna = int(n_rna * train_size)
+        self.train_indices_rna = rna_indices[:n_train_rna]
+        self.val_indices_rna = rna_indices[n_train_rna:]
+
+        # Create indices for protein data
+        prot_indices = np.arange(n_prot)
+        np.random.shuffle(prot_indices)
+        n_train_prot = int(n_prot * train_size)
+        self.train_indices_prot = prot_indices[:n_train_prot]
+        self.val_indices_prot = prot_indices[n_train_prot:]
+
         num_batches = 2
         latent_dim = self.rna_vae.module.n_latent
         self.batch_classifier = torch.nn.Linear(latent_dim, num_batches)
@@ -255,7 +268,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.protein_vae.module.to(device)
         self.rna_vae.module = self.rna_vae.module.to(device)
         self.first_step = True
-        n_samples = len(self.rna_vae.adata)
+        n_samples = len(self.train_indices_rna)  # Use training set size
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
         self.total_steps = steps_per_epoch * max_epochs
         self.similarity_loss_history = []
@@ -351,20 +364,20 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
-        if self.pbar is None:
-            self.pbar = tqdm(total=self.total_steps, desc="Training", leave=True)
+        # if self.pbar is None:
+        #     self.pbar = tqdm(total=self.total_steps, desc="Training", leave=True)
 
         indices = range(self.batch_size)
         indices_rna = np.random.choice(
-            range(len(self.rna_vae.adata)),
+            self.train_indices_rna,  # Use training indices
             size=len(indices),
-            replace=True if len(indices) > len(self.rna_vae.adata) else False,
+            replace=True if len(indices) > len(self.train_indices_rna) else False,
         )
         indices_rna = np.sort(indices_rna)
         indices_prot = np.random.choice(
-            range(len(self.protein_vae.adata)),
+            self.train_indices_prot,  # Use training indices
             size=len(indices),
-            replace=True if len(indices) > len(self.protein_vae.adata) else False,
+            replace=True if len(indices) > len(self.train_indices_prot) else False,
         )
         indices_prot = np.sort(indices_prot)
         rna_batch = self._get_rna_batch(batch, indices_rna)
@@ -811,7 +824,7 @@ class DualVAETrainingPlan(TrainingPlan):
         total_loss = (
             rna_loss_output.loss
             + protein_loss_output.loss
-            # + contrastive_loss
+            + contrastive_loss
             # + adv_loss # dont remove comment for now
             + matching_loss
             + similarity_loss
@@ -892,34 +905,36 @@ class DualVAETrainingPlan(TrainingPlan):
         if self.current_epoch % 100 == 0 and self.current_epoch > 0:
             self.save_checkpoint()
 
-        self.pbar.update(1)
-        self.pbar.set_postfix(
-            {
-                "train_loss": f"{total_loss.item():.4f}",
-                "similarity_loss": f"{similarity_loss.item():.4f}",
-                "cell_type_loss": f"{cell_type_clustering_loss.item():.4f}",
-            }
-        )
+        # self.pbar.update(1)
+        # self.pbar.set_postfix(
+        #     {
+        #         "train_loss": f"{total_loss.item():.4f}",
+        #         "similarity_loss": f"{similarity_loss.item():.4f}",
+        #         "cell_type_loss": f"{cell_type_clustering_loss.item():.4f}",
+        #     }
+        # )
 
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        if self.val_pbar is None:
-            self.val_pbar = tqdm(
-                total=len(self.protein_vae.adata) // self.batch_size, desc="Validation", leave=True
-            )
+        # if self.val_pbar is None:
+        #     self.val_pbar = tqdm(
+        #         total=len(self.val_indices_prot) // self.batch_size,  # Use validation set size
+        #         desc="Validation",
+        #         leave=True
+        #     )
 
         indices = range(self.batch_size)
         indices_prot = np.random.choice(
-            range(len(self.protein_vae.adata)),
+            self.val_indices_prot,  # Use validation indices
             size=len(indices),
-            replace=True if len(indices) > len(self.protein_vae.adata) else False,
+            replace=True if len(indices) > len(self.val_indices_prot) else False,
         )
         indices_prot = np.sort(indices_prot)
         indices_rna = np.random.choice(
-            range(len(self.rna_vae.adata)),
+            self.val_indices_rna,  # Use validation indices
             size=len(indices),
-            replace=True if len(indices) > len(self.rna_vae.adata) else False,
+            replace=True if len(indices) > len(self.val_indices_rna) else False,
         )
         indices_rna = np.sort(indices_rna)
         rna_batch = self._get_rna_batch(batch, indices_rna)
@@ -1155,108 +1170,159 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_matching_losses.append(matching_loss.item())
         self.val_adv_losses.append(adv_loss.item())
 
-        self.val_pbar.update(1)
-        self.val_pbar.set_postfix({"val_loss": f"{validation_total_loss.item():.4f}"})
+        # self.val_pbar.update(1)
+        # self.val_pbar.set_postfix({"val_loss": f"{validation_total_loss.item():.4f}"})
 
         return validation_total_loss
 
     def on_validation_epoch_end(self):
         """Calculate and store metrics at the end of each validation epoch."""
-        # Get latent representations from both VAEs
+        print(f"\nProcessing validation epoch {self.current_epoch}...")
+        # Get latent representations from both VAEs for validation data only
+        print("1. Getting latent representations...")
         with torch.no_grad():
-            # Get RNA latent
-            rna_data = self.rna_vae.adata.X
+            # Get RNA latent for validation data
+            print("   Getting RNA latent representations...")
+            rna_data = self.rna_vae.adata[self.val_indices_rna].X
             if issparse(rna_data):
                 rna_data = rna_data.toarray()
             rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
             rna_batch = torch.tensor(
-                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+                self.rna_vae.adata[self.val_indices_rna].obs["_scvi_batch"].values, dtype=torch.long
             ).to(device)
 
             rna_inference = self.rna_vae.module.inference(
                 rna_tensor, batch_index=rna_batch, n_samples=1
             )
             rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+            print("   ✓ RNA latent representations obtained")
 
-            # Get protein latent
-            prot_data = self.protein_vae.adata.X
+            # Get protein latent for validation data
+            print("   Getting protein latent representations...")
+            prot_data = self.protein_vae.adata[self.val_indices_prot].X
             if issparse(prot_data):
                 prot_data = prot_data.toarray()
             prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
             prot_batch = torch.tensor(
-                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+                self.protein_vae.adata[self.val_indices_prot].obs["_scvi_batch"].values,
+                dtype=torch.long,
             ).to(device)
 
             prot_inference = self.protein_vae.module.inference(
                 prot_tensor, batch_index=prot_batch, n_samples=1
             )
             prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+            print("   ✓ Protein latent representations obtained")
 
+        print("2. Storing latent representations in adata...")
         # Store in adata
-        self.rna_vae.adata.obsm["X_scVI"] = rna_latent
-        self.protein_vae.adata.obsm["X_scVI"] = prot_latent
-
-        # Calculate basic metrics
-        silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(
-            self.rna_vae.adata, self.protein_vae.adata
+        self.rna_vae.adata.obsm["X_scVI_val"] = np.zeros(
+            (len(self.rna_vae.adata), rna_latent.shape[1])
         )
-        f1 = CODEX_RNA_seq.metrics.f1_score_calc(self.rna_vae.adata, self.protein_vae.adata)
-        ari = CODEX_RNA_seq.metrics.ari_score_calc(self.rna_vae.adata, self.protein_vae.adata)
-        accuracy = CODEX_RNA_seq.metrics.matching_accuracy(
-            self.rna_vae.adata, self.protein_vae.adata
+        self.rna_vae.adata.obsm["X_scVI_val"][self.val_indices_rna] = rna_latent
+
+        self.protein_vae.adata.obsm["X_scVI_val"] = np.zeros(
+            (len(self.protein_vae.adata), prot_latent.shape[1])
         )
+        self.protein_vae.adata.obsm["X_scVI_val"][self.val_indices_prot] = prot_latent
+        print("   ✓ Latent representations stored")
 
-        # Calculate advanced metrics
-        try:
-            silhouette_f1 = CODEX_RNA_seq.metrics.compute_silhouette_f1(
-                self.rna_vae.adata, self.protein_vae.adata
-            )
-            ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(
-                self.rna_vae.adata, self.protein_vae.adata
-            )
-            has_advanced_metrics = True
-        except Exception as e:
-            print(f"Warning: Could not calculate advanced metrics: {e}")
-            has_advanced_metrics = False
+        print("3. Preparing validation data...")
+        # Calculate basic metrics using validation data only
+        val_rna_adata = self.rna_vae.adata[self.val_indices_rna]
+        val_prot_adata = self.protein_vae.adata[self.val_indices_prot]
 
-        # Calculate mixing scores
+        embedding_key = "X_scVI_val"
+        assert (
+            embedding_key in val_rna_adata.obsm
+        ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
+        assert (
+            embedding_key in val_prot_adata.obsm
+        ), f"No embeddings found in adata_prot.obsm['{embedding_key}']."
+
+        val_rna_latent = AnnData(val_rna_adata.obsm[embedding_key].copy())
+        val_prot_latent = AnnData(val_prot_adata.obsm[embedding_key].copy())
+        val_rna_latent.obs = val_rna_adata.obs.copy()
+        val_prot_latent.obs = val_prot_adata.obs.copy()
+        print("   ✓ Validation data prepared")
+
+        print("4. Combining latent spaces...")
+        combined_latent = anndata.concat(
+            [val_rna_latent, val_prot_latent],
+            join="outer",
+            label="modality",
+            keys=["RNA", "Protein"],
+        )
+        sc.pp.pca(combined_latent)
+        sc.pp.neighbors(combined_latent, n_neighbors=8)
+        print("   ✓ Latent spaces combined")
+
+        print("5. Calculating metrics...")
+        print("   Calculating silhouette score...")
+        silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(combined_latent)
+        print("   ✓ Silhouette score calculated")
+
+        print("   Calculating F1 score...")
+        f1 = CODEX_RNA_seq.metrics.f1_score_calc(val_rna_latent, val_prot_latent)
+        print("   ✓ F1 score calculated")
+
+        print("   Calculating ARI score...")
+        ari = CODEX_RNA_seq.metrics.ari_score_calc(val_rna_latent, val_prot_latent)
+        print("   ✓ ARI score calculated")
+
+        print("   Calculating matching accuracy...")
+        accuracy = CODEX_RNA_seq.metrics.matching_accuracy(val_rna_latent, val_prot_latent)
+        print("   ✓ Matching accuracy calculated")
+
+        print("   Calculating silhouette F1...")
+        silhouette_f1 = CODEX_RNA_seq.metrics.compute_silhouette_f1(val_rna_latent, val_prot_latent)
+        print("   ✓ Silhouette F1 calculated")
+
+        print("   Calculating ARI F1...")
+        ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(combined_latent)
+        print("   ✓ ARI F1 calculated")
+
+        print("   Calculating mixing scores...")
         mixing_result = bar_nick_utils.mixing_score(
-            rna_latent,
-            prot_latent,
-            self.rna_vae.adata,
-            self.protein_vae.adata,
-            index_rna=range(len(self.rna_vae.adata)),
-            index_prot=range(len(self.protein_vae.adata)),
+            val_rna_latent,
+            val_prot_latent,
+            val_rna_adata,
+            val_prot_adata,
             plot_flag=False,
         )
+        print("   ✓ Mixing scores calculated")
 
-        # Calculate NMI scores
+        print("   Calculating NMI scores...")
         nmi_cell_types_cn_rna = adjusted_mutual_info_score(
-            self.rna_vae.adata.obs["cell_types"],
-            self.rna_vae.adata.obs["CN"],
+            val_rna_adata.obs["cell_types"],
+            val_rna_adata.obs["CN"],
         )
         nmi_cell_types_cn_prot = adjusted_mutual_info_score(
-            self.protein_vae.adata.obs["cell_types"],
-            self.protein_vae.adata.obs["CN"],
+            val_prot_adata.obs["cell_types"],
+            val_prot_adata.obs["CN"],
         )
+        print("   ✓ NMI scores calculated")
 
-        # Calculate cross-modality NMI
-        nn_celltypes_prot = CODEX_RNA_seq.metrics.calc_dist(
-            self.rna_vae.adata, self.protein_vae.adata
-        )
+        print("   Calculating cross-modality NMI...")
+        nn_celltypes_prot = CODEX_RNA_seq.metrics.calc_dist(val_rna_latent, val_prot_latent)
         nmi_cell_types_modalities = adjusted_mutual_info_score(
-            self.rna_vae.adata.obs["cell_types"].values,
+            val_rna_adata.obs["cell_types"].values,
             nn_celltypes_prot,
         )
+        print("   ✓ Cross-modality NMI calculated")
 
-        # Calculate Leiden clustering metrics
-        combined_latent = np.concatenate([rna_latent, prot_latent], axis=0)
-        leiden_clusters = CODEX_RNA_seq.metrics.leiden_from_embeddings(combined_latent)
+        print("   Calculating Leiden clustering metrics...")
+        sc.tl.leiden(combined_latent)
+        # Extract cluster labels
+        leiden_clusters = combined_latent.obs["leiden"].astype(int).values
+        print("   ✓ Leiden clustering completed")
 
-        # Calculate normalized silhouette scores
+        print("   Calculating normalized silhouette scores...")
         silhouette_vals = silhouette_samples(combined_latent, leiden_clusters)
-        normalized_silhouette = CODEX_RNA_seq.metrics.normalize_silhouette(silhouette_vals)
+        normalized_silhouette = (np.mean(silhouette_vals) + 1) / 2
+        print("   ✓ Normalized silhouette scores calculated")
 
+        print("6. Storing metrics...")
         # Store metrics for this epoch
         epoch_metrics = {
             "silhouette_score": silhouette,
@@ -1278,8 +1344,9 @@ class DualVAETrainingPlan(TrainingPlan):
         if not hasattr(self, "metrics_history"):
             self.metrics_history = []
         self.metrics_history.append(epoch_metrics)
+        print("   ✓ Metrics stored")
 
-        print(f"✓ Validation metrics calculated for epoch {self.current_epoch}")
+        print(f"✓ Validation epoch {self.current_epoch} completed successfully!")
 
     def on_train_end(self, plot_flag=True):
         """Called when training ends."""
@@ -1491,12 +1558,12 @@ class DualVAETrainingPlan(TrainingPlan):
 
     def on_epoch_end(self):
         """Called at the end of each training epoch."""
-        if self.pbar is not None:
-            self.pbar.close()
-            self.pbar = None
-        if self.val_pbar is not None:
-            self.val_pbar.close()
-            self.val_pbar = None
+        # if self.pbar is not None:
+        #     self.pbar.close()
+        #     self.pbar = None
+        # if self.val_pbar is not None:
+        #     self.val_pbar.close()
+        #     self.val_pbar = None
 
         log_epoch_end(self.log_file, self.current_epoch, self.train_losses, self.val_losses)
         print(f"\nEnd of epoch {self.current_epoch}")
@@ -1637,370 +1704,370 @@ def train_vae(
     return rna_vae, protein_vae, latent_rna_before, latent_prot_before
 
 
-if __name__ == "__main__":
-    # %%
-    # Setup MLflow
-    mlflow.set_tracking_uri("file:./mlruns")
-    experiment_name = "vae_training"
-    try:
-        experiment_id = mlflow.get_experiment_by_name(experiment_name).experiment_id
-    except:
-        experiment_id = mlflow.create_experiment(experiment_name)
-    mlflow.set_experiment(experiment_name)
+# if __name__ == "__main__":
+#     # %%
+#     # Setup MLflow
+#     mlflow.set_tracking_uri("file:./mlruns")
+#     experiment_name = "vae_training"
+#     try:
+#         experiment_id = mlflow.get_experiment_by_name(experiment_name).experiment_id
+#     except:
+#         experiment_id = mlflow.create_experiment(experiment_name)
+#     mlflow.set_experiment(experiment_name)
 
-    # Setup VAEs and training parameters
+#     # Setup VAEs and training parameters
 
-    # %%
-    # Train the model
-    print("\nStarting training...")
-    print("Current working directory:", os.getcwd())
-    print("Python path:", sys.path)
-    adata_rna_subset_original = adata_rna_subset.copy()
-    # Create new AnnData with PCA values
-    # adata_rna_subset = sc.AnnData(
-    #     X=adata_rna_subset_original.obsm["X_pca"] - np.min(adata_rna_subset_original.obsm["X_pca"]),
-    #     obs=adata_rna_subset_original.obs.copy(),
-    #     var=pd.DataFrame(
-    #         index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
-    #     ),
-    #     obsm=adata_rna_subset_original.obsm.copy(),
-    #     uns=adata_rna_subset_original.uns.copy(),
-    # )
-    # # Create new AnnData with PCA values for protein data
-    # adata_prot_subset_original = adata_prot_subset.copy()
-    # adata_prot_subset = sc.AnnData(
-    #     X=adata_prot_subset_original.obsm["X_pca"] - np.min(adata_prot_subset_original.obsm["X_pca"]),
-    #     obs=adata_prot_subset_original.obs.copy(),
-    #     var=pd.DataFrame(
-    #         index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
-    #     ),
-    #     obsm=adata_prot_subset_original.obsm.copy(),
-    #     uns=adata_prot_subset_original.uns.copy(),
-    # )
+#     # %%
+#     # Train the model
+#     print("\nStarting training...")
+#     print("Current working directory:", os.getcwd())
+#     print("Python path:", sys.path)
+#     adata_rna_subset_original = adata_rna_subset.copy()
+#     # Create new AnnData with PCA values
+#     # adata_rna_subset = sc.AnnData(
+#     #     X=adata_rna_subset_original.obsm["X_pca"] - np.min(adata_rna_subset_original.obsm["X_pca"]),
+#     #     obs=adata_rna_subset_original.obs.copy(),
+#     #     var=pd.DataFrame(
+#     #         index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
+#     #     ),
+#     #     obsm=adata_rna_subset_original.obsm.copy(),
+#     #     uns=adata_rna_subset_original.uns.copy(),
+#     # )
+#     # # Create new AnnData with PCA values for protein data
+#     # adata_prot_subset_original = adata_prot_subset.copy()
+#     # adata_prot_subset = sc.AnnData(
+#     #     X=adata_prot_subset_original.obsm["X_pca"] - np.min(adata_prot_subset_original.obsm["X_pca"]),
+#     #     obs=adata_prot_subset_original.obs.copy(),
+#     #     var=pd.DataFrame(
+#     #         index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
+#     #     ),
+#     #     obsm=adata_prot_subset_original.obsm.copy(),
+#     #     uns=adata_prot_subset_original.uns.copy(),
+#     # )
 
-    training_kwargs = {
-        "max_epochs": 4,
-        "batch_size": 1200,
-        "train_size": 0.9,
-        "validation_size": 0.1,
-        "check_val_every_n_epoch": 1,
-        "early_stopping": True,
-        "early_stopping_patience": 20,
-        "early_stopping_monitor": "val_total_loss",
-        "devices": 1,
-        "gradient_clip_val": 1.0,
-        "accumulate_grad_batches": 1,
-        "lr": 1e-4,
-        "use_gpu": True,
-        "plot_x_times": 3,
-        "contrastive_weight": 10.0,
-        "similarity_weight": 10000.0,
-        "matching_weight": 1000000.0,
-        "cell_type_clustering_weight": 0.1,
-        "kl_weight_rna": 0.1,
-        "kl_weight_prot": 10.0,
-    }
-    # %%
-    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
-        adata_rna_subset=adata_rna_subset,
-        adata_prot_subset=adata_prot_subset,
-        **training_kwargs,
-    )
-    print("Training completed")
-    rna_vae_new = rna_vae
+#     training_kwargs = {
+#         "max_epochs": 4,
+#         "batch_size": 1200,
+#         "train_size": 0.9,
+#         "validation_size": 0.1,
+#         "check_val_every_n_epoch": 1,
+#         "early_stopping": True,
+#         "early_stopping_patience": 20,
+#         "early_stopping_monitor": "val_total_loss",
+#         "devices": 1,
+#         "gradient_clip_val": 1.0,
+#         "accumulate_grad_batches": 1,
+#         "lr": 1e-4,
+#         "use_gpu": True,
+#         "plot_x_times": 3,
+#         "contrastive_weight": 10.0,
+#         "similarity_weight": 10000.0,
+#         "matching_weight": 1000000.0,
+#         "cell_type_clustering_weight": 0.1,
+#         "kl_weight_rna": 0.1,
+#         "kl_weight_prot": 10.0,
+#     }
+#     # %%
+#     rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
+#         adata_rna_subset=adata_rna_subset,
+#         adata_prot_subset=adata_prot_subset,
+#         **training_kwargs,
+#     )
+#     print("Training completed")
+#     rna_vae_new = rna_vae
 
-    # %%
-    # Setup MLflow
-    mlflow.set_tracking_uri("file:./mlruns")
-    mlflow.set_experiment("vae_training")
-    run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+#     # %%
+#     # Setup MLflow
+#     mlflow.set_tracking_uri("file:./mlruns")
+#     mlflow.set_experiment("vae_training")
+#     run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # Log parameters
-    mlflow.log_params(
-        {
-            "batch_size": training_kwargs["batch_size"],
-            "use_gpu": training_kwargs["use_gpu"],
-            "contrastive_weight": training_kwargs["contrastive_weight"],
-            "similarity_weight": training_kwargs["similarity_weight"],
-            # "diversity_weight": training_kwargs["diversity_weight"],
-            "matching_weight": training_kwargs["matching_weight"],
-            "cell_type_clustering_weight": training_kwargs["cell_type_clustering_weight"],
-            "adv_weight": training_kwargs.get("adv_weight", None),
-            "n_hidden_rna": training_kwargs.get("n_hidden_rna", None),
-            "n_hidden_prot": training_kwargs.get("n_hidden_prot", None),
-            "n_layers": training_kwargs.get("n_layers", None),
-            "latent_dim": training_kwargs.get("latent_dim", None),
-        }
-    )
+#     # Log parameters
+#     mlflow.log_params(
+#         {
+#             "batch_size": training_kwargs["batch_size"],
+#             "use_gpu": training_kwargs["use_gpu"],
+#             "contrastive_weight": training_kwargs["contrastive_weight"],
+#             "similarity_weight": training_kwargs["similarity_weight"],
+#             # "diversity_weight": training_kwargs["diversity_weight"],
+#             "matching_weight": training_kwargs["matching_weight"],
+#             "cell_type_clustering_weight": training_kwargs["cell_type_clustering_weight"],
+#             "adv_weight": training_kwargs.get("adv_weight", None),
+#             "n_hidden_rna": training_kwargs.get("n_hidden_rna", None),
+#             "n_hidden_prot": training_kwargs.get("n_hidden_prot", None),
+#             "n_layers": training_kwargs.get("n_layers", None),
+#             "latent_dim": training_kwargs.get("latent_dim", None),
+#         }
+#     )
 
-    # %%
-    # Get training history from the training plan
-    print("\nGetting training history...")
-    history = rna_vae_new._training_plan.get_history()
-    print("✓ Training history loaded")
+#     # %%
+#     # Get training history from the training plan
+#     print("\nGetting training history...")
+#     history = rna_vae_new._training_plan.get_history()
+#     print("✓ Training history loaded")
 
-    # Log training history metrics
-    mlflow.log_metrics(
-        {
-            "final_train_similarity_loss": history["train_similarity_loss"][-1],
-            "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
-            # "final_train_similarity_weight": history["train_similarity_weight"][-1],
-            "final_train_total_loss": history["train_total_loss"][-1],
-            "final_val_total_loss": history["val_total_loss"][-1],
-            "final_train_cell_type_clustering_loss": history["train_cell_type_clustering_loss"][-1],
-        }
-    )
+#     # Log training history metrics
+#     mlflow.log_metrics(
+#         {
+#             "final_train_similarity_loss": history["train_similarity_loss"][-1],
+#             "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
+#             # "final_train_similarity_weight": history["train_similarity_weight"][-1],
+#             "final_train_total_loss": history["train_total_loss"][-1],
+#             "final_val_total_loss": history["val_total_loss"][-1],
+#             "final_train_cell_type_clustering_loss": history["train_cell_type_clustering_loss"][-1],
+#         }
+#     )
 
-    # %%
-    print("\Get latent representations...")
-    latent_rna = rna_vae_new.adata.obsm["X_scVI"]
-    latent_prot = protein_vae.adata.obsm["X_scVI"]
+#     # %%
+#     print("\Get latent representations...")
+#     latent_rna = rna_vae_new.adata.obsm["X_scVI"]
+#     latent_prot = protein_vae.adata.obsm["X_scVI"]
 
-    # Store latent representations
-    print("\nStoring latent representations...")
-    SCVI_LATENT_KEY = "X_scVI"
-    rna_vae_new.adata.obs["CN"] = rna_vae.adata.obs["CN"].values
-    rna_vae_new.adata.obsm[SCVI_LATENT_KEY] = latent_rna
-    protein_vae.adata.obsm[SCVI_LATENT_KEY] = latent_prot
-    print("✓ Latent representations stored")
+#     # Store latent representations
+#     print("\nStoring latent representations...")
+#     SCVI_LATENT_KEY = "X_scVI"
+#     rna_vae_new.adata.obs["CN"] = rna_vae.adata.obs["CN"].values
+#     rna_vae_new.adata.obsm[SCVI_LATENT_KEY] = latent_rna
+#     protein_vae.adata.obsm[SCVI_LATENT_KEY] = latent_prot
+#     print("✓ Latent representations stored")
 
-    # Prepare AnnData objects
-    print("\nPreparing AnnData objects...")
-    rna_latent = AnnData(rna_vae_new.adata.obsm[SCVI_LATENT_KEY].copy())
-    prot_latent = AnnData(protein_vae.adata.obsm[SCVI_LATENT_KEY].copy())
-    rna_latent.obs = rna_vae_new.adata.obs.copy()
-    prot_latent.obs = protein_vae.adata.obs.copy()
-    print("✓ AnnData objects prepared")
+#     # Prepare AnnData objects
+#     print("\nPreparing AnnData objects...")
+#     rna_latent = AnnData(rna_vae_new.adata.obsm[SCVI_LATENT_KEY].copy())
+#     prot_latent = AnnData(protein_vae.adata.obsm[SCVI_LATENT_KEY].copy())
+#     rna_latent.obs = rna_vae_new.adata.obs.copy()
+#     prot_latent.obs = protein_vae.adata.obs.copy()
+#     print("✓ AnnData objects prepared")
 
-    # Run dimensionality reduction
-    print("\nRunning dimensionality reduction...")
-    sc.pp.pca(rna_latent)
-    sc.pp.neighbors(rna_latent)
-    sc.tl.umap(rna_latent)
-    sc.pp.pca(prot_latent)
-    sc.pp.neighbors(prot_latent)
-    sc.tl.umap(prot_latent)
-    print("✓ Dimensionality reduction completed")
+#     # Run dimensionality reduction
+#     print("\nRunning dimensionality reduction...")
+#     sc.pp.pca(rna_latent)
+#     sc.pp.neighbors(rna_latent)
+#     sc.tl.umap(rna_latent)
+#     sc.pp.pca(prot_latent)
+#     sc.pp.neighbors(prot_latent)
+#     sc.tl.umap(prot_latent)
+#     print("✓ Dimensionality reduction completed")
 
-    # Combine latent spaces
-    print("\nCombining latent spaces...")
-    combined_latent = ad.concat(
-        [rna_latent.copy(), prot_latent.copy()],
-        join="outer",
-        label="modality",
-        keys=["RNA", "Protein"],
-    )
-    combined_major_cell_types = pd.concat(
-        (rna_vae_new.adata.obs["major_cell_types"], protein_vae.adata.obs["major_cell_types"]),
-        join="outer",
-    )
-    combined_latent.obs["major_cell_types"] = combined_major_cell_types
-    combined_latent.obs["cell_types"] = pd.concat(
-        (rna_vae_new.adata.obs["cell_types"], protein_vae.adata.obs["cell_types"]), join="outer"
-    )
-    combined_latent.obs["CN"] = pd.concat(
-        (rna_vae_new.adata.obs["CN"], protein_vae.adata.obs["CN"]), join="outer"
-    )
-    sc.pp.pca(combined_latent)
-    sc.pp.neighbors(combined_latent, n_neighbors=15)
-    try:
-        sc.tl.umap(combined_latent, min_dist=0.1)
-        print("✓ UMAP computed successfully")
-    except Exception as e:
-        print(f"Warning: UMAP computation failed: {str(e)}")
-        print("Continuing with other visualizations...")
-    print("✓ Latent spaces combined")
-    # %%
-    print("\nMatching cells between modalities...")
-    # Calculate pairwise distances between RNA and protein cells in latent space
+#     # Combine latent spaces
+#     print("\nCombining latent spaces...")
+#     combined_latent = ad.concat(
+#         [rna_latent.copy(), prot_latent.copy()],
+#         join="outer",
+#         label="modality",
+#         keys=["RNA", "Protein"],
+#     )
+#     combined_major_cell_types = pd.concat(
+#         (rna_vae_new.adata.obs["major_cell_types"], protein_vae.adata.obs["major_cell_types"]),
+#         join="outer",
+#     )
+#     combined_latent.obs["major_cell_types"] = combined_major_cell_types
+#     combined_latent.obs["cell_types"] = pd.concat(
+#         (rna_vae_new.adata.obs["cell_types"], protein_vae.adata.obs["cell_types"]), join="outer"
+#     )
+#     combined_latent.obs["CN"] = pd.concat(
+#         (rna_vae_new.adata.obs["CN"], protein_vae.adata.obs["CN"]), join="outer"
+#     )
+#     sc.pp.pca(combined_latent)
+#     sc.pp.neighbors(combined_latent, n_neighbors=15)
+#     try:
+#         sc.tl.umap(combined_latent, min_dist=0.1)
+#         print("✓ UMAP computed successfully")
+#     except Exception as e:
+#         print(f"Warning: UMAP computation failed: {str(e)}")
+#         print("Continuing with other visualizations...")
+#     print("✓ Latent spaces combined")
+#     # %%
+#     print("\nMatching cells between modalities...")
+#     # Calculate pairwise distances between RNA and protein cells in latent space
 
-    latent_distances = cdist(rna_latent.X, prot_latent.X)
-    rand_latent_distances = latent_distances[np.random.permutation(len(rna_latent)), :]
+#     latent_distances = cdist(rna_latent.X, prot_latent.X)
+#     rand_latent_distances = latent_distances[np.random.permutation(len(rna_latent)), :]
 
-    # Find closest matches for RNA cells to protein cells
-    prot_matches_in_rna = np.argmin(latent_distances, axis=0).astype(
-        np.int32
-    )  # size of prot use to index rna
+#     # Find closest matches for RNA cells to protein cells
+#     prot_matches_in_rna = np.argmin(latent_distances, axis=0).astype(
+#         np.int32
+#     )  # size of prot use to index rna
 
-    # Calculate matching distances
-    matching_distances = np.min(latent_distances, axis=0)
+#     # Calculate matching distances
+#     matching_distances = np.min(latent_distances, axis=0)
 
-    # Generate random matches for comparison
-    n_rna = len(rna_latent)
-    n_prot = len(prot_latent)
-    # if rna is smaller than protin the original data then sse var rna larget to true
-    if n_rna < n_prot:
-        rna_larger = True
-    else:
-        rna_larger = False
+#     # Generate random matches for comparison
+#     n_rna = len(rna_latent)
+#     n_prot = len(prot_latent)
+#     # if rna is smaller than protin the original data then sse var rna larget to true
+#     if n_rna < n_prot:
+#         rna_larger = True
+#     else:
+#         rna_larger = False
 
-    rand_prot_matches_in_rna = np.argmin(rand_latent_distances, axis=0)
-    rand_matching_distances = np.min(rand_latent_distances, axis=0)
+#     rand_prot_matches_in_rna = np.argmin(rand_latent_distances, axis=0)
+#     rand_matching_distances = np.min(rand_latent_distances, axis=0)
 
-    # %%
+#     # %%
 
-    # Calculate random matching distances
-    # Store matching information in combined_latent.uns
-    combined_latent.uns["cell_matching"] = {
-        "prot_matches_in_rna": prot_matches_in_rna,
-        "matching_distances": matching_distances,
-        "rand_prot_matches_in_rna": rand_prot_matches_in_rna,
-        "rand_matching_distances": rand_matching_distances,
-    }
-    print(f"✓ Matched {len(rna_latent)} RNA cells to protein cells")
-    print(f"✓ Matched {len(prot_latent)} protein cells to RNA cells")
-    print(f"Average random matching distance: {rand_matching_distances.mean().item():.3f}")
-    print(f"Average matching distance: {matching_distances.mean().item():.3f}")
-    # Calculate distances and metrics
-    print("\nCalculating distances and metrics...")
-    # Use the stored matching distances instead of recalculating
-    distances = combined_latent.uns["cell_matching"]["matching_distances"]
-    rand_distances = combined_latent.uns["cell_matching"]["rand_matching_distances"]
-    print("✓ Distances calculated")
-    # %%
-    # Plot training results
-    print("\nPlotting training results...")
-    plot_normalized_losses(history)
-    print("✓ Training losses plotted")
+#     # Calculate random matching distances
+#     # Store matching information in combined_latent.uns
+#     combined_latent.uns["cell_matching"] = {
+#         "prot_matches_in_rna": prot_matches_in_rna,
+#         "matching_distances": matching_distances,
+#         "rand_prot_matches_in_rna": rand_prot_matches_in_rna,
+#         "rand_matching_distances": rand_matching_distances,
+#     }
+#     print(f"✓ Matched {len(rna_latent)} RNA cells to protein cells")
+#     print(f"✓ Matched {len(prot_latent)} protein cells to RNA cells")
+#     print(f"Average random matching distance: {rand_matching_distances.mean().item():.3f}")
+#     print(f"Average matching distance: {matching_distances.mean().item():.3f}")
+#     # Calculate distances and metrics
+#     print("\nCalculating distances and metrics...")
+#     # Use the stored matching distances instead of recalculating
+#     distances = combined_latent.uns["cell_matching"]["matching_distances"]
+#     rand_distances = combined_latent.uns["cell_matching"]["rand_matching_distances"]
+#     print("✓ Distances calculated")
+#     # %%
+#     # Plot training results
+#     print("\nPlotting training results...")
+#     plot_normalized_losses(history)
+#     print("✓ Training losses plotted")
 
-    plot_umap_visualizations_original_data(rna_vae_new.adata, protein_vae.adata)
-    # Plot spatial data
-    print("\nPlotting spatial data...")
-    plot_spatial_data(protein_vae.adata)
-    print("✓ Spatial data plotted")
+#     plot_umap_visualizations_original_data(rna_vae_new.adata, protein_vae.adata)
+#     # Plot spatial data
+#     print("\nPlotting spatial data...")
+#     plot_spatial_data(protein_vae.adata)
+#     print("✓ Spatial data plotted")
 
-    # Plot latent representations
-    print("\nPlotting latent representations...")
-    plot_latent_pca_both_modalities_cn(
-        latent_rna,
-        latent_prot,
-        rna_vae_new.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae_new.adata.obs.index)),
-        index_prot=range(len(protein_vae.adata.obs.index)),
-    )
-    plot_latent_pca_both_modalities_by_celltype(
-        rna_vae_new.adata, protein_vae.adata, latent_rna, latent_prot
-    )
-    print("✓ Latent representations plotted")
+#     # Plot latent representations
+#     print("\nPlotting latent representations...")
+#     plot_latent_pca_both_modalities_cn(
+#         latent_rna,
+#         latent_prot,
+#         rna_vae_new.adata,
+#         protein_vae.adata,
+#         index_rna=range(len(rna_vae_new.adata.obs.index)),
+#         index_prot=range(len(protein_vae.adata.obs.index)),
+#     )
+#     plot_latent_pca_both_modalities_by_celltype(
+#         rna_vae_new.adata, protein_vae.adata, latent_rna, latent_prot
+#     )
+#     print("✓ Latent representations plotted")
 
-    # Plot distance distributions
-    print("\nPlotting distance distributions...")
-    compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances)
-    print("✓ Distance distributions plotted")
+#     # Plot distance distributions
+#     print("\nPlotting distance distributions...")
+#     compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances)
+#     print("✓ Distance distributions plotted")
 
-    # Plot combined visualizations
-    print("\nPlotting combined visualizations...")
-    plot_combined_latent_space(combined_latent)
+#     # Plot combined visualizations
+#     print("\nPlotting combined visualizations...")
+#     plot_combined_latent_space(combined_latent)
 
-    plot_cell_type_distributions(combined_latent, 3)
+#     plot_cell_type_distributions(combined_latent, 3)
 
-    print("✓ Combined visualizations plotted")
+#     print("✓ Combined visualizations plotted")
 
-    sc.pl.umap(
-        combined_latent,
-        color=["CN", "modality", "cell_types"],
-        title=[
-            "Combined_Latent_UMAP_CN",
-            "Combined_Latent_UMAP_Modality",
-            "Combined_Latent_UMAP_CellTypes",
-        ],
-        alpha=0.5,
-    )
+#     sc.pl.umap(
+#         combined_latent,
+#         color=["CN", "modality", "cell_types"],
+#         title=[
+#             "Combined_Latent_UMAP_CN",
+#             "Combined_Latent_UMAP_Modality",
+#             "Combined_Latent_UMAP_CellTypes",
+#         ],
+#         alpha=0.5,
+#     )
 
-    sc.pl.pca(
-        combined_latent,
-        color=["CN", "modality"],
-        title=["Combined_Latent_PCA_CN", "Combined_Latent_PCA_Modality"],
-        alpha=0.5,
-    )
+#     sc.pl.pca(
+#         combined_latent,
+#         color=["CN", "modality"],
+#         title=["Combined_Latent_PCA_CN", "Combined_Latent_PCA_Modality"],
+#         alpha=0.5,
+#     )
 
-    print("✓ UMAP visualizations plotted")
+#     print("✓ UMAP visualizations plotted")
 
-    # Plot archetype and embedding visualizations
-    print("\nPlotting archetype and embedding visualizations...")
-    plot_archetype_embedding(rna_vae_new, protein_vae)
+#     # Plot archetype and embedding visualizations
+#     print("\nPlotting archetype and embedding visualizations...")
+#     plot_archetype_embedding(rna_vae_new, protein_vae)
 
-    plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae)
+#     plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae)
 
-    print("✓ Archetype and embedding visualizations plotted")
+#     print("✓ Archetype and embedding visualizations plotted")
 
-    # Calculate and display final metrics
-    print("\nCalculating final metrics...")
-    mixing_result = mixing_score(
-        latent_rna,
-        latent_prot,
-        rna_vae_new.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae_new.adata)),
-        index_prot=range(len(protein_vae.adata)),
-        plot_flag=True,
-    )
-    print(f"✓ Mixing score: {mixing_result}")
+#     # Calculate and display final metrics
+#     print("\nCalculating final metrics...")
+#     mixing_result = mixing_score(
+#         latent_rna,
+#         latent_prot,
+#         rna_vae_new.adata,
+#         protein_vae.adata,
+#         index_rna=range(len(rna_vae_new.adata)),
+#         index_prot=range(len(protein_vae.adata)),
+#         plot_flag=True,
+#     )
+#     print(f"✓ Mixing score: {mixing_result}")
 
-    nmi_cell_types_cn_rna = adjusted_mutual_info_score(
-        rna_vae_new.adata.obs["cell_types"], rna_vae_new.adata.obs["CN"]
-    )
-    nmi_cell_types_cn_prot = adjusted_mutual_info_score(
-        protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
-    )
-    # %%
-    nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna],
-        protein_vae.adata.obs["cell_types"].values,
-    )
-    matches = (
-        rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna]
-        == protein_vae.adata.obs["cell_types"].values
-    )
+#     nmi_cell_types_cn_rna = adjusted_mutual_info_score(
+#         rna_vae_new.adata.obs["cell_types"], rna_vae_new.adata.obs["CN"]
+#     )
+#     nmi_cell_types_cn_prot = adjusted_mutual_info_score(
+#         protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
+#     )
+#     # %%
+#     nmi_cell_types_modalities = adjusted_mutual_info_score(
+#         rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna],
+#         protein_vae.adata.obs["cell_types"].values,
+#     )
+#     matches = (
+#         rna_vae_new.adata.obs["cell_types"].values[prot_matches_in_rna]
+#         == protein_vae.adata.obs["cell_types"].values
+#     )
 
-    accuracy = matches.sum() / len(matches)
+#     accuracy = matches.sum() / len(matches)
 
-    print(f"\nFinal Metrics:")
-    print(f"Normalized Mutual Information (RNA CN): {nmi_cell_types_cn_rna:.3f}")
-    print(f"Normalized Mutual Information (Protein CN): {nmi_cell_types_cn_prot:.3f}")
-    print(f"Normalized Mutual Information (Cross-modality): {nmi_cell_types_modalities:.3f}")
-    print(f"Cell Type Matching Accuracy: {accuracy:.4f}")
-    print("✓ Final metrics calculated")
+#     print(f"\nFinal Metrics:")
+#     print(f"Normalized Mutual Information (RNA CN): {nmi_cell_types_cn_rna:.3f}")
+#     print(f"Normalized Mutual Information (Protein CN): {nmi_cell_types_cn_prot:.3f}")
+#     print(f"Normalized Mutual Information (Cross-modality): {nmi_cell_types_modalities:.3f}")
+#     print(f"Cell Type Matching Accuracy: {accuracy:.4f}")
+#     print("✓ Final metrics calculated")
 
-    # Log final metrics
-    mlflow.log_metrics(
-        {
-            "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
-            "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
-            "nmi_cell_types_modalities": nmi_cell_types_modalities,
-            "cell_type_matching_accuracy": accuracy,
-            "mixing_score_ilisi": mixing_result["iLISI"],
-            "mixing_score_clisi": mixing_result["cLISI"],
-        }
-    )
+#     # Log final metrics
+#     mlflow.log_metrics(
+#         {
+#             "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
+#             "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
+#             "nmi_cell_types_modalities": nmi_cell_types_modalities,
+#             "cell_type_matching_accuracy": accuracy,
+#             "mixing_score_ilisi": mixing_result["iLISI"],
+#             "mixing_score_clisi": mixing_result["cLISI"],
+#         }
+#     )
 
-    # Save results
-    print("\nSaving results...")
-    clean_uns_for_h5ad(rna_vae_new.adata)
-    clean_uns_for_h5ad(protein_vae.adata)
-    save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
-    time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
-    os.makedirs(save_dir, exist_ok=True)
+#     # Save results
+#     print("\nSaving results...")
+#     clean_uns_for_h5ad(rna_vae_new.adata)
+#     clean_uns_for_h5ad(protein_vae.adata)
+#     save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
+#     time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
+#     os.makedirs(save_dir, exist_ok=True)
 
-    print(
-        f"\nTrained RNA VAE dimensions: {rna_vae_new.adata.shape[0]} samples x {rna_vae_new.adata.shape[1]} features"
-    )
-    print(
-        f"Trained Protein VAE dimensions: {protein_vae.adata.shape[0]} samples x {protein_vae.adata.shape[1]} features\n"
-    )
+#     print(
+#         f"\nTrained RNA VAE dimensions: {rna_vae_new.adata.shape[0]} samples x {rna_vae_new.adata.shape[1]} features"
+#     )
+#     print(
+#         f"Trained Protein VAE dimensions: {protein_vae.adata.shape[0]} samples x {protein_vae.adata.shape[1]} features\n"
+#     )
 
-    sc.write(Path(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad"), rna_vae_new.adata)
-    sc.write(Path(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad"), protein_vae.adata)
-    print("✓ Results saved")
+#     sc.write(Path(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad"), rna_vae_new.adata)
+#     sc.write(Path(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad"), protein_vae.adata)
+#     print("✓ Results saved")
 
-    # Log artifacts
-    mlflow.log_artifact(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad")
-    mlflow.log_artifact(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad")
+#     # Log artifacts
+#     mlflow.log_artifact(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad")
+#     mlflow.log_artifact(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad")
 
-    # End MLflow run
-    mlflow.end_run()
+#     # End MLflow run
+#     mlflow.end_run()
 
-    print("\nAll visualization and analysis steps completed!")
+#     print("\nAll visualization and analysis steps completed!")
 
-    # %%
+#     # %%

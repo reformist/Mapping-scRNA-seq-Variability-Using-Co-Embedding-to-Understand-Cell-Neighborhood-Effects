@@ -255,7 +255,7 @@ major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"
 minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
 if "major_cell_types" not in adata_1_rna.obs.columns:
     adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
-major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
+    major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 
 # Compute PCA and UMAP for both modalities
 sc.pp.pca(adata_1_rna)
