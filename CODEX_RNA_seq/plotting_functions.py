@@ -579,6 +579,7 @@ def plot_normalized_losses(history):
 
     # Normalize each loss
     normalized_losses = {}
+    labels = {}
     for key in loss_keys:
         values = history[key]
         if len(values) > 0:  # Only process non-empty lists
@@ -588,6 +589,8 @@ def plot_normalized_losses(history):
             if len(values) > 0:  # Check again after filtering
                 min_val = np.min(values)
                 max_val = np.max(values)
+                label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
+                labels[key] = label
                 if max_val > min_val:  # Avoid division by zero
                     normalized_losses[key] = (values - min_val) / (max_val - min_val)
 
@@ -595,8 +598,7 @@ def plot_normalized_losses(history):
     for key, values in normalized_losses.items():
         min_val = np.min(values)
         max_val = np.max(values)
-        label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
-        plt.plot(values, label=label, alpha=0.7)
+        plt.plot(values, label=labels[key], alpha=0.7)
 
     plt.title("Normalized Training Losses")
     plt.xlabel("Step")
@@ -957,22 +959,27 @@ def plot_archetype_visualizations(
 def plot_umap_visualizations_original_data(adata_rna_subset, adata_prot_subset):
     """Generate UMAP visualizations for original RNA and protein data"""
     print("\nGenerating UMAP visualizations...")
+    if "connectivities" not in adata_rna_subset.obsm:
+        sc.pp.neighbors(adata_rna_subset)
+    if "connectivities" not in adata_prot_subset.obsm:
+        sc.pp.neighbors(adata_prot_subset)
     sc.tl.umap(adata_rna_subset)
     sc.tl.umap(adata_prot_subset)
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
     sc.pl.umap(
         adata_rna_subset,
-        color="archetype_label",
-        title="Original RNA cells associated Archetypes",
+        color=["CN", "cell_types", "archetype_label"],
+        title=["RNA exp UMAP, CN", "RNA exp UMAP, cell types", "RNA exp UMAP, archetype label"],
         show=False,
     )
 
-    plt.subplot(1, 2, 2)
     sc.pl.umap(
         adata_prot_subset,
-        color="archetype_label",
-        title="Original Protein cells associated Archetypes",
+        color=["CN", "cell_types", "archetype_label"],
+        title=[
+            "Protein exp UMAP, CN",
+            "Protein exp UMAP, cell types",
+            "Protein exp UMAP, archetype label",
+        ],
         show=False,
     )
     plt.tight_layout()

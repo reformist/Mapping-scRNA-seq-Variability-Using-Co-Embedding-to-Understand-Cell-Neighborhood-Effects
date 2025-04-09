@@ -126,6 +126,7 @@ from plotting_functions import (
     plot_rna_protein_matching_means_and_scale,
     plot_similarity_loss_history,
     plot_spatial_data,
+    plot_umap_visualizations_original_data,
 )
 
 from bar_nick_utils import (
@@ -265,7 +266,7 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
-        indices = batch["labels"].detach().cpu().numpy().flatten()
+        indices = range(self.batch_size)
         indices_rna = np.random.choice(
             range(len(self.rna_vae.adata)),
             size=len(indices),
@@ -279,25 +280,27 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         indices_prot = np.sort(indices_prot)
         rna_batch = self._get_rna_batch(batch, indices_rna)
-        _, _, rna_loss_output = self.rna_vae.module(
+        if rna_batch["X"].shape[0] != self.batch_size:
+            raise ValueError("RNA batch size is not equal to the batch size")
+        rna_inference_outputs, _, rna_loss_output = self.rna_vae.module(
             rna_batch, loss_kwargs={"kl_weight": self.kl_weight_rna}
         )
         protein_batch = self._get_protein_batch(batch, indices_prot)
-        _, _, protein_loss_output = self.protein_vae.module(
+        protein_inference_outputs, _, protein_loss_output = self.protein_vae.module(
             protein_batch, loss_kwargs={"kl_weight": self.kl_weight_prot}
         )
 
-        rna_inference_outputs = self.rna_vae.module.inference(
-            rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
-        )
+        # rna_inference_outputs = self.rna_vae.module.inference(
+        #     rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
+        # )
         index = rna_batch["labels"]
         rna_latent_mean = rna_inference_outputs["qz"].mean
         rna_latent_std = rna_inference_outputs["qz"].scale
         rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
         rna_latent_std_numpy = rna_latent_std.detach().cpu().numpy()
-        protein_inference_outputs = self.protein_vae.module.inference(
-            protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
-        )
+        # protein_inference_outputs = self.protein_vae.module.inference(
+        #     protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
+        # )
         protein_latent_mean = protein_inference_outputs["qz"].mean
         protein_latent_std = protein_inference_outputs["qz"].scale
         protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
@@ -368,6 +371,13 @@ class DualVAETrainingPlan(TrainingPlan):
         matching_loss = stress_loss - reward + exact_pairs
         rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
         prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
+
+        # # Ensure both tensors have the same dimensions
+        # if rna_distances.shape != prot_distances.shape:
+        #     min_size = min(rna_distances.shape[0], prot_distances.shape[0])
+        #     rna_distances = rna_distances[:min_size, :min_size]
+        #     prot_distances = prot_distances[:min_size, :min_size]
+
         distances = 5 * prot_distances + rna_distances
 
         rna_size = prot_size = rna_batch["X"].shape[0]
@@ -532,12 +542,12 @@ class DualVAETrainingPlan(TrainingPlan):
         self.active_similarity_loss_active_history.append(self.similarity_active)
 
         total_loss = (
-            rna_loss_output.loss
-            + protein_loss_output.loss
+            # rna_loss_output.loss
+            # + protein_loss_output.loss
             # + contrastive_loss
             # + adv_loss # dont remove comment for now
             # + matching_loss
-            # +similarity_loss
+            +similarity_loss
             # + diversity_loss # dont remove comment for now
         )
 
@@ -606,7 +616,7 @@ class DualVAETrainingPlan(TrainingPlan):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        indices = batch["labels"].detach().cpu().numpy().flatten()
+        indices = range(self.batch_size)
         indices_prot = np.random.choice(
             range(len(self.protein_vae.adata)),
             size=len(indices),
@@ -622,15 +632,9 @@ class DualVAETrainingPlan(TrainingPlan):
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
-        _, _, rna_loss_output = self.rna_vae.module(rna_batch)
-        _, _, protein_loss_output = self.protein_vae.module(protein_batch)
+        rna_inference_outputs, _, rna_loss_output = self.rna_vae.module(rna_batch)
+        protein_inference_outputs, _, protein_loss_output = self.protein_vae.module(protein_batch)
 
-        rna_inference_outputs = self.rna_vae.module.inference(
-            rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
-        )
-        protein_inference_outputs = self.protein_vae.module.inference(
-            protein_batch["X"], batch_index=protein_batch["batch"], n_samples=1
-        )
         rna_latent_mean = rna_inference_outputs["qz"].mean
         rna_latent_std = rna_inference_outputs["qz"].scale
         protein_latent_mean = protein_inference_outputs["qz"].mean
@@ -735,8 +739,6 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_losses = []
 
     def _get_protein_batch(self, batch, indices):
-        indices = np.sort(indices)
-
         protein_data = self.protein_vae.adata[indices]
         X = protein_data.X
         if issparse(X):
@@ -758,13 +760,6 @@ class DualVAETrainingPlan(TrainingPlan):
         return protein_batch
 
     def _get_rna_batch(self, batch, indices):
-        indices = batch["labels"].detach().cpu().numpy().flatten()
-        indices = np.random.choice(
-            range(len(self.rna_vae.adata)),
-            size=len(indices),
-            replace=True if len(indices) > len(self.rna_vae.adata) else False,
-        )
-        indices = np.sort(indices)
         rna_data = self.rna_vae.adata[indices]
         X = rna_data.X
         if issparse(X):
@@ -806,6 +801,65 @@ class DualVAETrainingPlan(TrainingPlan):
 
         print("✓ Early stopping artifacts saved")
 
+    def on_train_end(self):
+        """Called when training ends."""
+        print("\nTraining completed!")
+
+        # Get final latent representations
+        with torch.no_grad():
+            # Get RNA latent
+            rna_data = self.rna_vae.adata.X
+            if issparse(rna_data):
+                rna_data = rna_data.toarray()
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_batch = torch.tensor(
+                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            rna_inference = self.rna_vae.module.inference(
+                rna_tensor, batch_index=rna_batch, n_samples=1
+            )
+            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+
+            # Get protein latent
+            prot_data = self.protein_vae.adata.X
+            if issparse(prot_data):
+                prot_data = prot_data.toarray()
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_batch = torch.tensor(
+                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            prot_inference = self.protein_vae.module.inference(
+                prot_tensor, batch_index=prot_batch, n_samples=1
+            )
+            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+
+        # Store in adata
+        self.rna_vae.adata.obsm["X_latent"] = rna_latent
+        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+
+        # Log final metrics
+        print(f"Final training loss: {self.train_losses[-1]}")
+        print(f"Final validation loss: {self.val_losses[-1]}")
+
+        # Save model checkpoints
+        save_dir = "model_checkpoints"
+        os.makedirs(save_dir, exist_ok=True)
+        self.rna_vae.save(f"{save_dir}/rna_vae_final", overwrite=True)
+        self.protein_vae.save(f"{save_dir}/protein_vae_final", overwrite=True)
+
+        # Plot final results
+        if plot_flag:
+            plot_latent_pca_both_modalities(
+                rna_latent,
+                prot_latent,
+                self.rna_vae.adata,
+                self.protein_vae.adata,
+                index_rna=range(len(self.rna_vae.adata.obs.index)),
+                index_prot=range(len(self.protein_vae.adata.obs.index)),
+            )
+
 
 # %%
 def train_vae(
@@ -817,7 +871,7 @@ def train_vae(
     contrastive_weight=1.0,
     similarity_weight=1000.0,
     diversity_weight=0.1,
-    matching_weight=1.0,
+    matching_weight=100.0,
     train_size=0.9,
     check_val_every_n_epoch=1,
     adv_weight=0.1,
@@ -979,7 +1033,7 @@ adata_prot_subset = sc.AnnData(
 
 
 training_kwargs = {
-    "max_epochs": 5,
+    "max_epochs": 2,
     "batch_size": 1200,
     "train_size": 0.9,
     "validation_size": 0.1,
@@ -992,11 +1046,14 @@ training_kwargs = {
     "accumulate_grad_batches": 1,
     "lr": 1e-4,
     "use_gpu": True,
-    "plot_x_times": 10,
+    "plot_x_times": 3,
     "contrastive_weight": 10.0,
-    "similarity_weight": 1000.0,
+    "similarity_weight": 10000.0,
     "matching_weight": 1.0,
+    "kl_weight_rna": 1.0,
+    "kl_weight_prot": 3000.0,
 }
+# %%
 rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
     adata_rna_subset=adata_rna_subset,
     adata_prot_subset=adata_prot_subset,
@@ -1056,25 +1113,53 @@ print("✓ Models prepared")
 # Generate latent representatiindices = np.clip(indtensor(self.protein_vae.adata[indexices, 0, max_idx)ons
 print("\nGenerating latent representations...")
 with torch.no_grad():
-    batch = torch.tensor(rna_vae_new.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device)
-    latent_rna = rna_vae_new.module.inference(
-        torch.tensor(rna_vae_new.adata.X), batch_index=batch, n_samples=1
-    )
-    latent_rna = latent_rna["z"]
-    latent_rna = latent_rna.cpu().numpy()
+    # Prepare input tensors
+    # rna_tensors = {
+    #     "X": torch.tensor(rna_vae_new.adata.X, dtype=torch.float32).to(device),
+    #     "batch": torch.tensor(rna_vae_new.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device),
+    #     "labels": torch.tensor(rna_vae_new.adata.obs["index_col"].values, dtype=torch.long).to(device)
+    # }
+    # prot_tensors = {
+    #     "X": torch.tensor(protein_vae.adata.X, dtype=torch.float32).to(device),
+    #     "batch": torch.tensor(protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device),
+    #     "labels": torch.tensor(protein_vae.adata.obs["index_col"].values, dtype=torch.long).to(device)
+    # }
 
-    latent_prot = protein_vae.module.inference(
-        torch.tensor(protein_vae.adata.X), batch_index=batch, n_samples=1
-    )
-    latent_prot = latent_prot["z"]
-    latent_prot = latent_prot.cpu().numpy()
-    if latent_rna_before is not None:
-        # chekc if latent_rna_before is the same as latent_rna
-        if np.allclose(latent_rna_before, latent_rna):
-            raise ValueError("Latent representations are the same as before training")
-    if latent_prot_before is not None:
-        if np.allclose(latent_prot_before, latent_prot):
-            raise ValueError("Latent representations are the same as before training")
+    # rna_inference_outputs, _, rna_loss_output = rna_vae_new.module(
+    #     rna_tensors, loss_kwargs={"kl_weight": 1}
+    # )
+    # latent_rna = rna_inference_outputs["z"].detach().cpu().numpy()
+
+    # protein_inference_outputs, _, protein_loss_output = protein_vae.module(
+    #     prot_tensors, loss_kwargs={"kl_weight": 1}
+    # )
+    # latent_prot = protein_inference_outputs["z"].detach().cpu().numpy()
+    # if latent_rna_before is not None:
+    #     # chekc if latent_rna_before is the same as latent_rna
+    #     if np.allclose(latent_rna_before, latent_rna):
+    #         raise ValueError("Latent representations are the same as before training")
+    # if latent_prot_before is not None:
+    #     if np.allclose(latent_prot_before, latent_prot):
+    #         raise ValueError("Latent representations are the same as before training")
+    # latent_rna = rna_vae_new.get_latent_representation()
+    # latent_prot = protein_vae.get_latent_representation()
+    latent_rna = rna_vae_new.adata.obsm["X_latent"]
+    latent_prot = protein_vae.adata.obsm["X_latent"]
+    # with torch.no_grad():
+    #     inference_outputs = rna_vae_new.module.inference(
+    #     rna_tensors['X'],
+    #     batch_index=rna_vae_new.adata.obs["_scvi_batch"].values,
+    #         n_samples=1
+    #     )
+    #     latent_rna = inference_outputs["qz"].mean.detach().cpu().numpy()
+
+    #     inference_outputs = protein_vae.module.inference(
+    #     prot_tensors['X'],
+    #     batch_index=protein_vae.adata.obs["_scvi_batch"].values,
+    #         n_samples=1
+    #     )
+    #     latent_prot = inference_outputs["qz"].mean.detach().cpu().numpy()
+
 
 # Store latent representations
 print("\nStoring latent representations...")
@@ -1182,7 +1267,7 @@ print("\nPlotting training results...")
 plot_normalized_losses(history)
 print("✓ Training losses plotted")
 
-
+plot_umap_visualizations_original_data(rna_vae_new.adata, protein_vae.adata)
 # Plot spatial data
 print("\nPlotting spatial data...")
 plot_spatial_data(protein_vae.adata)
