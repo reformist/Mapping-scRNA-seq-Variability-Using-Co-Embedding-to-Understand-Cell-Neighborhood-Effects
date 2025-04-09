@@ -10,6 +10,12 @@ import numpy as np
 import torch
 from sklearn.model_selection import ParameterGrid
 
+# Set up paths once
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(project_root)
+
 from CODEX_RNA_seq.training_utils import (
     Tee,
     calculate_metrics,
@@ -35,13 +41,6 @@ sys.stdout = Tee(sys.stdout, log_file)
 
 print(f"Starting hyperparameter search at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Log file: logs/hyperparameter_search_{log_timestamp}.log")
-
-
-# Set up paths once
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-os.chdir(project_root)
 
 import warnings
 from pathlib import Path
@@ -82,22 +81,22 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "max_epochs": [200],  # Changed from n_epochs to max_epochs to match train_vae
-    "batch_size": [1000, 2000, 3000],
+    "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [1.0, 10.0, 100.0],
-    "similarity_weight": [100.0, 1000.0, 10000.0],
-    "diversity_weight": [0.1],
-    "matching_weight": [10000.0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [0.1, 1.0, 10.0],  # Added cell type clustering weight
+    "contrastive_weight": [0.0, 100.0, 100_000],
+    "similarity_weight": [0.0, 1000.0, 100000.0],
+    "diversity_weight": [0.0],
+    "matching_weight": [0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
+    "cell_type_clustering_weight": [0, 10.0, 1000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
-    "n_hidden_prot": [32, 64],
+    "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
     "kl_weight_rna": [0.1, 1.0],
     "kl_weight_prot": [1.0, 10.0],
     "adv_weight": [0.0],
-    "train_size": [0.9],
-    "validation_size": [0.1],
+    "train_size": [0.85],
+    "validation_size": [0.15],
     "check_val_every_n_epoch": [100000],
     "gradient_clip_val": [1.0],
 }

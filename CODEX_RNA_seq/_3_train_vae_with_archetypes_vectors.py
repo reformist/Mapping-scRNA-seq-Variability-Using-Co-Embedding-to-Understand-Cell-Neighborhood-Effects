@@ -43,6 +43,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from datetime import datetime
+from pathlib import Path
+
 import plotting_functions as pf
 
 import bar_nick_utils
@@ -183,34 +186,15 @@ if not hasattr(sc.tl.umap, "_is_wrapped"):
     sc.tl.umap._is_wrapped = True
 np.random.seed(42)
 torch.manual_seed(42)
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
 pd.set_option("display.max_columns", 10)
 pd.set_option("display.max_rows", 10)
 warnings.filterwarnings("ignore")
 pd.options.display.max_rows = 10
 pd.options.display.max_columns = 10
 np.set_printoptions(threshold=100)
+
 np.random.seed(0)
-save_dir = "CODEX_RNA_seq/data/processed_data"
 
-
-# %%
-# read in the data
-cwd = os.getcwd()
-save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
-
-# Use get_latest_file to find the most recent files
-adata_rna_subset = sc.read_h5ad(
-    get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
-)
-adata_prot_subset = sc.read_h5ad(
-    get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
-)
-
-# Subsample the data for faster testing
-print(f"Original RNA dataset shape: {adata_rna_subset.shape}")
-print(f"Original protein dataset shape: {adata_prot_subset.shape}")
-# Load config if exists
 config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 if os.path.exists(config_path):
     with open(config_path, "r") as f:
@@ -223,15 +207,6 @@ else:
     plot_flag = True
 # Subsample to 20% of the cells for testing
 # For reproducibility
-
-rna_sample_size = min(len(adata_rna_subset), num_rna_cells)
-prot_sample_size = min(len(adata_prot_subset), num_protein_cells)
-adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
-adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
-
-
-print(f"Subsampled RNA dataset shape: {adata_rna_subset.shape}")
-print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
 
 
 # %%
@@ -251,7 +226,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
         train_size = kwargs.pop("train_size", 0.9)
         validation_size = kwargs.pop("validation_size", 0.1)
-
+        device = kwargs.pop("device", "cuda:0" if torch.cuda.is_available() else "cpu")
         # Verify train and validation sizes sum to 1
         if abs(train_size + validation_size - 1.0) > 1e-6:
             raise ValueError("train_size + validation_size must sum to 1.0")
@@ -346,7 +321,7 @@ class DualVAETrainingPlan(TrainingPlan):
             "rna_adata_shape": list(self.rna_vae.adata.shape),
             "protein_adata_shape": list(self.protein_vae.adata.shape),
             "latent_dim": self.rna_vae.module.n_latent,
-            "device": str(device),
+            "device": str(self.device),
             "timestamp": self.run_timestamp,
         }
 
@@ -373,7 +348,7 @@ class DualVAETrainingPlan(TrainingPlan):
             lr=self.lr,
             weight_decay=1e-5,
         )
-        d = {  # maybe add this?
+        d = {
             "optimizer": optimizer,
             "gradient_clip_val": 1.0,  # Critical for stability
             "gradient_clip_algorithm": "value",
@@ -508,7 +483,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         rna_size = prot_size = rna_batch["X"].shape[0]
         mixed_latent = torch.cat([rna_latent_mean, protein_latent_mean], dim=0)
-        batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(device)
+        batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(self.device)
         batch_pred = self.batch_classifier(mixed_latent)
         adv_loss = -F.cross_entropy(batch_pred, batch_labels.long())
 
@@ -523,21 +498,21 @@ class DualVAETrainingPlan(TrainingPlan):
             self.first_step = False
         cell_neighborhood_info_protein = torch.tensor(
             self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         cell_neighborhood_info_rna = torch.tensor(
             self.rna_vae.adata[indices_rna].obs["CN"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         cell_neighborhood_info_prot = torch.tensor(
             self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         rna_major_cell_type = (
             torch.tensor(self.rna_vae.adata[indices_rna].obs["major_cell_types"].values.codes)
-            .to(device)
+            .to(self.device)
             .squeeze()
         )
         protein_major_cell_type = (
             torch.tensor(self.protein_vae.adata[indices_prot].obs["major_cell_types"].values.codes)
-            .to(device)
+            .to(self.device)
             .squeeze()
         )
 
@@ -605,10 +580,10 @@ class DualVAETrainingPlan(TrainingPlan):
         # Compute cell type clustering loss to keep cell types in distinct clusters
         rna_cell_types = torch.tensor(
             self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         protein_cell_types = torch.tensor(
             self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
 
         # Combine cell types and latent representations from both modalities
         combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
@@ -619,7 +594,7 @@ class DualVAETrainingPlan(TrainingPlan):
         num_cell_types = len(unique_cell_types)
 
         # Skip the cell type clustering loss if there's only one cell type
-        cell_type_clustering_loss = torch.tensor(0.0).to(device)
+        cell_type_clustering_loss = torch.tensor(0.0).to(self.device)
 
         if num_cell_types > 1:
             # Calculate centroids for each cell type in latent space
@@ -656,7 +631,7 @@ class DualVAETrainingPlan(TrainingPlan):
                     # Convert to torch tensor
                     original_centroids = torch.tensor(
                         np.array(original_centroids), dtype=torch.float32
-                    ).to(device)
+                    ).to(self.device)
 
                     # Compute affinity/structure matrix (using Gaussian kernel)
                     sigma = torch.cdist(original_centroids, original_centroids).mean()
@@ -665,7 +640,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
                     # Set diagonal to 0 to focus on between-cluster relationships
                     self.original_structure_matrix = self.original_structure_matrix * (
-                        1 - torch.eye(len(all_unique_types), device=device)
+                        1 - torch.eye(len(all_unique_types), device=self.device)
                     )
 
                 # Compute current structure matrix in latent space
@@ -676,7 +651,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
                 # Set diagonal to 0 to focus on between-cluster relationships
                 current_structure_matrix = current_structure_matrix * (
-                    1 - torch.eye(len(centroids), device=device)
+                    1 - torch.eye(len(centroids), device=self.device)
                 )
 
                 # Now compute the structure preservation loss
@@ -1004,17 +979,17 @@ class DualVAETrainingPlan(TrainingPlan):
 
         rna_size = prot_size = rna_batch["X"].shape[0]
         mixed_latent = torch.cat([rna_latent_mean, protein_latent_mean], dim=0)
-        batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(device)
+        batch_labels = torch.cat([torch.zeros(rna_size), torch.ones(prot_size)]).to(self.device)
         batch_pred = self.batch_classifier(mixed_latent)
         adv_loss = -F.cross_entropy(batch_pred, batch_labels.long())
 
         # Calculate similarity loss
         cell_neighborhood_info_protein = torch.tensor(
             self.protein_vae.adata[indices_prot].obs["CN"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         cell_neighborhood_info_rna = torch.tensor(
             self.rna_vae.adata[indices_rna].obs["CN"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         same_cn_mask = cell_neighborhood_info_rna.unsqueeze(
             0
         ) == cell_neighborhood_info_protein.unsqueeze(1)
@@ -1025,15 +1000,15 @@ class DualVAETrainingPlan(TrainingPlan):
             )
             similarity_loss = similarity_loss_raw * self.similarity_weight
         else:
-            similarity_loss = torch.tensor(0.0).to(device)
+            similarity_loss = torch.tensor(0.0).to(self.device)
 
         # Calculate cell type clustering loss
         rna_cell_types = torch.tensor(
             self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
         protein_cell_types = torch.tensor(
             self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
-        ).to(device)
+        ).to(self.device)
 
         # Combine cell types and latent representations from both modalities
         combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
@@ -1044,7 +1019,7 @@ class DualVAETrainingPlan(TrainingPlan):
         num_cell_types = len(unique_cell_types)
 
         # Skip the cell type clustering loss if there's only one cell type
-        cell_type_clustering_loss = torch.tensor(0.0).to(device)
+        cell_type_clustering_loss = torch.tensor(0.0).to(self.device)
 
         if num_cell_types > 1:
             # Calculate centroids for each cell type in latent space
@@ -1090,7 +1065,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
                     # Set diagonal to 0 to focus on between-cluster relationships
                     self.original_structure_matrix = self.original_structure_matrix * (
-                        1 - torch.eye(len(all_unique_types), device=device)
+                        1 - torch.eye(len(all_unique_types), device=self.device)
                     )
 
                 # Compute current structure matrix in latent space
@@ -1101,7 +1076,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
                 # Set diagonal to 0 to focus on between-cluster relationships
                 current_structure_matrix = current_structure_matrix * (
-                    1 - torch.eye(len(centroids), device=device)
+                    1 - torch.eye(len(centroids), device=self.device)
                 )
 
                 # Now compute the structure preservation loss
@@ -1203,10 +1178,10 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_data = self.rna_vae.adata[self.val_indices_rna].X
             if issparse(rna_data):
                 rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
             rna_batch = torch.tensor(
                 self.rna_vae.adata[self.val_indices_rna].obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
+            ).to(self.device)
 
             rna_inference = self.rna_vae.module.inference(
                 rna_tensor, batch_index=rna_batch, n_samples=1
@@ -1219,11 +1194,11 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_data = self.protein_vae.adata[self.val_indices_prot].X
             if issparse(prot_data):
                 prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
             prot_batch = torch.tensor(
                 self.protein_vae.adata[self.val_indices_prot].obs["_scvi_batch"].values,
                 dtype=torch.long,
-            ).to(device)
+            ).to(self.device)
 
             prot_inference = self.protein_vae.module.inference(
                 prot_tensor, batch_index=prot_batch, n_samples=1
@@ -1375,10 +1350,10 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_data = self.rna_vae.adata.X
             if issparse(rna_data):
                 rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
             rna_batch = torch.tensor(
                 self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
+            ).to(self.device)
 
             rna_inference = self.rna_vae.module.inference(
                 rna_tensor, batch_index=rna_batch, n_samples=1
@@ -1389,10 +1364,10 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_data = self.protein_vae.adata.X
             if issparse(prot_data):
                 prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
             prot_batch = torch.tensor(
                 self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
+            ).to(self.device)
 
             prot_inference = self.protein_vae.module.inference(
                 prot_tensor, batch_index=prot_batch, n_samples=1
@@ -1450,10 +1425,10 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_data = self.rna_vae.adata.X
             if issparse(rna_data):
                 rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
             rna_batch = torch.tensor(
                 self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
+            ).to(self.device)
 
             rna_inference = self.rna_vae.module.inference(
                 rna_tensor, batch_index=rna_batch, n_samples=1
@@ -1464,10 +1439,10 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_data = self.protein_vae.adata.X
             if issparse(prot_data):
                 prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
             prot_batch = torch.tensor(
                 self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(device)
+            ).to(self.device)
 
             prot_inference = self.protein_vae.module.inference(
                 prot_tensor, batch_index=prot_batch, n_samples=1
@@ -1514,13 +1489,13 @@ class DualVAETrainingPlan(TrainingPlan):
         X = protein_data.X
         if issparse(X):
             X = X.toarray()
-        X = torch.tensor(X, dtype=torch.float32).to(device)
+        X = torch.tensor(X, dtype=torch.float32).to(self.device)
         batch_indices = torch.tensor(protein_data.obs["_scvi_batch"].values, dtype=torch.long).to(
-            device
+            self.device
         )
         archetype_vec = torch.tensor(
             protein_data.obsm["archetype_vec"].values, dtype=torch.float32
-        ).to(device)
+        ).to(self.device)
 
         protein_batch = {
             "X": X,
@@ -1535,12 +1510,12 @@ class DualVAETrainingPlan(TrainingPlan):
         X = rna_data.X
         if issparse(X):
             X = X.toarray()
-        X = torch.tensor(X, dtype=torch.float32).to(device)
+        X = torch.tensor(X, dtype=torch.float32).to(self.device)
         batch_indices = torch.tensor(rna_data.obs["_scvi_batch"].values, dtype=torch.long).to(
-            device
+            self.device
         )
         archetype_vec = torch.tensor(rna_data.obsm["archetype_vec"].values, dtype=torch.float32).to(
-            device
+            self.device
         )
 
         rna_batch = {
@@ -1615,6 +1590,7 @@ def train_vae(
     accumulate_grad_batches=1,
     kl_weight_rna=1.0,
     kl_weight_prot=1.0,
+    device="cuda:0" if torch.cuda.is_available() else "cpu",
     **kwargs,
 ):
     """Train the VAE models."""
@@ -1722,10 +1698,33 @@ def train_vae(
 
 
 if __name__ == "__main__":
-    import os
-    import sys
-    from datetime import datetime
-    from pathlib import Path
+    save_dir = "CODEX_RNA_seq/data/processed_data"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    # %%
+    # read in the data
+    cwd = os.getcwd()
+    save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
+
+    # Use get_latest_file to find the most recent files
+    adata_rna_subset = sc.read_h5ad(
+        get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
+    )
+    adata_prot_subset = sc.read_h5ad(
+        get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
+    )
+
+    # Subsample the data for faster testing
+    print(f"Original RNA dataset shape: {adata_rna_subset.shape}")
+    print(f"Original protein dataset shape: {adata_prot_subset.shape}")
+    # Load config if exists
+    rna_sample_size = min(len(adata_rna_subset), num_rna_cells)
+    prot_sample_size = min(len(adata_prot_subset), num_protein_cells)
+    adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
+    adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
+
+    print(f"Subsampled RNA dataset shape: {adata_rna_subset.shape}")
+    print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
 
     # Import utility functions
     from CODEX_RNA_seq.training_utils import (
@@ -1769,15 +1768,15 @@ if __name__ == "__main__":
     training_params = {
         "plot_x_times": 5,
         "max_epochs": 200,
-        "batch_size": 2000,
+        "batch_size": 1000,
         "lr": 1e-4,
         "contrastive_weight": 10.0,
         "similarity_weight": 10000.0,
         "diversity_weight": 0.1,
-        "matching_weight": 1000000.0,
+        "matching_weight": 100000.0,
         "cell_type_clustering_weight": 1.0,
-        "n_hidden_rna": 128,
-        "n_hidden_prot": 64,
+        "n_hidden_rna": 64,
+        "n_hidden_prot": 32,
         "n_layers": 3,
         "latent_dim": 10,
         "kl_weight_rna": 0.1,
