@@ -56,19 +56,26 @@ def save_and_log_figure(fig, name, dpi=150):
 # %%
 # Define hyperparameter search space
 param_grid = {
-    "n_epochs": [5, 10],
-    "batch_size": [500, 1000],
-    "lr": [1e-3, 1e-4],
+    "max_epochs": [5, 10],  # Changed from n_epochs to max_epochs to match train_vae
+    "batch_size": [1000, 2000, 3000],
+    "lr": [1e-3, 1e-4, 1e-5],
     "contrastive_weight": [1.0, 10.0, 100.0],
     "similarity_weight": [100.0, 1000.0, 10000.0],
     "diversity_weight": [0.1, 1.0],
-    "matching_weight": [0.1, 1.0, 10.0],
+    "matching_weight": [10.0, 100.0, 1000.0],  # Updated range to reflect typical values
+    "cell_type_clustering_weight": [0.1, 1.0, 10.0],  # Added cell type clustering weight
     "n_hidden_rna": [64, 128, 256],
     "n_hidden_prot": [32, 64, 128],
     "n_layers": [1, 2, 3],
     "latent_dim": [10],
-    "kl_weight_rna": [1.0, 2.0],
-    "kl_weight_prot": [1.0, 2.0],
+    "kl_weight_rna": [0.1, 1.0],  # Updated range
+    "kl_weight_prot": [0.1, 1.0, 10.0],  # Updated range
+    "adv_weight": [0.0, 0.1],  # Added adversarial weight
+    "train_size": [0.9],  # Added train size parameter
+    "validation_size": [0.1],  # Added validation size parameter
+    "check_val_every_n_epoch": [5],  # Added validation frequency parameter
+    "gradient_clip_val": [1.0],  # Added gradient clipping parameter
+    "plot_x_times": [3],  # Added plot frequency parameter
 }
 
 # %%
@@ -100,7 +107,7 @@ for params in ParameterGrid(param_grid):
 
         try:
             # Train model
-            rna_vae, protein_vae = train_vae(
+            rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
                 adata_rna_subset=adata_rna_subset,
                 adata_prot_subset=adata_prot_subset,
                 use_gpu=True,
@@ -114,29 +121,34 @@ for params in ParameterGrid(param_grid):
             final_train_loss = history["train_total_loss"][-1]
             final_val_loss = history["val_total_loss"][-1]
             final_similarity_loss = history["train_similarity_loss"][-1]
+            final_cell_type_clustering_loss = (
+                history["train_cell_type_clustering_loss"][-1]
+                if "train_cell_type_clustering_loss" in history
+                else None
+            )
 
             # Log metrics
-            mlflow.log_metrics(
-                {
-                    "final_train_loss": final_train_loss,
-                    "final_val_loss": final_val_loss,
-                    "final_similarity_loss": final_similarity_loss,
-                }
-            )
+            metrics = {
+                "final_train_loss": final_train_loss,
+                "final_val_loss": final_val_loss,
+                "final_similarity_loss": final_similarity_loss,
+            }
+
+            if final_cell_type_clustering_loss is not None:
+                metrics["final_cell_type_clustering_loss"] = final_cell_type_clustering_loss
+
+            mlflow.log_metrics(metrics)
 
             # Store results
-            results.append(
-                {
-                    **params,
-                    "final_train_loss": final_train_loss,
-                    "final_val_loss": final_val_loss,
-                    "final_similarity_loss": final_similarity_loss,
-                }
-            )
+            results.append({**params, **metrics})
 
             # Plot and save training curves
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.plot(history["train_similarity_loss"], label="Similarity Loss")
+            if "train_cell_type_clustering_loss" in history:
+                ax.plot(
+                    history["train_cell_type_clustering_loss"], label="Cell Type Clustering Loss"
+                )
             ax.plot(history["train_total_loss"], label="Total Loss")
             ax.plot(history["val_total_loss"], label="Validation Loss")
             ax.set_xlabel("Step")
@@ -194,7 +206,7 @@ final_run_name = f"final_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 with mlflow.start_run(run_name=final_run_name):
     mlflow.log_params(best_params.to_dict())
 
-    rna_vae, protein_vae = train_vae(
+    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
         adata_rna_subset=adata_rna_subset,
         adata_prot_subset=adata_prot_subset,
         use_gpu=True,

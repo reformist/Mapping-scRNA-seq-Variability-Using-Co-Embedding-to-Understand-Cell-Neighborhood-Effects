@@ -1,7 +1,7 @@
 {
     "subsample": {
-        "num_rna_cells": 2000,
-        "num_protein_cells":2000
+        "num_rna_cells": 20000000,
+        "num_protein_cells":20000000
     },
     "plot_flag": true
 }

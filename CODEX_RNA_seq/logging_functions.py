@@ -1,7 +1,6 @@
 # %%
 # Setup paths
 # %%
-import json
 import os
 import sys
 from datetime import datetime
@@ -27,82 +26,24 @@ def setup_logging(log_dir="logs"):
     print(f"Log directory: {log_dir}")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"training_log_{timestamp}.json"
+    log_file = log_dir / f"training_log_{timestamp}.txt"
     print(f"Log file path: {log_file}")
 
-    # Initialize empty history dictionary
-    history = {
-        "step": [],
-        "timestamp": [],
-        "epoch": [],
-        "train_total_loss": [],
-        "train_rna_reconstruction_loss": [],
-        "train_protein_reconstruction_loss": [],
-        "train_contrastive_loss": [],
-        "train_matching_rna_protein_loss": [],
-        "train_similarity_loss": [],
-        "train_similarity_loss_raw": [],
-        "train_similarity_weighted": [],
-        "train_similarity_weight": [],
-        "train_similarity_ratio": [],
-        "train_adv_loss": [],
-        "train_diversity_loss": [],
-        "validation_total_loss": [],
-        "validation_rna_loss": [],
-        "validation_protein_loss": [],
-        "validation_contrastive_loss": [],
-        "validation_matching_latent_distances": [],
-        "learning_rate": [],
-        "batch_size": [],
-        "gradient_norm": [],
-        "batch_total_loss": [],
-        "batch_rna_loss": [],
-        "batch_protein_loss": [],
-        "batch_contrastive_loss": [],
-        "step_total_loss": [],
-        "step_rna_loss": [],
-        "step_protein_loss": [],
-        "step_contrastive_loss": [],
-        "step_matching_loss": [],
-        "step_similarity_loss": [],
-        "distance_metrics/mean_protein_distances": [],
-        "distance_metrics/mean_rna_distances": [],
-        "distance_metrics/acceptable_ratio": [],
-        "distance_metrics/stress_loss": [],
-        "distance_metrics/matching_loss": [],
-        "extra_metrics/acceptable_ratio": [],
-        "extra_metrics/stress_loss": [],
-        "extra_metrics/reward": [],
-        "extra_metrics/exact_pairs_loss": [],
-        "extra_metrics/iLISI": [],
-        "extra_metrics/cLISI": [],
-        "extra_metrics/accuracy": [],
-        "epoch_nan_detected": [],
-        "epoch_avg_train_loss": [],
-        "epoch_avg_val_loss": [],
-    }
-
-    # Save initial history
-    print("Saving initial history...")
+    # Create an empty log file
     with open(log_file, "w") as f:
-        json.dump(history, f)
-    print("Logging setup complete")
+        f.write(f"Training log started at {datetime.now()}\n")
 
+    print("Logging setup complete")
     return log_file
 
 
 def update_log(log_file, key, value):
     """Update log file with new value for given key"""
-    with open(log_file, "r") as f:
-        history = json.load(f)
+    if not log_file or not os.path.exists(log_file):
+        return
 
-    if key not in history:
-        history[key] = []
-
-    history[key].append(value)
-
-    with open(log_file, "w") as f:
-        json.dump(history, f)
+    with open(log_file, "a") as f:
+        f.write(f"{key}: {value}\n")
 
 
 def log_training_metrics(
@@ -117,34 +58,26 @@ def log_training_metrics(
     diversity_loss,
     cell_type_clustering_loss=None,
 ):
-    """Log training metrics to a JSON file."""
-    with open(log_file, "r") as f:
-        logs = json.load(f)
+    """Log training metrics to a file."""
+    if not log_file or not os.path.exists(log_file):
+        return
 
-    if "train_metrics" not in logs:
-        logs["train_metrics"] = []
+    with open(log_file, "a") as f:
+        f.write("\n--- TRAINING METRICS ---\n")
+        f.write(f"RNA loss: {rna_loss_output.loss.item()}\n")
+        f.write(f"Protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Contrastive loss: {contrastive_loss.item()}\n")
+        f.write(f"Matching loss: {matching_loss.item()}\n")
+        f.write(f"Similarity loss: {similarity_loss.item()}\n")
+        f.write(f"Total loss: {total_loss.item()}\n")
+        f.write(f"Adversarial loss: {adv_loss.item()}\n")
+        f.write(f"Diversity loss: {diversity_loss.item()}\n")
 
-    metrics_dict = {
-        "rna_loss": rna_loss_output.loss.item(),
-        "protein_loss": protein_loss_output.loss.item(),
-        "contrastive_loss": contrastive_loss.item(),
-        "matching_loss": matching_loss.item(),
-        "similarity_loss": similarity_loss.item(),
-        "total_loss": total_loss.item(),
-        "adv_loss": adv_loss.item(),
-        "diversity_loss": diversity_loss.item(),
-    }
-
-    if cell_type_clustering_loss is not None:
-        if isinstance(cell_type_clustering_loss, torch.Tensor):
-            metrics_dict["cell_type_clustering_loss"] = cell_type_clustering_loss.item()
-        else:
-            metrics_dict["cell_type_clustering_loss"] = cell_type_clustering_loss
-
-    logs["train_metrics"].append(metrics_dict)
-
-    with open(log_file, "w") as f:
-        json.dump(logs, f, indent=2)
+        if cell_type_clustering_loss is not None:
+            if isinstance(cell_type_clustering_loss, torch.Tensor):
+                f.write(f"Cell type clustering loss: {cell_type_clustering_loss.item()}\n")
+            else:
+                f.write(f"Cell type clustering loss: {cell_type_clustering_loss}\n")
 
 
 def log_validation_metrics(
@@ -157,32 +90,32 @@ def log_validation_metrics(
     cell_type_clustering_loss=None,
 ):
     """Log validation metrics to a file."""
-    with open(log_file, "r") as f:
-        logs = json.load(f)
+    if not log_file or not os.path.exists(log_file):
+        return
 
-    if "validation_metrics" not in logs:
-        logs["validation_metrics"] = []
+    with open(log_file, "a") as f:
+        f.write("\n--- VALIDATION METRICS ---\n")
+        f.write(f"Validation total loss: {validation_total_loss.item()}\n")
+        f.write(f"Validation RNA loss: {rna_loss_output.loss.item()}\n")
+        f.write(f"Validation protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Validation contrastive loss: {contrastive_loss.item()}\n")
+        f.write(
+            f"Validation matching distances mean: {matching_rna_protein_latent_distances.mean().item()}\n"
+        )
+        f.write(
+            f"Validation matching distances min: {matching_rna_protein_latent_distances.min().item()}\n"
+        )
+        f.write(
+            f"Validation matching distances max: {matching_rna_protein_latent_distances.max().item()}\n"
+        )
 
-    metrics_dict = {
-        "val_total_loss": validation_total_loss.item(),
-        "val_rna_loss": rna_loss_output.loss.item(),
-        "val_protein_loss": protein_loss_output.loss.item(),
-        "val_contrastive_loss": contrastive_loss.item(),
-        "val_matching_distances_mean": matching_rna_protein_latent_distances.mean().item(),
-        "val_matching_distances_min": matching_rna_protein_latent_distances.min().item(),
-        "val_matching_distances_max": matching_rna_protein_latent_distances.max().item(),
-    }
-
-    if cell_type_clustering_loss is not None:
-        if isinstance(cell_type_clustering_loss, torch.Tensor):
-            metrics_dict["val_cell_type_clustering_loss"] = cell_type_clustering_loss.item()
-        else:
-            metrics_dict["val_cell_type_clustering_loss"] = cell_type_clustering_loss
-
-    logs["validation_metrics"].append(metrics_dict)
-
-    with open(log_file, "w") as f:
-        json.dump(logs, f, indent=2)
+        if cell_type_clustering_loss is not None:
+            if isinstance(cell_type_clustering_loss, torch.Tensor):
+                f.write(
+                    f"Validation cell type clustering loss: {cell_type_clustering_loss.item()}\n"
+                )
+            else:
+                f.write(f"Validation cell type clustering loss: {cell_type_clustering_loss}\n")
 
 
 def log_batch_metrics(
@@ -194,10 +127,15 @@ def log_batch_metrics(
     contrastive_loss,
 ):
     """Log batch metrics"""
-    update_log(log_file, "batch_total_loss", validation_total_loss.item())
-    update_log(log_file, "batch_rna_loss", rna_loss_output.loss.item())
-    update_log(log_file, "batch_protein_loss", protein_loss_output.loss.item())
-    update_log(log_file, "batch_contrastive_loss", contrastive_loss.item())
+    if not log_file or not os.path.exists(log_file):
+        return
+
+    with open(log_file, "a") as f:
+        f.write(f"\n--- BATCH {batch_idx} METRICS ---\n")
+        f.write(f"Batch total loss: {validation_total_loss.item()}\n")
+        f.write(f"Batch RNA loss: {rna_loss_output.loss.item()}\n")
+        f.write(f"Batch protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Batch contrastive loss: {contrastive_loss.item()}\n")
 
 
 def log_step_metrics(
@@ -211,26 +149,33 @@ def log_step_metrics(
     similarity_loss,
 ):
     """Log step metrics"""
-    update_log(log_file, "step", global_step)
-    update_log(log_file, "step_total_loss", total_loss.item())
-    update_log(log_file, "step_rna_loss", rna_loss_output.loss.item())
-    update_log(log_file, "step_protein_loss", protein_loss_output.loss.item())
-    update_log(log_file, "step_contrastive_loss", contrastive_loss.item())
-    update_log(log_file, "step_matching_loss", matching_loss.item())
-    update_log(log_file, "step_similarity_loss", similarity_loss.item())
+    if not log_file or not os.path.exists(log_file):
+        return
+
+    with open(log_file, "a") as f:
+        f.write(f"\n--- STEP {global_step} METRICS ---\n")
+        f.write(f"Step total loss: {total_loss.item()}\n")
+        f.write(f"Step RNA loss: {rna_loss_output.loss.item()}\n")
+        f.write(f"Step protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Step contrastive loss: {contrastive_loss.item()}\n")
+        f.write(f"Step matching loss: {matching_loss.item()}\n")
+        f.write(f"Step similarity loss: {similarity_loss.item()}\n")
 
 
 def print_distance_metrics(
     log_file, prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
 ):
     """Log distance metrics during training"""
-    update_log(log_file, "distance_metrics/mean_protein_distances", prot_distances.mean().item())
-    update_log(log_file, "distance_metrics/mean_rna_distances", rna_distances.mean().item())
-    update_log(
-        log_file, "distance_metrics/acceptable_ratio", num_acceptable.float().item() / num_cells
-    )
-    update_log(log_file, "distance_metrics/stress_loss", stress_loss.item())
-    update_log(log_file, "distance_metrics/matching_loss", matching_loss.item())
+    if not log_file or not os.path.exists(log_file):
+        return
+
+    with open(log_file, "a") as f:
+        f.write("\n--- DISTANCE METRICS ---\n")
+        f.write(f"Mean protein distances: {prot_distances.mean().item()}\n")
+        f.write(f"Mean RNA distances: {rna_distances.mean().item()}\n")
+        f.write(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}\n")
+        f.write(f"Stress loss: {stress_loss.item()}\n")
+        f.write(f"Matching loss: {matching_loss.item()}\n")
 
 
 def log_extra_metrics(
@@ -245,35 +190,36 @@ def log_extra_metrics(
     batch_labels,
 ):
     """Log extra metrics during training."""
-    update_log(
-        log_file, "extra_metrics/acceptable_ratio", num_acceptable.float().item() / num_cells
-    )
-    update_log(log_file, "extra_metrics/stress_loss", stress_loss.item())
-    update_log(log_file, "extra_metrics/reward", reward.item())
-    update_log(log_file, "extra_metrics/exact_pairs_loss", exact_pairs.item())
-    update_log(log_file, "extra_metrics/iLISI", mixing_score_["iLISI"])
-    update_log(log_file, "extra_metrics/cLISI", mixing_score_["cLISI"])
+    if not log_file or not os.path.exists(log_file):
+        return
 
     # Log accuracy
     accuracy = (batch_pred.argmax(dim=1) == batch_labels).float().mean()
-    update_log(log_file, "extra_metrics/accuracy", accuracy.item())
+
+    with open(log_file, "a") as f:
+        f.write("\n--- EXTRA METRICS ---\n")
+        f.write(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}\n")
+        f.write(f"Stress loss: {stress_loss.item()}\n")
+        f.write(f"Reward: {reward.item()}\n")
+        f.write(f"Exact pairs loss: {exact_pairs.item()}\n")
+        f.write(f"iLISI: {mixing_score_['iLISI']}\n")
+        f.write(f"cLISI: {mixing_score_['cLISI']}\n")
+        f.write(f"Accuracy: {accuracy.item()}\n")
 
 
 def log_epoch_end(log_file, current_epoch, train_losses, val_losses):
     """Log epoch end metrics"""
+    if not log_file or not os.path.exists(log_file):
+        return
+
     # Calculate epoch averages
     epoch_avg_train_loss = sum(train_losses) / len(train_losses)
     epoch_avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else float("nan")
 
-    update_log(log_file, "epoch", current_epoch)
-    update_log(log_file, "epoch_avg_train_loss", epoch_avg_train_loss)
-    update_log(log_file, "epoch_avg_val_loss", epoch_avg_val_loss)
-
-
-def load_history(log_file):
-    """Load history from log file"""
-    with open(log_file, "r") as f:
-        return json.load(f)
+    with open(log_file, "a") as f:
+        f.write(f"\n--- EPOCH {current_epoch} SUMMARY ---\n")
+        f.write(f"Average train loss: {epoch_avg_train_loss}\n")
+        f.write(f"Average validation loss: {epoch_avg_val_loss}\n")
 
 
 def print_training_metrics(

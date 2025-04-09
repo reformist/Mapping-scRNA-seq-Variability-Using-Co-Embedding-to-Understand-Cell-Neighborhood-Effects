@@ -117,10 +117,11 @@ sc.pp.neighbors(adata_2_prot, use_rep="spatial_location")
 
 connectivities = adata_2_prot.obsp["connectivities"]
 connectivities[connectivities > 0] = 1
-assert np.array_equal(
-    np.array([0.0, 1.0], dtype=np.float32), np.unique(np.array(connectivities.todense()))
-)
+
 if plot_flag:
+    assert np.array_equal(
+        np.array([0.0, 1.0], dtype=np.float32), np.unique(np.array(connectivities.todense()))
+    )
     sns.heatmap(connectivities.todense()[:1000, :1000])
     plt.show()
     plt.close()
@@ -316,8 +317,8 @@ print("\nFinding archetypes...")
 archetype_list_protein = []
 archetype_list_rna = []
 converge = 1e-5
-min_k = 7
-max_k = 8
+min_k = 8
+max_k = 9
 step_size = 1
 
 # Store explained variances for plotting the elbow method

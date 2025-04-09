@@ -100,6 +100,10 @@ import bar_nick_utils
 # Force reimport internal modules
 importlib.reload(pf)
 importlib.reload(bar_nick_utils)
+import CODEX_RNA_seq.logging_functions
+
+importlib.reload(CODEX_RNA_seq.logging_functions)
+
 
 # Force reimport logging functions
 import CODEX_RNA_seq.logging_functions
@@ -254,6 +258,55 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Setup logging
         self.log_file = setup_logging()
+
+        # Create run directory for checkpoint saves
+        self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.checkpoint_dir = Path(f"CODEX_RNA_seq/data/checkpoints/run_{self.run_timestamp}")
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # Save training parameters
+        self.save_training_parameters(kwargs)
+
+    def save_training_parameters(self, kwargs):
+        """Save training parameters to a JSON file in the checkpoint directory."""
+        # Add the parameters from self that aren't in kwargs
+        params = {
+            "batch_size": self.batch_size,
+            "max_epochs": self.total_steps
+            // int(np.ceil(len(self.rna_vae.adata) / self.batch_size)),
+            "similarity_weight": self.similarity_weight,
+            "cell_type_clustering_weight": self.cell_type_clustering_weight,
+            "lr": self.lr,
+            "kl_weight_rna": self.kl_weight_rna,
+            "kl_weight_prot": self.kl_weight_prot,
+            "contrastive_weight": self.contrastive_weight,
+            "plot_x_times": self.plot_x_times,
+            "steady_state_window": self.steady_state_window,
+            "steady_state_tolerance": self.steady_state_tolerance,
+            "reactivation_threshold": self.reactivation_threshold,
+            "rna_adata_shape": list(self.rna_vae.adata.shape),
+            "protein_adata_shape": list(self.protein_vae.adata.shape),
+            "latent_dim": self.rna_vae.module.n_latent,
+            "device": str(device),
+            "timestamp": self.run_timestamp,
+        }
+
+        # Remove non-serializable objects
+        params_to_save = {
+            k: v for k, v in params.items() if isinstance(v, (str, int, float, bool, list, dict))
+        }
+
+        # Save parameters to JSON file
+        with open(f"{self.checkpoint_dir}/training_parameters.json", "w") as f:
+            json.dump(params_to_save, f, indent=4)
+
+        print(f"✓ Training parameters saved to {self.checkpoint_dir}/training_parameters.json")
+
+        # Also save parameters to a separate txt file in readable format instead of appending to the log file
+        with open(f"{self.checkpoint_dir}/training_parameters.txt", "w") as f:
+            f.write("Training Parameters:\n")
+            for key, value in params_to_save.items():
+                f.write(f"{key}: {value}\n")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -507,48 +560,114 @@ class DualVAETrainingPlan(TrainingPlan):
         cell_type_clustering_loss = torch.tensor(0.0).to(device)
 
         if num_cell_types > 1:
-            # Calculate centroids for each cell type
+            # Calculate centroids for each cell type in latent space
             centroids = []
-            for cell_type in unique_cell_types:
-                mask = combined_cell_types == cell_type
-                if mask.sum() > 0:  # Ensure at least one cell of this type exists
-                    centroid = combined_latent_means[mask].mean(dim=0)
-                    centroids.append(centroid)
+            cells_per_type = []
+            type_to_idx = {}
 
-            centroids = torch.stack(centroids)
-
-            # Calculate inter-cluster distances
-            inter_cluster_distances = torch.cdist(centroids, centroids)
-
-            # Set diagonal to inf to exclude same-cluster distances
-            eye_mask = torch.eye(num_cell_types, device=device, dtype=torch.bool)
-            inter_cluster_distances = inter_cluster_distances.masked_fill(eye_mask, float("inf"))
-
-            # Penalty for clusters that are too close
-            min_inter_cluster_distance = inter_cluster_distances.min(dim=1)[0]
-
-            # Calculate intra-cluster distances
-            intra_cluster_distances = []
             for i, cell_type in enumerate(unique_cell_types):
                 mask = combined_cell_types == cell_type
-                if mask.sum() > 1:  # Need at least 2 cells for distance calculation
+                type_to_idx[cell_type.item()] = i
+                if mask.sum() > 0:
                     cells = combined_latent_means[mask]
-                    # Calculate average distance to centroid
-                    dists = torch.norm(cells - centroids[i].unsqueeze(0), dim=1).mean()
-                    intra_cluster_distances.append(dists)
+                    centroid = cells.mean(dim=0)
+                    centroids.append(centroid)
+                    cells_per_type.append(cells)
+
+            if len(centroids) > 1:  # Need at least 2 centroids
+                centroids = torch.stack(centroids)
+
+                # Get original structure from archetype vectors
+                if not hasattr(self, "original_structure_matrix"):
+                    # Compute the structure matrix once and cache it
+                    all_cell_types = self.rna_vae.adata.obs["cell_types"].cat.codes.values
+                    all_unique_types = np.unique(all_cell_types)
+
+                    # Get centroids in archetype space for each cell type
+                    original_centroids = []
+                    for ct in all_unique_types:
+                        mask = all_cell_types == ct
+                        if mask.sum() > 0:
+                            ct_archetype_vecs = self.rna_vae.adata.obsm["archetype_vec"][mask]
+                            original_centroids.append(np.mean(ct_archetype_vecs, axis=0))
+
+                    # Convert to torch tensor
+                    original_centroids = torch.tensor(
+                        np.array(original_centroids), dtype=torch.float32
+                    ).to(device)
+
+                    # Compute affinity/structure matrix (using Gaussian kernel)
+                    sigma = torch.cdist(original_centroids, original_centroids).mean()
+                    dists = torch.cdist(original_centroids, original_centroids)
+                    self.original_structure_matrix = torch.exp(-(dists**2) / (2 * sigma**2))
+
+                    # Set diagonal to 0 to focus on between-cluster relationships
+                    self.original_structure_matrix = self.original_structure_matrix * (
+                        1 - torch.eye(len(all_unique_types), device=device)
+                    )
+
+                # Compute current structure matrix in latent space
+                # Use same sigma as original for consistency
+                sigma = torch.cdist(centroids, centroids).mean()
+                latent_dists = torch.cdist(centroids, centroids)
+                current_structure_matrix = torch.exp(-(latent_dists**2) / (2 * sigma**2))
+
+                # Set diagonal to 0 to focus on between-cluster relationships
+                current_structure_matrix = current_structure_matrix * (
+                    1 - torch.eye(len(centroids), device=device)
+                )
+
+                # Now compute the structure preservation loss
+                structure_preservation_loss = 0.0
+                count = 0
+
+                # For each cell type in the batch, compare its relationships
+                for i, type_i in enumerate(unique_cell_types):
+                    if type_i.item() < len(self.original_structure_matrix):
+                        for j, type_j in enumerate(unique_cell_types):
+                            if i != j and type_j.item() < len(self.original_structure_matrix):
+                                # Get original and current affinity values
+                                orig_affinity = self.original_structure_matrix[
+                                    type_i.item(), type_j.item()
+                                ]
+                                current_affinity = current_structure_matrix[i, j]
+
+                                # Square difference
+                                diff = (orig_affinity - current_affinity) ** 2
+                                structure_preservation_loss += diff
+                                count += 1
+
+                if count > 0:
+                    structure_preservation_loss = structure_preservation_loss / count
+
+                # Calculate within-cluster cohesion
+                cohesion_loss = 0.0
+                total_cells = 0
+
+                for i, cells in enumerate(cells_per_type):
+                    if len(cells) > 1:
+                        # Calculate distances to centroid
+                        dists = torch.norm(cells - centroids[i], dim=1)
+                        cohesion_loss += dists.mean()
+                        total_cells += 1
+
+                if total_cells > 0:
+                    cohesion_loss = cohesion_loss / total_cells
+
+                # Normalize the cohesion loss by the average inter-centroid distance
+                # This makes it scale-invariant
+                avg_inter_centroid_dist = torch.cdist(centroids, centroids).mean()
+                if avg_inter_centroid_dist > 0:
+                    normalized_cohesion_loss = cohesion_loss / avg_inter_centroid_dist
                 else:
-                    # If only one cell of this type, use a small default value
-                    intra_cluster_distances.append(torch.tensor(0.1).to(device))
+                    normalized_cohesion_loss = cohesion_loss
 
-            if intra_cluster_distances:
-                intra_cluster_distances = torch.stack(intra_cluster_distances)
-
-                # Ratio of intra-cluster distance to inter-cluster distance
-                # Lower is better - tight clusters that are far apart
-                cluster_ratio = intra_cluster_distances / min_inter_cluster_distance
-
-                # Penalty for clusters with high intra/inter ratio
-                cell_type_clustering_loss = cluster_ratio.mean()
+                # Combined loss: balance between structure preservation and cohesion
+                # The higher weight on structure_preservation_loss (2.0) prioritizes
+                # preserving the original relationships between clusters
+                cell_type_clustering_loss = (
+                    2.0 * structure_preservation_loss + normalized_cohesion_loss
+                ) * self.cell_type_clustering_weight
 
         # Existing loss calculations
         in_steady_state = False
@@ -621,6 +740,9 @@ class DualVAETrainingPlan(TrainingPlan):
                         f"  - CV={cv:.4f}, threshold={self.steady_state_tolerance}, steady_state={cv < self.steady_state_tolerance}"
                     )
 
+        # Initialize iLISI_score with a default value
+        iLISI_score = 0.0
+
         if self.global_step % self.steady_state_window == 0:
             combined_latent = ad.concat(
                 [
@@ -638,6 +760,7 @@ class DualVAETrainingPlan(TrainingPlan):
                 self.similarity_weight = self.similarity_weight * 10
             elif self.similarity_weight > 100:  # make it smaller only if it is not too small
                 self.similarity_weight = self.similarity_weight / 10
+
         # Store similarity metrics
         similarity_loss = current_similarity_weight * similarity_loss_raw
 
@@ -659,7 +782,7 @@ class DualVAETrainingPlan(TrainingPlan):
             # + adv_loss # dont remove comment for now
             + matching_loss
             + similarity_loss
-            + self.cell_type_clustering_weight * cell_type_clustering_loss
+            + cell_type_clustering_loss
             # + diversity_loss # dont remove comment for now
         )
 
@@ -667,8 +790,6 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_cell_type_clustering_losses.append(cell_type_clustering_loss.item())
 
         if should_plot:
-            print(f"iLISI score: {iLISI_score}, similarity weight: {self.similarity_weight}")
-
             plot_similarity_loss_history(
                 self.similarity_losses, self.active_similarity_loss_active_history
             )
@@ -733,6 +854,10 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_matching_losses.append(matching_loss.item())
         self.train_contrastive_losses.append(contrastive_loss.item())
         self.train_adv_losses.append(adv_loss.item())
+
+        # Save checkpoint every 100 epochs
+        if self.current_epoch % 100 == 0 and self.current_epoch > 0:
+            self.save_checkpoint()
         return total_loss
 
     def validation_step(self, batch, batch_idx):
@@ -842,48 +967,114 @@ class DualVAETrainingPlan(TrainingPlan):
         cell_type_clustering_loss = torch.tensor(0.0).to(device)
 
         if num_cell_types > 1:
-            # Calculate centroids for each cell type
+            # Calculate centroids for each cell type in latent space
             centroids = []
-            for cell_type in unique_cell_types:
-                mask = combined_cell_types == cell_type
-                if mask.sum() > 0:  # Ensure at least one cell of this type exists
-                    centroid = combined_latent_means[mask].mean(dim=0)
-                    centroids.append(centroid)
+            cells_per_type = []
+            type_to_idx = {}
 
-            centroids = torch.stack(centroids)
-
-            # Calculate inter-cluster distances
-            inter_cluster_distances = torch.cdist(centroids, centroids)
-
-            # Set diagonal to inf to exclude same-cluster distances
-            eye_mask = torch.eye(num_cell_types, device=device, dtype=torch.bool)
-            inter_cluster_distances = inter_cluster_distances.masked_fill(eye_mask, float("inf"))
-
-            # Penalty for clusters that are too close
-            min_inter_cluster_distance = inter_cluster_distances.min(dim=1)[0]
-
-            # Calculate intra-cluster distances
-            intra_cluster_distances = []
             for i, cell_type in enumerate(unique_cell_types):
                 mask = combined_cell_types == cell_type
-                if mask.sum() > 1:  # Need at least 2 cells for distance calculation
+                type_to_idx[cell_type.item()] = i
+                if mask.sum() > 0:
                     cells = combined_latent_means[mask]
-                    # Calculate average distance to centroid
-                    dists = torch.norm(cells - centroids[i].unsqueeze(0), dim=1).mean()
-                    intra_cluster_distances.append(dists)
+                    centroid = cells.mean(dim=0)
+                    centroids.append(centroid)
+                    cells_per_type.append(cells)
+
+            if len(centroids) > 1:  # Need at least 2 centroids
+                centroids = torch.stack(centroids)
+
+                # Get original structure from archetype vectors
+                if not hasattr(self, "original_structure_matrix"):
+                    # Compute the structure matrix once and cache it
+                    all_cell_types = self.rna_vae.adata.obs["cell_types"].cat.codes.values
+                    all_unique_types = np.unique(all_cell_types)
+
+                    # Get centroids in archetype space for each cell type
+                    original_centroids = []
+                    for ct in all_unique_types:
+                        mask = all_cell_types == ct
+                        if mask.sum() > 0:
+                            ct_archetype_vecs = self.rna_vae.adata.obsm["archetype_vec"][mask]
+                            original_centroids.append(np.mean(ct_archetype_vecs, axis=0))
+
+                    # Convert to torch tensor
+                    original_centroids = torch.tensor(
+                        np.array(original_centroids), dtype=torch.float32
+                    ).to(device)
+
+                    # Compute affinity/structure matrix (using Gaussian kernel)
+                    sigma = torch.cdist(original_centroids, original_centroids).mean()
+                    dists = torch.cdist(original_centroids, original_centroids)
+                    self.original_structure_matrix = torch.exp(-(dists**2) / (2 * sigma**2))
+
+                    # Set diagonal to 0 to focus on between-cluster relationships
+                    self.original_structure_matrix = self.original_structure_matrix * (
+                        1 - torch.eye(len(all_unique_types), device=device)
+                    )
+
+                # Compute current structure matrix in latent space
+                # Use same sigma as original for consistency
+                sigma = torch.cdist(centroids, centroids).mean()
+                latent_dists = torch.cdist(centroids, centroids)
+                current_structure_matrix = torch.exp(-(latent_dists**2) / (2 * sigma**2))
+
+                # Set diagonal to 0 to focus on between-cluster relationships
+                current_structure_matrix = current_structure_matrix * (
+                    1 - torch.eye(len(centroids), device=device)
+                )
+
+                # Now compute the structure preservation loss
+                structure_preservation_loss = 0.0
+                count = 0
+
+                # For each cell type in the batch, compare its relationships
+                for i, type_i in enumerate(unique_cell_types):
+                    if type_i.item() < len(self.original_structure_matrix):
+                        for j, type_j in enumerate(unique_cell_types):
+                            if i != j and type_j.item() < len(self.original_structure_matrix):
+                                # Get original and current affinity values
+                                orig_affinity = self.original_structure_matrix[
+                                    type_i.item(), type_j.item()
+                                ]
+                                current_affinity = current_structure_matrix[i, j]
+
+                                # Square difference
+                                diff = (orig_affinity - current_affinity) ** 2
+                                structure_preservation_loss += diff
+                                count += 1
+
+                if count > 0:
+                    structure_preservation_loss = structure_preservation_loss / count
+
+                # Calculate within-cluster cohesion
+                cohesion_loss = 0.0
+                total_cells = 0
+
+                for i, cells in enumerate(cells_per_type):
+                    if len(cells) > 1:
+                        # Calculate distances to centroid
+                        dists = torch.norm(cells - centroids[i], dim=1)
+                        cohesion_loss += dists.mean()
+                        total_cells += 1
+
+                if total_cells > 0:
+                    cohesion_loss = cohesion_loss / total_cells
+
+                # Normalize the cohesion loss by the average inter-centroid distance
+                # This makes it scale-invariant
+                avg_inter_centroid_dist = torch.cdist(centroids, centroids).mean()
+                if avg_inter_centroid_dist > 0:
+                    normalized_cohesion_loss = cohesion_loss / avg_inter_centroid_dist
                 else:
-                    # If only one cell of this type, use a small default value
-                    intra_cluster_distances.append(torch.tensor(0.1).to(device))
+                    normalized_cohesion_loss = cohesion_loss
 
-            if intra_cluster_distances:
-                intra_cluster_distances = torch.stack(intra_cluster_distances)
-
-                # Ratio of intra-cluster distance to inter-cluster distance
-                # Lower is better - tight clusters that are far apart
-                cluster_ratio = intra_cluster_distances / min_inter_cluster_distance
-
-                # Penalty for clusters with high intra/inter ratio
-                cell_type_clustering_loss = cluster_ratio.mean()
+                # Combined loss: balance between structure preservation and cohesion
+                # The higher weight on structure_preservation_loss (2.0) prioritizes
+                # preserving the original relationships between clusters
+                cell_type_clustering_loss = (
+                    2.0 * structure_preservation_loss + normalized_cohesion_loss
+                ) * self.cell_type_clustering_weight
 
         # Calculate total validation loss with same components as training
         validation_total_loss = (
@@ -892,7 +1083,7 @@ class DualVAETrainingPlan(TrainingPlan):
             + self.contrastive_weight * distances.mean()
             + matching_loss
             + similarity_loss
-            + self.cell_type_clustering_weight * cell_type_clustering_loss
+            + cell_type_clustering_loss
         )
 
         # Log the validation loss metric
@@ -918,10 +1109,74 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_adv_losses.append(adv_loss.item())
         return validation_total_loss
 
-    def on_epoch_end(self):
-        log_epoch_end(self.log_file, self.current_epoch, self.train_losses, self.val_losses)
-        self.train_losses = []
-        self.val_losses = []
+    def save_checkpoint(self):
+        """Save the model checkpoint including AnnData objects with latent representations."""
+        print(f"\nSaving checkpoint at epoch {self.current_epoch}...")
+
+        # Get latent representations with the current model state
+        with torch.no_grad():
+            # Get RNA latent
+            rna_data = self.rna_vae.adata.X
+            if issparse(rna_data):
+                rna_data = rna_data.toarray()
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_batch = torch.tensor(
+                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            rna_inference = self.rna_vae.module.inference(
+                rna_tensor, batch_index=rna_batch, n_samples=1
+            )
+            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+
+            # Get protein latent
+            prot_data = self.protein_vae.adata.X
+            if issparse(prot_data):
+                prot_data = prot_data.toarray()
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_batch = torch.tensor(
+                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            prot_inference = self.protein_vae.module.inference(
+                prot_tensor, batch_index=prot_batch, n_samples=1
+            )
+            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+
+        # Store in adata
+        self.rna_vae.adata.obsm["X_latent"] = rna_latent
+        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+
+        # Make copies to avoid modifying the originals during saving
+        rna_adata_save = self.rna_vae.adata.copy()
+        protein_adata_save = self.protein_vae.adata.copy()
+
+        # Clean for h5ad saving
+        clean_uns_for_h5ad(rna_adata_save)
+        clean_uns_for_h5ad(protein_adata_save)
+
+        # Save the AnnData objects
+        checkpoint_path = f"{self.checkpoint_dir}/epoch_{self.current_epoch}"
+        os.makedirs(checkpoint_path, exist_ok=True)
+
+        sc.write(f"{checkpoint_path}/rna_adata_epoch_{self.current_epoch}.h5ad", rna_adata_save)
+        sc.write(
+            f"{checkpoint_path}/protein_adata_epoch_{self.current_epoch}.h5ad", protein_adata_save
+        )
+
+        # Save loss history
+
+        print(f"✓ Checkpoint saved at {checkpoint_path}")
+
+        # Update the log file
+        try:
+            with open(self.log_file, "a") as f:
+                f.write(f"\nCheckpoint saved at epoch {self.current_epoch}\n")
+                f.write(f"Location: {checkpoint_path}\n")
+                f.write(f"RNA dataset shape: {rna_adata_save.shape}\n")
+                f.write(f"Protein dataset shape: {protein_adata_save.shape}\n")
+        except Exception as e:
+            print(f"Warning: Could not update log file: {e}")
 
     def _get_protein_batch(self, batch, indices):
         protein_data = self.protein_vae.adata[indices]
@@ -1034,6 +1289,17 @@ class DualVAETrainingPlan(TrainingPlan):
         os.makedirs(save_dir, exist_ok=True)
         self.rna_vae.save(f"{save_dir}/rna_vae_final", overwrite=True)
         self.protein_vae.save(f"{save_dir}/protein_vae_final", overwrite=True)
+
+    def on_epoch_end(self):
+        """Called at the end of each training epoch."""
+        log_epoch_end(self.log_file, self.current_epoch, self.train_losses, self.val_losses)
+        print(f"\nEnd of epoch {self.current_epoch}")
+        print(
+            f"Average train loss: {sum(self.train_losses)/len(self.train_losses) if self.train_losses else 0:.4f}"
+        )
+        print(
+            f"Average validation loss: {sum(self.val_losses)/len(self.val_losses) if self.val_losses else 0:.4f}"
+        )
 
 
 # %%
@@ -1208,7 +1474,7 @@ adata_rna_subset_original = adata_rna_subset.copy()
 
 
 training_kwargs = {
-    "max_epochs": 80,
+    "max_epochs": 4,
     "batch_size": 1200,
     "train_size": 0.9,
     "validation_size": 0.1,
@@ -1225,7 +1491,7 @@ training_kwargs = {
     "contrastive_weight": 10.0,
     "similarity_weight": 10000.0,
     "matching_weight": 1000000.0,
-    "cell_type_clustering_weight": 100.0,
+    "cell_type_clustering_weight": 0.1,
     "kl_weight_rna": 0.1,
     "kl_weight_prot": 10.0,
 }
@@ -1282,7 +1548,7 @@ mlflow.log_metrics(
 
 
 # %%
-print("\nGer latent representations...")
+print("\Get latent representations...")
 latent_rna = rna_vae_new.adata.obsm["X_latent"]
 latent_prot = protein_vae.adata.obsm["X_latent"]
 
