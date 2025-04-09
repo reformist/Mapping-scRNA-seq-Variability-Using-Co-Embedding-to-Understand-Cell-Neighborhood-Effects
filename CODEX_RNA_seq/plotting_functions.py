@@ -82,18 +82,28 @@ def plot_data_overview(adata_1, adata_2):
     plt.show()
 
 
-def plot_cell_type_distribution(adata_1, adata_2):
+def plot_cell_type_distribution(adata_1, adata_2, use_subsample=True):
     """Plot cell type distribution for both datasets"""
     print("\nPlotting cell type distribution...")
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
     # RNA data
-    sns.countplot(data=adata_1.obs, x="cell_types", ax=axes[0])
+    if use_subsample:
+        # subsample the data for plotting
+        adata_1_sub = adata_1[np.random.choice(len(adata_1), 1000, replace=False)]
+        sns.countplot(data=adata_1_sub.obs, x="cell_types", ax=axes[0])
+    else:
+        sns.countplot(data=adata_1.obs, x="cell_types", ax=axes[0])
     axes[0].set_title("RNA Cell Types")
     axes[0].tick_params(axis="x", rotation=45)
 
     # Protein data
-    sns.countplot(data=adata_2.obs, x="cell_types", ax=axes[1])
+    if use_subsample:
+        # subsample the data for plotting
+        adata_2_sub = adata_2[np.random.choice(len(adata_2), 1000, replace=False)]
+        sns.countplot(data=adata_2_sub.obs, x="cell_types", ax=axes[1])
+    else:
+        sns.countplot(data=adata_2.obs, x="cell_types", ax=axes[1])
     axes[1].set_title("Protein Cell Types")
     axes[1].tick_params(axis="x", rotation=45)
 

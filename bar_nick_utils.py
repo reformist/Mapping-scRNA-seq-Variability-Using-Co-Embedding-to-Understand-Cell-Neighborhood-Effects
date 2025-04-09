@@ -107,6 +107,7 @@ def compare_distance_distributions(
     rand_distances, rna_latent, prot_latent, distances, use_subsample=True
 ):
     # Subsample RNA and protein separately if requested
+
     if use_subsample:
         # Subsample RNA data
         n_subsample_rna = min(300, len(rna_latent))
@@ -125,7 +126,7 @@ def compare_distance_distributions(
     # Randomize RNA cells within cell types
     rand_rna_latent = rna_latent.copy()
     for cell_type in rand_rna_latent.obs["cell_types"].unique():
-        cell_type_indices = rand_rna_latent.obs["major_cell_types"] == cell_type
+        cell_type_indices = rand_rna_latent.obs["cell_types"] == cell_type
         shuffled_indices = np.random.permutation(rand_rna_latent[cell_type_indices].obs.index)
         rand_rna_latent.X[cell_type_indices] = (
             rand_rna_latent[cell_type_indices][shuffled_indices].copy().X
@@ -505,12 +506,15 @@ def match_datasets(
 
     # Rest of the function continues as before
     if plot_flag:
+        # subsample the data for plotting
+        adata_rna_sub = adata_rna[np.random.choice(len(adata_rna), 1000, replace=False)]
+        adata_prot_sub = adata_prot[np.random.choice(len(adata_prot), 1000, replace=False)]
         plt.figure(figsize=(12, 5))
         plt.subplot(121)
-        sns.heatmap(adata_rna.obsm[obs_key1], cmap="viridis")
+        sns.heatmap(adata_rna_sub.obsm[obs_key1], cmap="viridis")
         plt.title("RNA Archetype Vectors")
         plt.subplot(122)
-        sns.heatmap(adata_prot.obsm[obs_key2], cmap="viridis")
+        sns.heatmap(adata_prot_sub.obsm[obs_key2], cmap="viridis")
         plt.title("Protein Archetype Vectors")
         plt.suptitle("Initial Data")
         plt.tight_layout()
@@ -532,7 +536,7 @@ def match_datasets(
 
     if plot_flag:
         plt.figure(figsize=(10, 8))
-        sns.heatmap(dist_matrix, cmap="viridis")
+        sns.heatmap(dist_matrix[:1000, :1000], cmap="viridis")
         plt.title("Initial Distance Matrix")
         plt.show()
 

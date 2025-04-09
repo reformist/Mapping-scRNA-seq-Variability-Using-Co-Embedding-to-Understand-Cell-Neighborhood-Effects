@@ -236,8 +236,6 @@ sc.pp.neighbors(adata_rna_subset)
 sc.pp.neighbors(adata_prot_subset)
 
 # Plot UMAP visualizations
-if plot_flag:
-    plot_umap_visualizations_original_data(adata_rna_subset, adata_prot_subset)
 
 # Order cells by type
 adata_rna_subset, adata_prot_subset = order_cells_by_type(adata_rna_subset, adata_prot_subset)
@@ -249,6 +247,7 @@ matching_distance_before = np.diag(archetype_distances).mean()
 # Plot archetype heatmaps
 if plot_flag:
     plot_archetype_heatmaps(adata_rna_subset, adata_prot_subset, archetype_distances)
+
 # %%
 # Match datasets
 adata_rna_subset_matched, adata_prot_subset_matched = match_datasets(
@@ -278,12 +277,14 @@ for i in range(0, n_rna, batch_size):
 
 # Set CN values based on closest protein cells
 adata_rna_subset.obs["CN"] = adata_prot_subset.obs["CN"].values[closest_prot_indices]
-
+print(f"Number of CN in RNA data: {len(adata_rna_subset.obs['CN'].unique())}")
+print(f"Number of CN in protein data: {len(adata_prot_subset.obs['CN'].unique())}")
 # Compute PCA and UMAP
 adata_rna_subset, adata_prot_subset = compute_pca_and_umap(adata_rna_subset, adata_prot_subset)
 
 # Additional visualizations
 if plot_flag:
+    plot_umap_visualizations_original_data(adata_rna_subset, adata_prot_subset)
     plt.figure()
     plt.plot(closest_prot_indices)
     plt.show()

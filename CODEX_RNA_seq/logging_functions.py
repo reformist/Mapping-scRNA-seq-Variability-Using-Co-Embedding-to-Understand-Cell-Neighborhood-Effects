@@ -21,13 +21,13 @@ def setup_logging(log_dir="logs"):
     print("Setting up logging...")
     # Get the directory of the current file
     current_dir = Path(__file__).parent
-    print(f"Current directory: {current_dir}")
+    print(f"Current directory: {current_dir.relative_to(Path.cwd())}")
     log_dir = current_dir / log_dir
-    print(f"Log directory: {log_dir}")
+    print(f"Log directory: {log_dir.relative_to(Path.cwd())}")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"training_log_{timestamp}.txt"
-    print(f"Log file path: {log_file}")
+    print(f"Log file path: {log_file.relative_to(Path.cwd())}")
 
     # Create an empty log file
     with open(log_file, "w") as f:

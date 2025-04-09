@@ -33,6 +33,7 @@ import pandas as pd
 import scanpy as sc
 from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_mutual_info_score, silhouette_samples
+from tqdm import tqdm
 
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -292,6 +293,9 @@ class DualVAETrainingPlan(TrainingPlan):
         # Save training parameters
         self.save_training_parameters(kwargs)
 
+        self.pbar = None
+        self.val_pbar = None
+
     def save_training_parameters(self, kwargs):
         """Save training parameters to a JSON file in the checkpoint directory."""
         # Add the parameters from self that aren't in kwargs
@@ -347,6 +351,9 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
+        if self.pbar is None:
+            self.pbar = tqdm(total=self.total_steps, desc="Training", leave=True)
+
         indices = range(self.batch_size)
         indices_rna = np.random.choice(
             range(len(self.rna_vae.adata)),
@@ -884,9 +891,24 @@ class DualVAETrainingPlan(TrainingPlan):
         # Save checkpoint every 100 epochs
         if self.current_epoch % 100 == 0 and self.current_epoch > 0:
             self.save_checkpoint()
+
+        self.pbar.update(1)
+        self.pbar.set_postfix(
+            {
+                "train_loss": f"{total_loss.item():.4f}",
+                "similarity_loss": f"{similarity_loss.item():.4f}",
+                "cell_type_loss": f"{cell_type_clustering_loss.item():.4f}",
+            }
+        )
+
         return total_loss
 
     def validation_step(self, batch, batch_idx):
+        if self.val_pbar is None:
+            self.val_pbar = tqdm(
+                total=len(self.protein_vae.adata) // self.batch_size, desc="Validation", leave=True
+            )
+
         indices = range(self.batch_size)
         indices_prot = np.random.choice(
             range(len(self.protein_vae.adata)),
@@ -1133,6 +1155,9 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_matching_losses.append(matching_loss.item())
         self.val_adv_losses.append(adv_loss.item())
 
+        self.val_pbar.update(1)
+        self.val_pbar.set_postfix({"val_loss": f"{validation_total_loss.item():.4f}"})
+
         return validation_total_loss
 
     def on_validation_epoch_end(self):
@@ -1168,8 +1193,8 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
 
         # Store in adata
-        self.rna_vae.adata.obsm["X_latent"] = rna_latent
-        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+        self.rna_vae.adata.obsm["X_scVI"] = rna_latent
+        self.protein_vae.adata.obsm["X_scVI"] = prot_latent
 
         # Calculate basic metrics
         silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(
@@ -1291,8 +1316,8 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
 
         # Store in adata
-        self.rna_vae.adata.obsm["X_latent"] = rna_latent
-        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+        self.rna_vae.adata.obsm["X_scVI"] = rna_latent
+        self.protein_vae.adata.obsm["X_scVI"] = prot_latent
 
         # Plot metrics over time
         if plot_flag and hasattr(self, "metrics_history"):
@@ -1366,8 +1391,8 @@ class DualVAETrainingPlan(TrainingPlan):
             prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
 
         # Store in adata
-        self.rna_vae.adata.obsm["X_latent"] = rna_latent
-        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+        self.rna_vae.adata.obsm["X_scVI"] = rna_latent
+        self.protein_vae.adata.obsm["X_scVI"] = prot_latent
 
         # Make copies to avoid modifying the originals during saving
         rna_adata_save = self.rna_vae.adata.copy()
@@ -1466,6 +1491,13 @@ class DualVAETrainingPlan(TrainingPlan):
 
     def on_epoch_end(self):
         """Called at the end of each training epoch."""
+        if self.pbar is not None:
+            self.pbar.close()
+            self.pbar = None
+        if self.val_pbar is not None:
+            self.val_pbar.close()
+            self.val_pbar = None
+
         log_epoch_end(self.log_file, self.current_epoch, self.train_losses, self.val_losses)
         print(f"\nEnd of epoch {self.current_epoch}")
         print(
@@ -1721,8 +1753,8 @@ if __name__ == "__main__":
 
     # %%
     print("\Get latent representations...")
-    latent_rna = rna_vae_new.adata.obsm["X_latent"]
-    latent_prot = protein_vae.adata.obsm["X_latent"]
+    latent_rna = rna_vae_new.adata.obsm["X_scVI"]
+    latent_prot = protein_vae.adata.obsm["X_scVI"]
 
     # Store latent representations
     print("\nStoring latent representations...")

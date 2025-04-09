@@ -44,3 +44,4 @@ external_data/tonsil/tonsil_rna_counts.txt
 mlruns/*
 *.pt
 CODEX_RNA_seq/logs/*
+profile.svg

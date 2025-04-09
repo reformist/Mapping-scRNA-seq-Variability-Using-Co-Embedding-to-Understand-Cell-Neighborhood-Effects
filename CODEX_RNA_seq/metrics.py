@@ -34,7 +34,7 @@ importlib.reload(bar_nick_utils)
 
 
 def silhouette_score_calc(adata_rna, adata_prot):
-    embedding_key = "X_latent"
+    embedding_key = "X_scVI"
     assert (
         embedding_key in adata_rna.obsm
     ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
@@ -59,7 +59,7 @@ def silhouette_score_calc(adata_rna, adata_prot):
 # returns list of indices of proteins that are most aligned with adata_rna.
 # for example, first item in return array (adata_prot) is closest match to adata_rna
 def calc_dist(adata_rna, adata_prot):
-    embedding_key = "X_latent"
+    embedding_key = "X_scVI"
     assert (
         embedding_key in adata_rna.obsm
     ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
@@ -132,9 +132,9 @@ def compute_silhouette_f1(adata_rna, adata_prot):
     """
 
     # protein embeddings
-    prot_embeddings = adata_prot.obsm["X_latent"]
+    prot_embeddings = adata_prot.obsm["X_scVI"]
     # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_latent"]
+    rna_embeddings = adata_rna.obsm["X_scVI"]
     embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
     celltype_labels = np.concatenate(
         [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
@@ -166,9 +166,9 @@ def compute_ari_f1(adata_rna, adata_prot):
     celltype_labels: ground-truth biological labels
     modality_labels: original modality labels
     """
-    prot_embeddings = adata_prot.obsm["X_latent"]
+    prot_embeddings = adata_prot.obsm["X_scVI"]
     # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_latent"]
+    rna_embeddings = adata_rna.obsm["X_scVI"]
     embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
     celltype_labels = np.concatenate(
         [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
