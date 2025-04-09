@@ -89,9 +89,9 @@ param_grid = {
     "diversity_weight": [0.1],
     "matching_weight": [10000.0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
     "cell_type_clustering_weight": [0.1, 1.0, 10.0],  # Added cell type clustering weight
-    "n_hidden_rna": [64, 128],
+    "n_hidden_rna": [64],
     "n_hidden_prot": [32, 64],
-    "n_layers": [2, 3],
+    "n_layers": [3],
     "latent_dim": [10],
     "kl_weight_rna": [0.1, 1.0],
     "kl_weight_prot": [1.0, 10.0],

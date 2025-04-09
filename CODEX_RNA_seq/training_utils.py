@@ -11,7 +11,6 @@ import pandas as pd
 import psutil
 import scanpy as sc
 import torch
-from _3_train_vae_with_archetypes_vectors import train_vae
 from anndata import AnnData
 from plotting_functions import (
     plot_archetype_embedding,
@@ -56,6 +55,7 @@ class Tee(object):
 
 def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
     """Setup and train the VAE models with given parameters."""
+    from _3_train_vae_with_archetypes_vectors import train_vae
 
     # Training setup and execution
     rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
