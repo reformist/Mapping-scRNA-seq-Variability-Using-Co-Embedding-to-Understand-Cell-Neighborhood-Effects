@@ -21,6 +21,12 @@
 import os
 import sys
 
+# Add repository root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -193,7 +199,22 @@ def plot_latent_pca_both_modalities_cn(
     index_rna,
     index_prot,
     global_step=None,
+    use_subsample=True,
 ):
+    # Subsample if requested - use separate sampling for RNA and protein
+    if use_subsample:
+        # Sample RNA data
+        n_subsample_rna = min(300, len(index_rna))
+        rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
+        index_rna = np.array(index_rna)[rna_subsample_idx]
+        rna_mean = rna_mean[rna_subsample_idx]
+
+        # Sample protein data (separately)
+        n_subsample_prot = min(300, len(index_prot))
+        prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
+        index_prot = np.array(index_prot)[prot_subsample_idx]
+        protein_mean = protein_mean[prot_subsample_idx]
+
     plt.figure(figsize=(10, 5))
     pca = PCA(n_components=3)
     # concatenate the means
@@ -234,15 +255,22 @@ def plot_latent_pca_both_modalities_cn(
         label="protein",
         alpha=0.5,
     )
-    for rna_point, prot_point in zip(combined_pca[:num_rna], combined_pca[num_rna:]):
-        ax.plot(
-            [rna_point[0], prot_point[0]],
-            [rna_point[1], prot_point[1]],
-            [rna_point[2], prot_point[2]],
-            "k--",
-            alpha=0.6,
-            lw=0.5,
-        )
+
+    # Only draw lines if we have equal numbers of points
+    if len(rna_mean) == len(protein_mean):
+        for i, (rna_point, prot_point) in enumerate(
+            zip(combined_pca[:num_rna], combined_pca[num_rna:])
+        ):
+            if i < min(num_rna, len(combined_pca) - num_rna):  # Ensure we don't go out of bounds
+                ax.plot(
+                    [rna_point[0], prot_point[0]],
+                    [rna_point[1], prot_point[1]],
+                    [rna_point[2], prot_point[2]],
+                    "k--",
+                    alpha=0.6,
+                    lw=0.5,
+                )
+
     ax.set_title("merged RNA and protein")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
@@ -265,6 +293,7 @@ def plot_latent_pca_both_modalities_by_celltype(
     index_rna=None,
     index_prot=None,
     global_step=None,
+    use_subsample=True,
 ):
     """Plot PCA of latent space colored by cell type."""
     if index_rna is None:
@@ -276,13 +305,25 @@ def plot_latent_pca_both_modalities_by_celltype(
     index_rna = [i for i in index_rna if i < len(adata_rna_subset) and i < latent_rna.shape[0]]
     index_prot = [i for i in index_prot if i < len(adata_prot_subset) and i < latent_prot.shape[0]]
 
-    # Ensure indices are the same length (use the smaller length)
-    min_len = min(len(index_rna), len(index_prot))
-    index_rna = index_rna[:min_len]
-    index_prot = index_prot[:min_len]
+    # Subsample if requested - use separate sampling for RNA and protein
+    if use_subsample:
+        # Sample RNA data
+        n_subsample_rna = min(1000, len(index_rna))
+        rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
+        index_rna = np.array(index_rna)[rna_subsample_idx]
+
+        # Sample protein data (separately)
+        n_subsample_prot = min(1000, len(index_prot))
+        prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
+        index_prot = np.array(index_prot)[prot_subsample_idx]
+    else:
+        # Ensure indices are the same length (use the smaller length)
+        min_len = min(len(index_rna), len(index_prot))
+        index_rna = index_rna[:min_len]
+        index_prot = index_prot[:min_len]
 
     # Ensure all indices are valid
-    if not index_rna or not index_prot:
+    if len(index_rna) == 0 or len(index_prot) == 0:
         print("Warning: No valid indices for plotting. Skipping plot.")
         return
 
@@ -366,16 +407,21 @@ def plot_latent_mean_std_legacy(
     rna_std = rna_inference_outputs["qz"].scale.detach().cpu().numpy()
     protein_std = protein_inference_outputs["qz"].scale.detach().cpu().numpy()
 
-    # Subsample if requested
+    # Subsample if requested - use separate sampling for RNA and protein
     if use_subsample:
-        n_subsample = min(300, len(index_rna))
-        subsample_idx = np.random.choice(len(index_rna), n_subsample, replace=False)
-        index_rna = np.array(index_rna)[subsample_idx]
-        index_prot = np.array(index_prot)[subsample_idx]
-        rna_mean = rna_mean[subsample_idx]
-        protein_mean = protein_mean[subsample_idx]
-        rna_std = rna_std[subsample_idx]
-        protein_std = protein_std[subsample_idx]
+        # Sample RNA data
+        n_subsample_rna = min(300, len(index_rna))
+        rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
+        index_rna = np.array(index_rna)[rna_subsample_idx]
+        rna_mean = rna_mean[rna_subsample_idx]
+        rna_std = rna_std[rna_subsample_idx]
+
+        # Sample protein data (separately)
+        n_subsample_prot = min(300, len(index_prot))
+        prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
+        index_prot = np.array(index_prot)[prot_subsample_idx]
+        protein_mean = protein_mean[prot_subsample_idx]
+        protein_std = protein_std[prot_subsample_idx]
 
     # Plot heatmaps
     plt.figure(figsize=(12, 5))
@@ -421,11 +467,6 @@ def plot_latent_mean_std_legacy(
     )
     sns.scatterplot(data=df, x="PC1", y="PC2", hue="CN")
     plt.title("RNA Latent Space PCA")
-    # pca_result = pca.fit_transform(rna_ann.X)
-    # plt.scatter(pca_result[:, 0], pca_result[:, 1], c=rna_ann.obs["CN"])
-    # plt.xlabel("PC1")
-    # plt.ylabel("PC2")
-    # plt.title("RNA Latent Space PCA")
 
     # Protein PCA
     plt.subplot(132)
@@ -554,7 +595,7 @@ def plot_inference_outputs(
 ):
     """Plot inference outputs"""
     print("\nPlotting inference outputs...")
-    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    fig, axes = plt.subplots(2, 3)
 
     # Plot latent distances
     axes[0, 0].hist(latent_distances.detach().cpu().numpy().flatten(), bins=50)
@@ -663,7 +704,7 @@ def plot_normalized_losses(history):
 
     # Function to normalize and plot losses
     def plot_losses(keys, title):
-        plt.figure(figsize=(15, 5))
+        plt.figure(figsize=(10, 5))
         normalized_losses = {}
         labels = {}
 
@@ -739,7 +780,7 @@ def plot_cosine_distance(rna_batch, protein_batch):
 def plot_archetype_vs_latent_distances(archetype_dis_tensor, latent_distances, threshold):
     """Plot archetype vs latent distances"""
     print("\nPlotting archetype vs latent distances...")
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
     # Plot archetype distances
     axes[0].hist(archetype_dis_tensor.detach().cpu().numpy().flatten(), bins=50)
@@ -759,7 +800,7 @@ def plot_archetype_vs_latent_distances(archetype_dis_tensor, latent_distances, t
 
 def plot_latent_distances(latent_distances, threshold):
     """Plot latent distances and threshold"""
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
     # Plot latent distances heatmap
     sns.heatmap(latent_distances.detach().cpu().numpy(), ax=axes[0])
@@ -776,12 +817,20 @@ def plot_latent_distances(latent_distances, threshold):
     plt.show()
 
 
-def plot_combined_latent_space(combined_latent):
+def plot_combined_latent_space(combined_latent, use_subsample=True):
     """Plot combined latent space visualizations"""
+    # Subsample if requested
+    if use_subsample:
+        n_subsample = min(7000, combined_latent.shape[0])
+        subsample_idx = np.random.choice(combined_latent.shape[0], n_subsample, replace=False)
+        combined_latent_plot = combined_latent[subsample_idx].copy()
+    else:
+        combined_latent_plot = combined_latent.copy()
+
     # Plot UMAP
-    sc.tl.umap(combined_latent, min_dist=0.1)
+    sc.tl.umap(combined_latent_plot, min_dist=0.1)
     sc.pl.umap(
-        combined_latent,
+        combined_latent_plot,
         color=["CN", "modality", "cell_types"],
         title=[
             "UMAP Combined Latent space CN",
@@ -794,7 +843,7 @@ def plot_combined_latent_space(combined_latent):
 
     # Plot PCA
     sc.pl.pca(
-        combined_latent,
+        combined_latent_plot,
         color=["CN", "modality"],
         title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
         alpha=0.5,
@@ -802,14 +851,23 @@ def plot_combined_latent_space(combined_latent):
     safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_pca.png")
 
 
-def plot_cell_type_distributions(combined_latent, top_n=3):
+def plot_cell_type_distributions(combined_latent, top_n=3, use_subsample=True):
     """Plot UMAP for top N most common cell types"""
     top_cell_types = combined_latent.obs["cell_types"].value_counts().index[:top_n]
 
     for cell_type in top_cell_types:
         cell_type_data = combined_latent[combined_latent.obs["cell_types"] == cell_type]
+
+        # Subsample if requested
+        if use_subsample and cell_type_data.shape[0] > 300:
+            n_subsample = min(300, cell_type_data.shape[0])
+            subsample_idx = np.random.choice(cell_type_data.shape[0], n_subsample, replace=False)
+            cell_type_data_plot = cell_type_data[subsample_idx].copy()
+        else:
+            cell_type_data_plot = cell_type_data.copy()
+
         sc.pl.umap(
-            cell_type_data,
+            cell_type_data_plot,
             color=["CN", "modality", "cell_types"],
             title=[
                 f"Combined latent space UMAP {cell_type}, CN",
@@ -821,10 +879,29 @@ def plot_cell_type_distributions(combined_latent, top_n=3):
         safe_mlflow_log_figure(plt.gcf(), f"cell_type_distribution_{cell_type}.png")
 
 
-def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
+def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae, use_subsample=True):
     """Plot RNA and protein embeddings"""
+    # Create copies to avoid modifying the original data
+    if use_subsample:
+        # Subsample RNA data
+        n_subsample_rna = min(300, rna_vae_new.adata.shape[0])
+        subsample_idx_rna = np.random.choice(
+            rna_vae_new.adata.shape[0], n_subsample_rna, replace=False
+        )
+        rna_adata_plot = rna_vae_new.adata[subsample_idx_rna].copy()
+
+        # Subsample protein data
+        n_subsample_prot = min(300, protein_vae.adata.shape[0])
+        subsample_idx_prot = np.random.choice(
+            protein_vae.adata.shape[0], n_subsample_prot, replace=False
+        )
+        prot_adata_plot = protein_vae.adata[subsample_idx_prot].copy()
+    else:
+        rna_adata_plot = rna_vae_new.adata.copy()
+        prot_adata_plot = protein_vae.adata.copy()
+
     sc.pl.embedding(
-        rna_vae_new.adata,
+        rna_adata_plot,
         color=["CN", "cell_types"],
         basis="X_scVI",
         title=["RNA_latent_CN", "RNA_Latent_CellTypes"],
@@ -832,7 +909,7 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
     safe_mlflow_log_figure(plt.gcf(), "rna_latent_embeddings.png")
 
     sc.pl.embedding(
-        protein_vae.adata,
+        prot_adata_plot,
         color=["CN", "cell_types"],
         basis="X_scVI",
         title=["Protein_latent_CN", "Protein_Laten_CellTypes"],
@@ -840,28 +917,49 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae):
     safe_mlflow_log_figure(plt.gcf(), "protein_latent_embeddings.png")
 
 
-def plot_archetype_embedding(rna_vae_new, protein_vae):
+def plot_archetype_embedding(rna_vae_new, protein_vae, use_subsample=True):
     """Plot archetype embedding"""
+    # Create AnnData objects from archetype vectors
     rna_archtype = AnnData(rna_vae_new.adata.obsm["archetype_vec"])
-    rna_archtype.obs = rna_vae_new.adata.obs
-    sc.pp.neighbors(rna_archtype)
-    sc.tl.umap(rna_archtype)
+    rna_archtype.obs = rna_vae_new.adata.obs.copy()
 
     prot_archtype = AnnData(protein_vae.adata.obsm["archetype_vec"])
-    prot_archtype.obs = protein_vae.adata.obs
-    sc.pp.neighbors(prot_archtype)
-    sc.tl.umap(prot_archtype)
+    prot_archtype.obs = protein_vae.adata.obs.copy()
+
+    # Apply subsampling if requested
+    if use_subsample:
+        # Subsample RNA data
+        n_subsample_rna = min(300, rna_archtype.shape[0])
+        subsample_idx_rna = np.random.choice(rna_archtype.shape[0], n_subsample_rna, replace=False)
+        rna_archtype_plot = rna_archtype[subsample_idx_rna].copy()
+
+        # Subsample protein data
+        n_subsample_prot = min(300, prot_archtype.shape[0])
+        subsample_idx_prot = np.random.choice(
+            prot_archtype.shape[0], n_subsample_prot, replace=False
+        )
+        prot_archtype_plot = prot_archtype[subsample_idx_prot].copy()
+    else:
+        rna_archtype_plot = rna_archtype.copy()
+        prot_archtype_plot = prot_archtype.copy()
+
+    # Calculate neighbors and UMAP
+    sc.pp.neighbors(rna_archtype_plot)
+    sc.tl.umap(rna_archtype_plot)
+
+    sc.pp.neighbors(prot_archtype_plot)
+    sc.tl.umap(prot_archtype_plot)
 
     # Plot archetype vectors
     sc.pl.umap(
-        rna_archtype,
+        rna_archtype_plot,
         color=["CN", "cell_types"],
         title=["RNA_Archetype_UMAP_CN", "RNA_Archetype_UMAP_CellTypes"],
     )
     safe_mlflow_log_figure(plt.gcf(), "rna_archetype_umap.png")
 
     sc.pl.umap(
-        prot_archtype,
+        prot_archtype_plot,
         color=["CN", "cell_types"],
         title=[
             "Protein_Archetype_UMAP_CN",
@@ -1213,7 +1311,7 @@ def plot_original_data_visualizations(adata_rna_subset, adata_prot_subset):
 
 
 def plot_latent_single(means, adata, index, color_label="CN", title=""):
-    plt.figure(figsize=(10, 5))
+    plt.figure()
     pca = PCA(n_components=3)
     means_cpu = means.detach().cpu().numpy()
     index_cpu = index.detach().cpu().numpy().flatten()
@@ -1231,3 +1329,80 @@ def plot_latent_single(means, adata, index, color_label="CN", title=""):
 
 
 # %%
+
+
+def test_plot_latent_pca_both_modalities_by_celltype():
+    """Test function for plot_latent_pca_both_modalities_by_celltype with synthetic data."""
+    import numpy as np
+    from anndata import AnnData
+
+    # Set random seed for reproducibility
+    np.random.seed(42)
+
+    # Generate synthetic data
+    n_cells = 2000
+    n_cell_types = 5
+    latent_dim = 20
+
+    # Create latent representations for RNA and protein
+    latent_rna = np.random.normal(0, 1, size=(n_cells, latent_dim))
+    latent_prot = np.random.normal(0, 1, size=(n_cells, latent_dim))
+
+    # Create cell type labels
+    cell_type_names = [f"CellType_{i}" for i in range(n_cell_types)]
+    cell_types = np.random.choice(cell_type_names, size=n_cells)
+
+    # Create CN (neighborhood) labels
+    cn_names = [f"CN_{i}" for i in range(3)]
+    cn_labels = np.random.choice(cn_names, size=n_cells)
+
+    # Create AnnData objects
+    adata_rna = AnnData(X=np.random.lognormal(0, 1, size=(n_cells, 100)))
+    adata_prot = AnnData(X=np.random.lognormal(0, 1, size=(n_cells, 50)))
+
+    # Add cell type and CN information to obs
+    adata_rna.obs["cell_types"] = cell_types
+    adata_rna.obs["CN"] = cn_labels
+    adata_prot.obs["cell_types"] = cell_types
+    adata_prot.obs["CN"] = cn_labels
+
+    # Plot with default settings
+    print("Testing plot_latent_pca_both_modalities_by_celltype with default settings...")
+    plot_latent_pca_both_modalities_by_celltype(
+        adata_rna_subset=adata_rna,
+        adata_prot_subset=adata_prot,
+        latent_rna=latent_rna,
+        latent_prot=latent_prot,
+        use_subsample=True,
+    )
+
+    # Plot without subsampling
+    print("Testing plot_latent_pca_both_modalities_by_celltype without subsampling...")
+    plot_latent_pca_both_modalities_by_celltype(
+        adata_rna_subset=adata_rna,
+        adata_prot_subset=adata_prot,
+        latent_rna=latent_rna,
+        latent_prot=latent_prot,
+        use_subsample=False,
+    )
+
+    # Plot with specified indices
+    print("Testing plot_latent_pca_both_modalities_by_celltype with specific indices...")
+    index_rna = np.random.choice(n_cells, size=500, replace=False)
+    index_prot = np.random.choice(n_cells, size=500, replace=False)
+    plot_latent_pca_both_modalities_by_celltype(
+        adata_rna_subset=adata_rna,
+        adata_prot_subset=adata_prot,
+        latent_rna=latent_rna,
+        latent_prot=latent_prot,
+        index_rna=index_rna,
+        index_prot=index_prot,
+        use_subsample=True,
+    )
+
+    print("All tests completed!")
+
+
+if __name__ == "__main__":
+    # Execute test function if the script is run directly
+    test_plot_latent_pca_both_modalities_by_celltype()

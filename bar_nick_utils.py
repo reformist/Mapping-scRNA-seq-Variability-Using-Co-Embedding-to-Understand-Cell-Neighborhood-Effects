@@ -103,10 +103,28 @@ def archetype_vs_latent_distances_plot(
     plt.show()
 
 
-def compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances):
+def compare_distance_distributions(
+    rand_distances, rna_latent, prot_latent, distances, use_subsample=True
+):
+    # Subsample RNA and protein separately if requested
+    if use_subsample:
+        # Subsample RNA data
+        n_subsample_rna = min(300, len(rna_latent))
+        subsample_idx_rna = np.random.choice(len(rna_latent), n_subsample_rna, replace=False)
+        rna_latent = rna_latent[subsample_idx_rna].copy()
+
+        # Subsample protein data
+        n_subsample_prot = min(300, len(prot_latent))
+        subsample_idx_prot = np.random.choice(len(prot_latent), n_subsample_prot, replace=False)
+        prot_latent = prot_latent[subsample_idx_prot].copy()
+
+        # Subsample distances using RNA indices (since distances are computed from RNA to protein)
+        distances = distances[subsample_idx_rna]
+        rand_distances = rand_distances[subsample_idx_rna]
+
     # Randomize RNA cells within cell types
     rand_rna_latent = rna_latent.copy()
-    for cell_type in rand_rna_latent.obs["major_cell_types"].unique():
+    for cell_type in rand_rna_latent.obs["cell_types"].unique():
         cell_type_indices = rand_rna_latent.obs["major_cell_types"] == cell_type
         shuffled_indices = np.random.permutation(rand_rna_latent[cell_type_indices].obs.index)
         rand_rna_latent.X[cell_type_indices] = (

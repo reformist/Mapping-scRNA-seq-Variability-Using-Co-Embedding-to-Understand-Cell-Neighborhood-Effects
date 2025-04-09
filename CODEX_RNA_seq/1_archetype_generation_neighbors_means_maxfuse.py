@@ -187,7 +187,16 @@ temp = AnnData(normalized_data)
 temp.obs = adata_2_prot.obs
 sc.pp.pca(temp)
 sc.pp.neighbors(temp)
-sc.tl.leiden(temp, resolution=0.1, key_added="CN")
+resolution = 0.1
+while True:
+    sc.tl.leiden(temp, resolution=resolution, key_added="CN")
+    print(f"Resolution: {resolution}, num_clusters: {len(temp.obs['CN'].unique())}")
+
+    num_clusters = len(temp.obs["CN"].unique())
+    if num_clusters < 12:
+        break
+    resolution = resolution / 2
+adata_2_prot.obs["CN"] = temp.obs["CN"]
 num_clusters = len(adata_2_prot.obs["CN"].unique())
 palette = sns.color_palette("tab10", num_clusters)
 adata_2_prot.uns["spatial_clusters_colors"] = palette.as_hex()

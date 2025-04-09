@@ -34,7 +34,7 @@ importlib.reload(bar_nick_utils)
 
 
 def silhouette_score_calc(adata_rna, adata_prot):
-    embedding_key = "X_scVI"
+    embedding_key = "X_latent"
     assert (
         embedding_key in adata_rna.obsm
     ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
@@ -59,7 +59,7 @@ def silhouette_score_calc(adata_rna, adata_prot):
 # returns list of indices of proteins that are most aligned with adata_rna.
 # for example, first item in return array (adata_prot) is closest match to adata_rna
 def calc_dist(adata_rna, adata_prot):
-    embedding_key = "X_scVI"
+    embedding_key = "X_latent"
     assert (
         embedding_key in adata_rna.obsm
     ), f"No embeddings found in adata_rna.obsm['{embedding_key}']."
@@ -67,7 +67,9 @@ def calc_dist(adata_rna, adata_prot):
         embedding_key in adata_prot.obsm
     ), f"No embeddings found in adata_prot.obsm['{embedding_key}']."
 
-    distances = cdist(adata_rna.obsm["X_scVI"], adata_prot.obsm["X_scVI"], metric="euclidean")
+    distances = cdist(
+        adata_rna.obsm[embedding_key], adata_prot.obsm[embedding_key], metric="euclidean"
+    )
     nearest_indices = np.argmin(distances, axis=1)  # protein index
     nn_celltypes_prot = adata_prot.obs["cell_types"][nearest_indices]
     return nn_celltypes_prot
@@ -92,6 +94,103 @@ def matching_accuracy(adata_rna, adata_prot):
             correct_matches += 1
     accuracy = correct_matches / len(nn_celltypes_prot)
     return accuracy
+
+
+def leiden_from_embeddings(embeddings, resolution=1.0, neighbors=15):
+    """
+    Run Leiden clustering on given embeddings.
+    Parameters:
+        embeddings: np.ndarray of shape (n_cells, n_features)
+        resolution: float, resolution parameter for Leiden
+        neighbors: int, number of neighbors for graph construction
+    Returns:
+        cluster_labels: np.ndarray of Leiden cluster assignments
+    """
+    # Create an AnnData object from embeddings
+    adata = anndata.AnnData(X=embeddings)
+    # Compute neighborhood graph
+    sc.pp.neighbors(adata, n_neighbors=neighbors, use_rep="X")
+    # Run Leiden clustering
+    sc.tl.leiden(adata, resolution=resolution)
+    # Extract cluster labels
+    cluster_labels = adata.obs["leiden"].astype(int).values
+    return cluster_labels
+
+
+def normalize_silhouette(silhouette_vals):
+    """Normalize silhouette scores from [-1, 1] to [0, 1]."""
+    return (np.mean(silhouette_vals) + 1) / 2
+
+
+def compute_silhouette_f1(adata_rna, adata_prot):
+    """
+    Compute the Silhouette F1 score.
+
+    embeddings: np.ndarray, shape (n_samples, n_features)
+    celltype_labels: list or array of ground-truth biological labels
+    modality_labels: list or array of modality labels (e.g., RNA, ATAC)
+    """
+
+    # protein embeddings
+    prot_embeddings = adata_prot.obsm["X_latent"]
+    # rna embeddings
+    rna_embeddings = adata_rna.obsm["X_latent"]
+    embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
+    celltype_labels = np.concatenate(
+        [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
+    )
+    modality_labels = np.concatenate(
+        [["rna"] * len(adata_rna.obs), ["protein"] * len(adata_prot.obs)], axis=0
+    )
+
+    le_ct = LabelEncoder()
+    le_mod = LabelEncoder()
+    ct = le_ct.fit_transform(celltype_labels)
+    mod = le_mod.fit_transform(modality_labels)
+
+    slt_clust = normalize_silhouette(silhouette_samples(embeddings, ct))
+    slt_mod_raw = silhouette_samples(embeddings, mod)
+    slt_mod = 1 - normalize_silhouette(slt_mod_raw)  # We want mixing, so invert
+
+    slt_f1 = (
+        2 * (slt_clust * slt_mod) / (slt_clust + slt_mod + 1e-8)
+    )  # just so we don't divide by zero
+    return slt_f1
+
+
+def compute_ari_f1(adata_rna, adata_prot):
+    """
+    Compute the ARI F1 score.
+
+    cluster_labels: clustering result (e.g. from k-means or Leiden)
+    celltype_labels: ground-truth biological labels
+    modality_labels: original modality labels
+    """
+    prot_embeddings = adata_prot.obsm["X_latent"]
+    # rna embeddings
+    rna_embeddings = adata_rna.obsm["X_latent"]
+    embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
+    celltype_labels = np.concatenate(
+        [adata_rna.obs["cell_types"], adata_prot.obs["cell_types"]], axis=0
+    )
+    modality_labels = np.concatenate(
+        [["rna"] * len(adata_rna.obs), ["protein"] * len(adata_prot.obs)], axis=0
+    )
+
+    cluster_labels = leiden_from_embeddings(embeddings)
+
+    le_ct = LabelEncoder()
+    le_mod = LabelEncoder()
+    ct = le_ct.fit_transform(celltype_labels)
+    mod = le_mod.fit_transform(modality_labels)
+    clust = LabelEncoder().fit_transform(cluster_labels)
+
+    ari_clust = adjusted_rand_score(ct, clust)
+    ari_mod = 1 - adjusted_rand_score(mod, clust)  # invert for mixing
+
+    ari_f1 = 2 * (ari_clust * ari_mod) / (ari_clust + ari_mod + 1e-8)
+
+    return ari_f1
 
 
 if __name__ == "__main__":
@@ -132,13 +231,9 @@ if __name__ == "__main__":
     accuracy = matching_accuracy(adata_rna, adata_prot)
 
     # Calculate advanced metrics if available
-    try:
-        silhouette_f1 = compute_silhouette_f1(adata_rna, adata_prot)
-        ari_f1 = compute_ari_f1(adata_rna, adata_prot)
-        has_advanced_metrics = True
-    except Exception as e:
-        print(f"Warning: Could not calculate advanced metrics: {e}")
-        has_advanced_metrics = False
+    silhouette_f1 = compute_silhouette_f1(adata_rna, adata_prot)
+    ari_f1 = compute_ari_f1(adata_rna, adata_prot)
+    has_advanced_metrics = True
 
     # Print results
     print(f"\nMetrics Results:")
@@ -172,100 +267,3 @@ if __name__ == "__main__":
 
     print(f"\nResults saved to: {log_file}")
     print("\nMetrics calculation completed!")
-
-
-def leiden_from_embeddings(embeddings, resolution=1.0, neighbors=15):
-    """
-    Run Leiden clustering on given embeddings.
-    Parameters:
-        embeddings: np.ndarray of shape (n_cells, n_features)
-        resolution: float, resolution parameter for Leiden
-        neighbors: int, number of neighbors for graph construction
-    Returns:
-        cluster_labels: np.ndarray of Leiden cluster assignments
-    """
-    # Create an AnnData object from embeddings
-    adata = anndata.AnnData(X=embeddings)
-    # Compute neighborhood graph
-    sc.pp.neighbors(adata, n_neighbors=neighbors, use_rep="X")
-    # Run Leiden clustering
-    sc.tl.leiden(adata, resolution=resolution)
-    # Extract cluster labels
-    cluster_labels = adata.obs["leiden"].astype(int).values
-    return cluster_labels
-
-
-def normalize_silhouette(silhouette_vals):
-    """Normalize silhouette scores from [-1, 1] to [0, 1]."""
-    return (np.mean(silhouette_vals) + 1) / 2
-
-
-def compute_silhouette_f1(adata_rna, adata_prot):
-    """
-    Compute the Silhouette F1 score.
-
-    embeddings: np.ndarray, shape (n_samples, n_features)
-    celltype_labels: list or array of ground-truth biological labels
-    modality_labels: list or array of modality labels (e.g., RNA, ATAC)
-    """
-
-    # protein embeddings
-    prot_embeddings = adata_prot.obsm["X_scVI"]
-    # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_scVI"]
-    embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
-    celltype_labels = np.concatenate(
-        [adata_rna.obs["major_cell_types"], adata_prot.obs["major_cell_types"]], axis=0
-    )
-    modality_labels = np.concatenate(
-        [adata_rna.obs["Data_Type"], adata_prot.obs["Data_Type"]], axis=0
-    )
-
-    le_ct = LabelEncoder()
-    le_mod = LabelEncoder()
-    ct = le_ct.fit_transform(celltype_labels)
-    mod = le_mod.fit_transform(modality_labels)
-
-    slt_clust = normalize_silhouette(silhouette_samples(embeddings, ct))
-    slt_mod_raw = silhouette_samples(embeddings, mod)
-    slt_mod = 1 - normalize_silhouette(slt_mod_raw)  # We want mixing, so invert
-
-    slt_f1 = (
-        2 * (slt_clust * slt_mod) / (slt_clust + slt_mod + 1e-8)
-    )  # just so we don't divide by zero
-    return slt_f1
-
-
-def compute_ari_f1(adata_rna, adata_prot):
-    """
-    Compute the ARI F1 score.
-
-    cluster_labels: clustering result (e.g. from k-means or Leiden)
-    celltype_labels: ground-truth biological labels
-    modality_labels: original modality labels
-    """
-    prot_embeddings = adata_prot.obsm["X_scVI"]
-    # rna embeddings
-    rna_embeddings = adata_rna.obsm["X_scVI"]
-    embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
-    celltype_labels = np.concatenate(
-        [adata_rna.obs["major_cell_types"], adata_prot.obs["major_cell_types"]], axis=0
-    )
-    modality_labels = np.concatenate(
-        [adata_rna.obs["Data_Type"], adata_prot.obs["Data_Type"]], axis=0
-    )
-
-    cluster_labels = leiden_from_embeddings(embeddings)
-
-    le_ct = LabelEncoder()
-    le_mod = LabelEncoder()
-    ct = le_ct.fit_transform(celltype_labels)
-    mod = le_mod.fit_transform(modality_labels)
-    clust = LabelEncoder().fit_transform(cluster_labels)
-
-    ari_clust = adjusted_rand_score(ct, clust)
-    ari_mod = 1 - adjusted_rand_score(mod, clust)  # invert for mixing
-
-    ari_f1 = 2 * (ari_clust * ari_mod) / (ari_clust + ari_mod + 1e-8)
-
-    return ari_f1

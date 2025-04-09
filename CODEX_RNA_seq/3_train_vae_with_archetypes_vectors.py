@@ -28,6 +28,31 @@ import os
 import sys
 
 import mlflow
+import numpy as np
+import pandas as pd
+import scanpy as sc
+from scipy.spatial.distance import cdist
+from sklearn.metrics import adjusted_mutual_info_score, silhouette_samples
+
+# Add repository root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Set working directory to project root
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import plotting_functions as pf
+
+import bar_nick_utils
+import CODEX_RNA_seq.logging_functions
+import CODEX_RNA_seq.metrics
+
+importlib.reload(pf)
+importlib.reload(bar_nick_utils)
+importlib.reload(CODEX_RNA_seq.logging_functions)
+importlib.reload(CODEX_RNA_seq.metrics)
 
 
 def validate_scvi_training_mixin():
@@ -233,7 +258,7 @@ class DualVAETrainingPlan(TrainingPlan):
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
         self.total_steps = steps_per_epoch * max_epochs
         self.similarity_loss_history = []
-        self.steady_state_window = 2
+        self.steady_state_window = 5
         self.steady_state_tolerance = 0.5
         self.similarity_active = True
         self.reactivation_threshold = 0.1
@@ -699,9 +724,10 @@ class DualVAETrainingPlan(TrainingPlan):
             if recent_loss > min_steady_loss * (1 + self.reactivation_threshold):
                 loss_increased = True
                 if self.global_step % 10 == 0:
-                    print(
-                        f"[Step {self.global_step}] Loss increased significantly: recent={recent_loss:.4f}, min_steady={min_steady_loss:.4f}, ratio={recent_loss/min_steady_loss:.4f}, threshold={1 + self.reactivation_threshold}"
-                    )
+                    # print(
+                    #     f"[Step {self.global_step}] Loss increased significantly: recent={recent_loss:.4f}, min_steady={min_steady_loss:.4f}, ratio={recent_loss/min_steady_loss:.4f}, threshold={1 + self.reactivation_threshold}"
+                    # )
+                    pass
 
         # Update the weight based on steady state detection
         if in_steady_state and self.similarity_active:
@@ -709,23 +735,23 @@ class DualVAETrainingPlan(TrainingPlan):
                 self.similarity_weight / 1000
             )  # Zero out weight when in steady state
             self.similarity_active = False
-            print(
-                f"[Step {self.global_step}] DEACTIVATING similarity loss - Entering steady state (CV={coeff_of_variation:.4f})"
-            )
-            print(f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}")
-            print(f"  - Tolerance threshold: {self.steady_state_tolerance}")
+            # print(
+            #     f"[Step {self.global_step}] DEACTIVATING similarity loss - Entering steady state (CV={coeff_of_variation:.4f})"
+            # )
+            # print(f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}")
+            # print(f"  - Tolerance threshold: {self.steady_state_tolerance}")
         elif loss_increased and not self.similarity_active:
             current_similarity_weight = self.similarity_weight  # Reactivate with full weight
             self.similarity_active = True
-            print(
-                f"[Step {self.global_step}] REACTIVATING similarity loss - Loss increased significantly"
-            )
+            # print(
+            #     f"[Step {self.global_step}] REACTIVATING similarity loss - Loss increased significantly"
+            # )
         else:
             current_similarity_weight = self.similarity_weight if self.similarity_active else 0
             if self.global_step % 50 == 0:
-                print(
-                    f"[Step {self.global_step}] Similarity status: active={self.similarity_active}, window_size={len(self.similarity_loss_history)}/{self.steady_state_window}"
-                )
+                # print(
+                #     f"[Step {self.global_step}] Similarity status: active={self.similarity_active}, window_size={len(self.similarity_loss_history)}/{self.steady_state_window}"
+                # )
                 if len(self.similarity_loss_history) == self.steady_state_window:
                     mean_loss = sum(self.similarity_loss_history) / self.steady_state_window
                     std_loss = (
@@ -733,12 +759,12 @@ class DualVAETrainingPlan(TrainingPlan):
                         / self.steady_state_window
                     ) ** 0.5
                     cv = std_loss / mean_loss
-                    print(
-                        f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}"
-                    )
-                    print(
-                        f"  - CV={cv:.4f}, threshold={self.steady_state_tolerance}, steady_state={cv < self.steady_state_tolerance}"
-                    )
+                    # print(
+                    #     f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}"
+                    # )
+                    # print(
+                    #     f"  - CV={cv:.4f}, threshold={self.steady_state_tolerance}, steady_state={cv < self.steady_state_tolerance}"
+                    # )
 
         # Initialize iLISI_score with a default value
         iLISI_score = 0.0
@@ -1105,9 +1131,132 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_rna_losses.append(rna_loss_output.loss.item())
         self.val_protein_losses.append(protein_loss_output.loss.item())
         self.val_matching_losses.append(matching_loss.item())
-        # self.val_contrastive_losses.append(contrastive_loss.item())
         self.val_adv_losses.append(adv_loss.item())
+
         return validation_total_loss
+
+    def on_validation_epoch_end(self):
+        """Calculate and log metrics at the end of each validation epoch."""
+        # Get latent representations from both VAEs
+        with torch.no_grad():
+            # Get RNA latent
+            rna_data = self.rna_vae.adata.X
+            if issparse(rna_data):
+                rna_data = rna_data.toarray()
+            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(device)
+            rna_batch = torch.tensor(
+                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            rna_inference = self.rna_vae.module.inference(
+                rna_tensor, batch_index=rna_batch, n_samples=1
+            )
+            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+
+            # Get protein latent
+            prot_data = self.protein_vae.adata.X
+            if issparse(prot_data):
+                prot_data = prot_data.toarray()
+            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(device)
+            prot_batch = torch.tensor(
+                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+
+            prot_inference = self.protein_vae.module.inference(
+                prot_tensor, batch_index=prot_batch, n_samples=1
+            )
+            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+
+        # Store in adata
+        self.rna_vae.adata.obsm["X_latent"] = rna_latent
+        self.protein_vae.adata.obsm["X_latent"] = prot_latent
+
+        # Calculate basic metrics
+        silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(
+            self.rna_vae.adata, self.protein_vae.adata
+        )
+        f1 = CODEX_RNA_seq.metrics.f1_score_calc(self.rna_vae.adata, self.protein_vae.adata)
+        ari = CODEX_RNA_seq.metrics.ari_score_calc(self.rna_vae.adata, self.protein_vae.adata)
+        accuracy = CODEX_RNA_seq.metrics.matching_accuracy(
+            self.rna_vae.adata, self.protein_vae.adata
+        )
+
+        # Calculate advanced metrics
+        try:
+            silhouette_f1 = CODEX_RNA_seq.metrics.compute_silhouette_f1(
+                self.rna_vae.adata, self.protein_vae.adata
+            )
+            ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(
+                self.rna_vae.adata, self.protein_vae.adata
+            )
+            has_advanced_metrics = True
+        except Exception as e:
+            print(f"Warning: Could not calculate advanced metrics: {e}")
+            has_advanced_metrics = False
+
+        # Calculate mixing scores
+        mixing_result = bar_nick_utils.mixing_score(
+            rna_latent,
+            prot_latent,
+            self.rna_vae.adata,
+            self.protein_vae.adata,
+            index_rna=range(len(self.rna_vae.adata)),
+            index_prot=range(len(self.protein_vae.adata)),
+            plot_flag=False,
+        )
+
+        # Calculate NMI scores
+        nmi_cell_types_cn_rna = adjusted_mutual_info_score(
+            self.rna_vae.adata.obs["cell_types"],
+            self.rna_vae.adata.obs["CN"],
+        )
+        nmi_cell_types_cn_prot = adjusted_mutual_info_score(
+            self.protein_vae.adata.obs["cell_types"],
+            self.protein_vae.adata.obs["CN"],
+        )
+
+        # Calculate cross-modality NMI
+        nn_celltypes_prot = CODEX_RNA_seq.metrics.calc_dist(
+            self.rna_vae.adata, self.protein_vae.adata
+        )
+        nmi_cell_types_modalities = adjusted_mutual_info_score(
+            self.rna_vae.adata.obs["cell_types"].values,
+            nn_celltypes_prot,
+        )
+
+        # Calculate Leiden clustering metrics
+        combined_latent = np.concatenate([rna_latent, prot_latent], axis=0)
+        leiden_clusters = CODEX_RNA_seq.metrics.leiden_from_embeddings(combined_latent)
+
+        # Calculate normalized silhouette scores
+        silhouette_vals = silhouette_samples(combined_latent, leiden_clusters)
+        normalized_silhouette = CODEX_RNA_seq.metrics.normalize_silhouette(silhouette_vals)
+
+        # Log all metrics to MLflow
+        metrics = {
+            "val_silhouette_score": silhouette,
+            "val_f1_score": f1,
+            "val_ari_score": ari,
+            "val_matching_accuracy": accuracy,
+            "val_mixing_score_ilisi": mixing_result["iLISI"],
+            "val_mixing_score_clisi": mixing_result["cLISI"],
+            "val_nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
+            "val_nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
+            "val_nmi_cell_types_modalities": nmi_cell_types_modalities,
+            "val_normalized_silhouette": normalized_silhouette,
+            "val_num_leiden_clusters": len(np.unique(leiden_clusters)),
+        }
+
+        if has_advanced_metrics:
+            metrics.update(
+                {
+                    "val_silhouette_f1_score": silhouette_f1.mean(),
+                    "val_ari_f1_score": ari_f1,
+                }
+            )
+
+        mlflow.log_metrics(metrics, step=self.global_step)
+        print(f"✓ Validation metrics logged to MLflow")
 
     def save_checkpoint(self):
         """Save the model checkpoint including AnnData objects with latent representations."""
@@ -1281,8 +1430,9 @@ class DualVAETrainingPlan(TrainingPlan):
         self.protein_vae.adata.obsm["X_latent"] = prot_latent
 
         # Log final metrics
-        print(f"Final training loss: {self.train_losses[-1]}")
-        print(f"Final validation loss: {self.val_losses[-1]}")
+        if len(self.train_losses) > 0 and len(self.val_losses) > 0:
+            print(f"Final training loss: {self.train_losses[-1]}")
+            print(f"Final validation loss: {self.val_losses[-1]}")
 
         # Save model checkpoints
         save_dir = "model_checkpoints"

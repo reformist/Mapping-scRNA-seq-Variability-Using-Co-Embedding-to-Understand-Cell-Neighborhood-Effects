@@ -1,10 +1,45 @@
 # %%
 """Hyperparameter search for VAE training with archetypes vectors."""
 
+import gc
 import importlib.util
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
+
+import numpy as np
+import psutil
+import torch
+
+
+def get_memory_usage():
+    """Get current memory usage in GB"""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024 / 1024  # Convert to GB
+
+
+def log_memory_usage(prefix=""):
+    """Log current memory usage"""
+    mem_usage = get_memory_usage()
+    print(f"{prefix}Memory usage: {mem_usage:.2f} GB")
+    return mem_usage
+
+
+def clear_memory():
+    """Clear memory by running garbage collection and clearing CUDA cache if available"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return get_memory_usage()
+
+
+def check_memory_threshold(threshold_gb=0.9):
+    """Check if memory usage is above threshold"""
+    mem_usage = get_memory_usage()
+    if mem_usage > threshold_gb:
+        print(f"Warning: Memory usage ({mem_usage:.2f} GB) above threshold ({threshold_gb} GB)")
+        return True
+    return False
 
 
 # Add logging to file functionality
@@ -88,8 +123,6 @@ from plotting_functions import (
     plot_latent_pca_both_modalities_cn,
     plot_normalized_losses,
     plot_rna_protein_latent_cn_cell_type_umap,
-    plot_spatial_data,
-    plot_umap_visualizations_original_data,
 )
 
 from bar_nick_utils import (
@@ -161,7 +194,7 @@ def save_and_log_figure(fig, name, dpi=150):
 # %%
 # Define hyperparameter search space
 param_grid = {
-    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [3],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000, 2000, 3000],
     "lr": [1e-4],
     "contrastive_weight": [1.0, 10.0, 100.0],
@@ -178,9 +211,9 @@ param_grid = {
     "adv_weight": [0.0],  # Added adversarial weight
     "train_size": [0.9],  # Added train size parameter
     "validation_size": [0.1],  # Added validation size parameter
-    "check_val_every_n_epoch": [5],  # Added validation frequency parameter
+    "check_val_every_n_epoch": [1],  # Added validation frequency parameter
     "gradient_clip_val": [1.0],  # Added gradient clipping parameter
-    "plot_x_times": [3],  # Added plot frequency parameter
+    "plot_x_times": [1],  # Added plot frequency parameter
 }
 
 # %%
@@ -193,12 +226,30 @@ mlflow.set_experiment(experiment_name)
 # %%
 # Load data
 save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
+log_memory_usage("Before loading data: ")
+
 adata_rna_subset = sc.read_h5ad(
     get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
 )
+log_memory_usage("After loading RNA data: ")
+
 adata_prot_subset = sc.read_h5ad(
     get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
 )
+log_memory_usage("After loading protein data: ")
+
+# Subsample data if memory usage is high
+if check_memory_threshold():
+    print("Memory usage high, subsampling data...")
+    rna_sample_size = min(len(adata_rna_subset), 1500)
+    prot_sample_size = min(len(adata_prot_subset), 1500)
+    adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
+    adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
+    log_memory_usage("After subsampling: ")
+
+print(f"Subsampled RNA dataset shape: {adata_rna_subset.shape}")
+print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
+
 
 # %%
 # Run hyperparameter search
@@ -213,6 +264,7 @@ elapsed_times = []
 
 for i, params in enumerate(ParameterGrid(param_grid)):
     iter_start_time = datetime.now()
+    log_memory_usage(f"Start of iteration {i+1}: ")
 
     # Print progress information
     print(f"\n--- Run {i+1}/{total_combinations} ({(i+1)/total_combinations*100:.2f}%) ---")
@@ -223,7 +275,12 @@ for i, params in enumerate(ParameterGrid(param_grid)):
     # Calculate and display time estimates if we have completed at least one iteration
     if i > 0:
         if len(elapsed_times) > 0:  # Make sure we have at least one completed iteration
-            avg_time_per_iter = sum(elapsed_times) / len(elapsed_times)
+            # Initialize with timedelta(0) instead of integer 0
+            total_time = timedelta(0)
+            for t in elapsed_times:
+                total_time += t
+            avg_time_per_iter = total_time / len(elapsed_times)
+
             remaining_iters = total_combinations - (i + 1)
             est_remaining_time = avg_time_per_iter * remaining_iters
 
@@ -249,18 +306,25 @@ for i, params in enumerate(ParameterGrid(param_grid)):
 
         try:
             # Train model
+            log_memory_usage("Before training: ")
             rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
                 adata_rna_subset=adata_rna_subset,
                 adata_prot_subset=adata_prot_subset,
-                use_gpu=True,
                 **params,
             )
+            log_memory_usage("After training: ")
+
+            # Clear memory after training
+            clear_memory()
+            log_memory_usage("After clearing memory: ")
+
             training_kwargs = params
             # Log parameters
+            history = rna_vae._training_plan.get_history()
+
             mlflow.log_params(
                 {
                     "batch_size": training_kwargs["batch_size"],
-                    "use_gpu": training_kwargs["use_gpu"],
                     "contrastive_weight": training_kwargs["contrastive_weight"],
                     "similarity_weight": training_kwargs["similarity_weight"],
                     # "diversity_weight": training_kwargs["diversity_weight"],
@@ -279,7 +343,6 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             elapsed_times.append(iter_time)
             print(f"\nIteration completed in: {iter_time}")
 
-            # %%
             # Get training history from the training plan
             print("\nGetting training history...")
             history = rna_vae._training_plan.get_history()
@@ -288,18 +351,18 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             # Log training history metrics
             mlflow.log_metrics(
                 {
-                    "final_train_similarity_loss": history["train_similarity_loss"][-1],
-                    "final_train_similarity_loss_raw": history["train_similarity_loss_raw"][-1],
-                    # "final_train_similarity_weight": history["train_similarity_weight"][-1],
-                    "final_train_total_loss": history["train_total_loss"][-1],
-                    "final_val_total_loss": history["val_total_loss"][-1],
-                    "final_train_cell_type_clustering_loss": history[
-                        "train_cell_type_clustering_loss"
-                    ][-1],
+                    key: history[hist_key][-1] if history[hist_key] else float("nan")
+                    for key, hist_key in {
+                        "final_train_similarity_loss": "train_similarity_loss",
+                        "final_train_similarity_loss_raw": "train_similarity_loss_raw",
+                        "final_train_total_loss": "train_total_loss",
+                        "final_val_total_loss": "val_total_loss",
+                        "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
+                    }.items()
                 }
             )
 
-            # %%
+            # %
             print("\Get latent representations...")
             latent_rna = rna_vae.adata.obsm["X_latent"]
             latent_prot = protein_vae.adata.obsm["X_latent"]
@@ -351,21 +414,49 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             )
             sc.pp.pca(combined_latent)
             sc.pp.neighbors(combined_latent, n_neighbors=15)
-            try:
-                sc.tl.umap(combined_latent, min_dist=0.1)
-                print("✓ UMAP computed successfully")
-            except Exception as e:
-                print(f"Warning: UMAP computation failed: {str(e)}")
-                print("Continuing with other visualizations...")
+            sc.tl.umap(combined_latent, min_dist=0.1)
+            print("✓ UMAP computed successfully")
             print("✓ Latent spaces combined")
-            # %%
+
             print("\nMatching cells between modalities...")
             # Calculate pairwise distances between RNA and protein cells in latent space
 
-            latent_distances = cdist(rna_latent.X, prot_latent.X)
-            rand_latent_distances = latent_distances[np.random.permutation(len(rna_latent)), :]
+            # Replace direct cdist call with batched version to prevent memory issues
+            def batched_cdist(X, Y, batch_size=1000):
+                n_x = X.shape[0]
+                n_y = Y.shape[0]
+                distances = np.zeros((n_x, n_y))
+
+                # Process in batches to avoid memory overflow
+                for i in range(0, n_x, batch_size):
+                    end_i = min(i + batch_size, n_x)
+                    batch_X = X[i:end_i]
+
+                    for j in range(0, n_y, batch_size):
+                        end_j = min(j + batch_size, n_y)
+                        batch_Y = Y[j:end_j]
+
+                        # Calculate distances for this batch pair
+                        batch_distances = cdist(batch_X, batch_Y)
+                        distances[i:end_i, j:end_j] = batch_distances
+
+                    print(f"Processed {end_i}/{n_x} rows", end="\r")
+
+                return distances
+
+            print(
+                f"RNA latent shape: {rna_latent.X.shape}, Protein latent shape: {prot_latent.X.shape}"
+            )
+            print("Computing pairwise distances in batches...")
+            latent_distances = batched_cdist(rna_latent.X, prot_latent.X)
+
+            print("Generating random permutation for baseline comparison...")
+            # Use only a subset for the random comparison if datasets are large
+            rand_indices = np.random.permutation(len(rna_latent))
+            rand_latent_distances = latent_distances[rand_indices, :]
 
             # Find closest matches for RNA cells to protein cells
+            print("Finding closest matches...")
             prot_matches_in_rna = np.argmin(latent_distances, axis=0).astype(
                 np.int32
             )  # size of prot use to index rna
@@ -385,8 +476,6 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             rand_prot_matches_in_rna = np.argmin(rand_latent_distances, axis=0)
             rand_matching_distances = np.min(rand_latent_distances, axis=0)
 
-            # %%
-
             # Calculate random matching distances
             # Store matching information in combined_latent.uns
             combined_latent.uns["cell_matching"] = {
@@ -405,17 +494,17 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             distances = combined_latent.uns["cell_matching"]["matching_distances"]
             rand_distances = combined_latent.uns["cell_matching"]["rand_matching_distances"]
             print("✓ Distances calculated")
-            # %%
+
             # Plot training results
             print("\nPlotting training results...")
             plot_normalized_losses(history)
             print("✓ Training losses plotted")
 
-            plot_umap_visualizations_original_data(rna_vae.adata, protein_vae.adata)
-            # Plot spatial data
-            print("\nPlotting spatial data...")
-            plot_spatial_data(protein_vae.adata)
-            print("✓ Spatial data plotted")
+            # plot_umap_visualizations_original_data(rna_vae.adata, protein_vae.adata)
+            # # Plot spatial data
+            # print("\nPlotting spatial data...")
+            # plot_spatial_data(protein_vae.adata)
+            # print("✓ Spatial data plotted")
 
             # Plot latent representations
             print("\nPlotting latent representations...")
@@ -426,9 +515,10 @@ for i, params in enumerate(ParameterGrid(param_grid)):
                 protein_vae.adata,
                 index_rna=range(len(rna_vae.adata.obs.index)),
                 index_prot=range(len(protein_vae.adata.obs.index)),
+                use_subsample=True,
             )
             plot_latent_pca_both_modalities_by_celltype(
-                rna_vae.adata, protein_vae.adata, latent_rna, latent_prot
+                rna_vae.adata, protein_vae.adata, latent_rna, latent_prot, use_subsample=True
             )
             print("✓ Latent representations plotted")
 
@@ -439,9 +529,9 @@ for i, params in enumerate(ParameterGrid(param_grid)):
 
             # Plot combined visualizations
             print("\nPlotting combined visualizations...")
-            plot_combined_latent_space(combined_latent)
+            plot_combined_latent_space(combined_latent, use_subsample=True)
 
-            plot_cell_type_distributions(combined_latent, 3)
+            plot_cell_type_distributions(combined_latent, 3, use_subsample=True)
 
             print("✓ Combined visualizations plotted")
 
@@ -467,9 +557,9 @@ for i, params in enumerate(ParameterGrid(param_grid)):
 
             # Plot archetype and embedding visualizations
             print("\nPlotting archetype and embedding visualizations...")
-            plot_archetype_embedding(rna_vae, protein_vae)
+            plot_archetype_embedding(rna_vae, protein_vae, use_subsample=True)
 
-            plot_rna_protein_latent_cn_cell_type_umap(rna_vae, protein_vae)
+            plot_rna_protein_latent_cn_cell_type_umap(rna_vae, protein_vae, use_subsample=True)
 
             print("✓ Archetype and embedding visualizations plotted")
 
@@ -492,7 +582,7 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             nmi_cell_types_cn_prot = adjusted_mutual_info_score(
                 protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
             )
-            # %%
+
             nmi_cell_types_modalities = adjusted_mutual_info_score(
                 rna_vae.adata.obs["cell_types"].values[prot_matches_in_rna],
                 protein_vae.adata.obs["cell_types"].values,
@@ -556,7 +646,12 @@ for i, params in enumerate(ParameterGrid(param_grid)):
         except Exception as e:
             print(f"Error in run {run_name}: {str(e)}")
             mlflow.log_param("error", str(e))
+            clear_memory()  # Clear memory on error
             continue
+
+    # Clear memory after each iteration
+    clear_memory()
+    log_memory_usage(f"End of iteration {i+1}: ")
 
 # %%
 # Save results to CSV
@@ -570,46 +665,6 @@ best_params = results_df.loc[results_df["final_val_loss"].idxmin()]
 print("Best parameters:")
 print(best_params)
 
-# %%
-# Train final model with best parameters
-final_run_name = f"final_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-with mlflow.start_run(run_name=final_run_name):
-    mlflow.log_params(best_params.to_dict())
-
-    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
-        adata_rna_subset=adata_rna_subset,
-        adata_prot_subset=adata_prot_subset,
-        use_gpu=True,
-        **best_params.to_dict(),
-    )
-
-    # Save final models
-    save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
-    time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
-    os.makedirs(save_dir, exist_ok=True)
-
-    sc.write(Path(f"{save_dir}/rna_vae_final_{time_stamp}.h5ad"), rna_vae.adata)
-    sc.write(Path(f"{save_dir}/protein_vae_final_{time_stamp}.h5ad"), protein_vae.adata)
-
-    mlflow.log_artifacts(save_dir)
-
-    # Plot and save final model visualizations
-    fig = sc.pl.umap(rna_vae.adata, color=["CN", "cell_types"], return_fig=True, show=False)
-    save_and_log_figure(fig, "final_rna_umap")
-
-    fig = sc.pl.umap(protein_vae.adata, color=["CN", "cell_types"], return_fig=True, show=False)
-    save_and_log_figure(fig, "final_protein_umap")
-
-    # Plot and save final latent space distributions
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(rna_vae.get_latent_representation().flatten(), bins=50, alpha=0.5, label="RNA")
-    ax.hist(protein_vae.get_latent_representation().flatten(), bins=50, alpha=0.5, label="Protein")
-    ax.set_xlabel("Latent Value")
-    ax.set_ylabel("Count")
-    ax.set_title("Final Latent Space Distributions")
-    ax.legend()
-    plt.tight_layout()
-    save_and_log_figure(fig, "final_latent_distributions")
 
 # %%
 # Clean up: restore original stdout and close log file
