@@ -120,7 +120,8 @@ from plotting_functions import (
     plot_cell_type_distributions,
     plot_combined_latent_space,
     plot_inference_outputs,
-    plot_latent_pca_both_modalities,
+    plot_latent_pca_both_modalities_by_celltype,
+    plot_latent_pca_both_modalities_cn,
     plot_normalized_losses,
     plot_rna_protein_latent_cn_cell_type_umap,
     plot_rna_protein_matching_means_and_scale,
@@ -210,6 +211,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_weight = kwargs.pop(
             "similarity_weight"
         )  # Remove default to use config value
+        self.cell_type_clustering_weight = kwargs.pop("cell_type_clustering_weight", 1000.0)
         self.lr = kwargs.pop("lr", 0.001)
         self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
@@ -227,7 +229,7 @@ class DualVAETrainingPlan(TrainingPlan):
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
         self.total_steps = steps_per_epoch * max_epochs
         self.similarity_loss_history = []
-        self.steady_state_window = 50
+        self.steady_state_window = 2
         self.steady_state_tolerance = 0.5
         self.similarity_active = True
         self.reactivation_threshold = 0.1
@@ -242,6 +244,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_matching_losses = []
         self.train_contrastive_losses = []
         self.train_adv_losses = []
+        self.train_cell_type_clustering_losses = []  # New list for cell type clustering losses
         self.val_rna_losses = []
         self.val_protein_losses = []
         self.val_matching_losses = []
@@ -256,7 +259,7 @@ class DualVAETrainingPlan(TrainingPlan):
         optimizer = torch.optim.AdamW(
             list(self.rna_vae.module.parameters()) + list(self.protein_vae.module.parameters()),
             lr=self.lr,
-            # weight_decay=1e-5,
+            weight_decay=1e-5,
         )
         d = {  # maybe add this?
             "optimizer": optimizer,
@@ -326,7 +329,7 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         if should_plot:
-            plot_latent_pca_both_modalities(
+            plot_latent_pca_both_modalities_cn(
                 rna_latent_mean_numpy,
                 protein_latent_mean_numpy,
                 self.rna_vae.adata,
@@ -335,7 +338,15 @@ class DualVAETrainingPlan(TrainingPlan):
                 index_prot=indices_prot,
                 global_step=self.global_step,
             )
-
+            plot_latent_pca_both_modalities_by_celltype(
+                self.rna_vae.adata,
+                self.protein_vae.adata,
+                rna_latent_mean_numpy,
+                protein_latent_mean_numpy,
+                index_rna=indices_rna,
+                index_prot=indices_prot,
+                global_step=self.global_step,
+            )
             plot_rna_protein_matching_means_and_scale(
                 rna_latent_mean_numpy,
                 protein_latent_mean_numpy,
@@ -473,6 +484,73 @@ class DualVAETrainingPlan(TrainingPlan):
             )
         contrastive_loss = contrastive_loss * self.contrastive_weight
 
+        # Add cell type clustering loss calculation after the diversity_loss and contrastive_loss calculation
+        # and before the in_steady_state calculation
+
+        # Compute cell type clustering loss to keep cell types in distinct clusters
+        rna_cell_types = torch.tensor(
+            self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
+        ).to(device)
+        protein_cell_types = torch.tensor(
+            self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
+        ).to(device)
+
+        # Combine cell types and latent representations from both modalities
+        combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
+        combined_latent_means = torch.cat([rna_latent_mean, protein_latent_mean])
+
+        # Calculate centroid for each cell type
+        unique_cell_types = torch.unique(combined_cell_types)
+        num_cell_types = len(unique_cell_types)
+
+        # Skip the cell type clustering loss if there's only one cell type
+        cell_type_clustering_loss = torch.tensor(0.0).to(device)
+
+        if num_cell_types > 1:
+            # Calculate centroids for each cell type
+            centroids = []
+            for cell_type in unique_cell_types:
+                mask = combined_cell_types == cell_type
+                if mask.sum() > 0:  # Ensure at least one cell of this type exists
+                    centroid = combined_latent_means[mask].mean(dim=0)
+                    centroids.append(centroid)
+
+            centroids = torch.stack(centroids)
+
+            # Calculate inter-cluster distances
+            inter_cluster_distances = torch.cdist(centroids, centroids)
+
+            # Set diagonal to inf to exclude same-cluster distances
+            eye_mask = torch.eye(num_cell_types, device=device, dtype=torch.bool)
+            inter_cluster_distances = inter_cluster_distances.masked_fill(eye_mask, float("inf"))
+
+            # Penalty for clusters that are too close
+            min_inter_cluster_distance = inter_cluster_distances.min(dim=1)[0]
+
+            # Calculate intra-cluster distances
+            intra_cluster_distances = []
+            for i, cell_type in enumerate(unique_cell_types):
+                mask = combined_cell_types == cell_type
+                if mask.sum() > 1:  # Need at least 2 cells for distance calculation
+                    cells = combined_latent_means[mask]
+                    # Calculate average distance to centroid
+                    dists = torch.norm(cells - centroids[i].unsqueeze(0), dim=1).mean()
+                    intra_cluster_distances.append(dists)
+                else:
+                    # If only one cell of this type, use a small default value
+                    intra_cluster_distances.append(torch.tensor(0.1).to(device))
+
+            if intra_cluster_distances:
+                intra_cluster_distances = torch.stack(intra_cluster_distances)
+
+                # Ratio of intra-cluster distance to inter-cluster distance
+                # Lower is better - tight clusters that are far apart
+                cluster_ratio = intra_cluster_distances / min_inter_cluster_distance
+
+                # Penalty for clusters with high intra/inter ratio
+                cell_type_clustering_loss = cluster_ratio.mean()
+
+        # Existing loss calculations
         in_steady_state = False
         coeff_of_variation = 0  # default value
         if len(self.similarity_loss_history) == self.steady_state_window:
@@ -501,19 +579,49 @@ class DualVAETrainingPlan(TrainingPlan):
             min_steady_loss = min(self.similarity_loss_history)
             if recent_loss > min_steady_loss * (1 + self.reactivation_threshold):
                 loss_increased = True
+                if self.global_step % 10 == 0:
+                    print(
+                        f"[Step {self.global_step}] Loss increased significantly: recent={recent_loss:.4f}, min_steady={min_steady_loss:.4f}, ratio={recent_loss/min_steady_loss:.4f}, threshold={1 + self.reactivation_threshold}"
+                    )
+
         # Update the weight based on steady state detection
         if in_steady_state and self.similarity_active:
             current_similarity_weight = (
                 self.similarity_weight / 1000
             )  # Zero out weight when in steady state
             self.similarity_active = False
+            print(
+                f"[Step {self.global_step}] DEACTIVATING similarity loss - Entering steady state (CV={coeff_of_variation:.4f})"
+            )
+            print(f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}")
+            print(f"  - Tolerance threshold: {self.steady_state_tolerance}")
         elif loss_increased and not self.similarity_active:
             current_similarity_weight = self.similarity_weight  # Reactivate with full weight
             self.similarity_active = True
+            print(
+                f"[Step {self.global_step}] REACTIVATING similarity loss - Loss increased significantly"
+            )
         else:
             current_similarity_weight = self.similarity_weight if self.similarity_active else 0
+            if self.global_step % 50 == 0:
+                print(
+                    f"[Step {self.global_step}] Similarity status: active={self.similarity_active}, window_size={len(self.similarity_loss_history)}/{self.steady_state_window}"
+                )
+                if len(self.similarity_loss_history) == self.steady_state_window:
+                    mean_loss = sum(self.similarity_loss_history) / self.steady_state_window
+                    std_loss = (
+                        sum((x - mean_loss) ** 2 for x in self.similarity_loss_history)
+                        / self.steady_state_window
+                    ) ** 0.5
+                    cv = std_loss / mean_loss
+                    print(
+                        f"  - Window values: {[f'{x:.4f}' for x in self.similarity_loss_history]}"
+                    )
+                    print(
+                        f"  - CV={cv:.4f}, threshold={self.steady_state_tolerance}, steady_state={cv < self.steady_state_tolerance}"
+                    )
 
-        if self.global_step % 50 == 0:
+        if self.global_step % self.steady_state_window == 0:
             combined_latent = ad.concat(
                 [
                     AnnData(rna_latent_mean.detach().cpu().numpy()),
@@ -525,8 +633,7 @@ class DualVAETrainingPlan(TrainingPlan):
             )
             sc.pp.pca(combined_latent, n_comps=5)
             sc.pp.neighbors(combined_latent, use_rep="X_pca", n_neighbors=10)
-            iLISI_score = calculate_iLISI(combined_latent, "modality", plot_flag=True)
-            print(f"iLISI score: {iLISI_score}, similarity weight: {self.similarity_weight}")
+            iLISI_score = calculate_iLISI(combined_latent, "modality", plot_flag=False)
             if iLISI_score < 1.9 and self.similarity_weight > 1e8:
                 self.similarity_weight = self.similarity_weight * 10
             elif self.similarity_weight > 100:  # make it smaller only if it is not too small
@@ -534,24 +641,34 @@ class DualVAETrainingPlan(TrainingPlan):
         # Store similarity metrics
         similarity_loss = current_similarity_weight * similarity_loss_raw
 
+        # Update the history window (maintain fixed size)
+        if len(self.similarity_loss_history) >= self.steady_state_window:
+            self.similarity_loss_history.pop(0)  # Remove oldest value
+        self.similarity_loss_history.append(similarity_loss_raw.item())
+
         self.similarity_losses.append(similarity_loss.item())
         self.similarity_losses_raw.append(similarity_loss_raw.item())
         self.similarity_weights.append(self.similarity_weight)
-
-        self.similarity_loss_history.append(similarity_loss_raw.item())
         self.active_similarity_loss_active_history.append(self.similarity_active)
 
+        # Add cell type clustering loss to the total loss
         total_loss = (
-            # rna_loss_output.loss
-            # + protein_loss_output.loss
+            rna_loss_output.loss
+            + protein_loss_output.loss
             # + contrastive_loss
             # + adv_loss # dont remove comment for now
-            # + matching_loss
-            +similarity_loss
+            + matching_loss
+            + similarity_loss
+            + self.cell_type_clustering_weight * cell_type_clustering_loss
             # + diversity_loss # dont remove comment for now
         )
 
+        # Store the clustering loss
+        self.train_cell_type_clustering_losses.append(cell_type_clustering_loss.item())
+
         if should_plot:
+            print(f"iLISI score: {iLISI_score}, similarity weight: {self.similarity_weight}")
+
             plot_similarity_loss_history(
                 self.similarity_losses, self.active_similarity_loss_active_history
             )
@@ -574,11 +691,13 @@ class DualVAETrainingPlan(TrainingPlan):
                 num_acceptable,
                 num_cells,
                 exact_pairs,
+                cell_type_clustering_loss=cell_type_clustering_loss,
             )
 
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
             print(f"max latent distances: {round(latent_distances.max().item(),3)}")
             print(f"mean latent distances: {round(latent_distances.mean().item(),3)}")
+            print(f"cell type clustering loss: {round(cell_type_clustering_loss.item(),3)}")
 
         update_log(self.log_file, "train_similarity_loss_raw", similarity_loss_raw.item())
         update_log(self.log_file, "train_similarity_weighted", similarity_loss.item())
@@ -594,6 +713,7 @@ class DualVAETrainingPlan(TrainingPlan):
             total_loss,
             adv_loss,
             diversity_loss,
+            cell_type_clustering_loss=self.cell_type_clustering_weight * cell_type_clustering_loss,
         )
 
         log_step_metrics(
@@ -702,6 +822,69 @@ class DualVAETrainingPlan(TrainingPlan):
         else:
             similarity_loss = torch.tensor(0.0).to(device)
 
+        # Calculate cell type clustering loss
+        rna_cell_types = torch.tensor(
+            self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
+        ).to(device)
+        protein_cell_types = torch.tensor(
+            self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
+        ).to(device)
+
+        # Combine cell types and latent representations from both modalities
+        combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
+        combined_latent_means = torch.cat([rna_latent_mean, protein_latent_mean])
+
+        # Calculate centroid for each cell type
+        unique_cell_types = torch.unique(combined_cell_types)
+        num_cell_types = len(unique_cell_types)
+
+        # Skip the cell type clustering loss if there's only one cell type
+        cell_type_clustering_loss = torch.tensor(0.0).to(device)
+
+        if num_cell_types > 1:
+            # Calculate centroids for each cell type
+            centroids = []
+            for cell_type in unique_cell_types:
+                mask = combined_cell_types == cell_type
+                if mask.sum() > 0:  # Ensure at least one cell of this type exists
+                    centroid = combined_latent_means[mask].mean(dim=0)
+                    centroids.append(centroid)
+
+            centroids = torch.stack(centroids)
+
+            # Calculate inter-cluster distances
+            inter_cluster_distances = torch.cdist(centroids, centroids)
+
+            # Set diagonal to inf to exclude same-cluster distances
+            eye_mask = torch.eye(num_cell_types, device=device, dtype=torch.bool)
+            inter_cluster_distances = inter_cluster_distances.masked_fill(eye_mask, float("inf"))
+
+            # Penalty for clusters that are too close
+            min_inter_cluster_distance = inter_cluster_distances.min(dim=1)[0]
+
+            # Calculate intra-cluster distances
+            intra_cluster_distances = []
+            for i, cell_type in enumerate(unique_cell_types):
+                mask = combined_cell_types == cell_type
+                if mask.sum() > 1:  # Need at least 2 cells for distance calculation
+                    cells = combined_latent_means[mask]
+                    # Calculate average distance to centroid
+                    dists = torch.norm(cells - centroids[i].unsqueeze(0), dim=1).mean()
+                    intra_cluster_distances.append(dists)
+                else:
+                    # If only one cell of this type, use a small default value
+                    intra_cluster_distances.append(torch.tensor(0.1).to(device))
+
+            if intra_cluster_distances:
+                intra_cluster_distances = torch.stack(intra_cluster_distances)
+
+                # Ratio of intra-cluster distance to inter-cluster distance
+                # Lower is better - tight clusters that are far apart
+                cluster_ratio = intra_cluster_distances / min_inter_cluster_distance
+
+                # Penalty for clusters with high intra/inter ratio
+                cell_type_clustering_loss = cluster_ratio.mean()
+
         # Calculate total validation loss with same components as training
         validation_total_loss = (
             rna_loss_output.loss
@@ -709,6 +892,7 @@ class DualVAETrainingPlan(TrainingPlan):
             + self.contrastive_weight * distances.mean()
             + matching_loss
             + similarity_loss
+            + self.cell_type_clustering_weight * cell_type_clustering_loss
         )
 
         # Log the validation loss metric
@@ -723,6 +907,7 @@ class DualVAETrainingPlan(TrainingPlan):
             self.contrastive_weight * distances.mean(),
             validation_total_loss,
             latent_distances,
+            cell_type_clustering_loss=self.cell_type_clustering_weight * cell_type_clustering_loss,
         )
 
         self.val_losses.append(validation_total_loss.item())
@@ -791,6 +976,7 @@ class DualVAETrainingPlan(TrainingPlan):
             "train_matching_loss": self.train_matching_losses,
             "train_contrastive_loss": self.train_contrastive_losses,
             "train_adv_loss": self.train_adv_losses,
+            "train_cell_type_clustering_loss": self.train_cell_type_clustering_losses,
             "val_total_loss": self.val_losses,
             "val_rna_loss": self.val_rna_losses,
         }
@@ -801,7 +987,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         print("✓ Early stopping artifacts saved")
 
-    def on_train_end(self):
+    def on_train_end(self, plot_flag=True):
         """Called when training ends."""
         print("\nTraining completed!")
 
@@ -848,17 +1034,6 @@ class DualVAETrainingPlan(TrainingPlan):
         os.makedirs(save_dir, exist_ok=True)
         self.rna_vae.save(f"{save_dir}/rna_vae_final", overwrite=True)
         self.protein_vae.save(f"{save_dir}/protein_vae_final", overwrite=True)
-
-        # Plot final results
-        if plot_flag:
-            plot_latent_pca_both_modalities(
-                rna_latent,
-                prot_latent,
-                self.rna_vae.adata,
-                self.protein_vae.adata,
-                index_rna=range(len(self.rna_vae.adata.obs.index)),
-                index_prot=range(len(self.protein_vae.adata.obs.index)),
-            )
 
 
 # %%
@@ -1010,30 +1185,30 @@ print("Current working directory:", os.getcwd())
 print("Python path:", sys.path)
 adata_rna_subset_original = adata_rna_subset.copy()
 # Create new AnnData with PCA values
-adata_rna_subset = sc.AnnData(
-    X=adata_rna_subset_original.obsm["X_pca"] - np.min(adata_rna_subset_original.obsm["X_pca"]),
-    obs=adata_rna_subset_original.obs.copy(),
-    var=pd.DataFrame(
-        index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
-    ),
-    obsm=adata_rna_subset_original.obsm.copy(),
-    uns=adata_rna_subset_original.uns.copy(),
-)
-# Create new AnnData with PCA values for protein data
-adata_prot_subset_original = adata_prot_subset.copy()
-adata_prot_subset = sc.AnnData(
-    X=adata_prot_subset_original.obsm["X_pca"] - np.min(adata_prot_subset_original.obsm["X_pca"]),
-    obs=adata_prot_subset_original.obs.copy(),
-    var=pd.DataFrame(
-        index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
-    ),
-    obsm=adata_prot_subset_original.obsm.copy(),
-    uns=adata_prot_subset_original.uns.copy(),
-)
+# adata_rna_subset = sc.AnnData(
+#     X=adata_rna_subset_original.obsm["X_pca"] - np.min(adata_rna_subset_original.obsm["X_pca"]),
+#     obs=adata_rna_subset_original.obs.copy(),
+#     var=pd.DataFrame(
+#         index=[f"PC_{i}" for i in range(adata_rna_subset_original.obsm["X_pca"].shape[1])]
+#     ),
+#     obsm=adata_rna_subset_original.obsm.copy(),
+#     uns=adata_rna_subset_original.uns.copy(),
+# )
+# # Create new AnnData with PCA values for protein data
+# adata_prot_subset_original = adata_prot_subset.copy()
+# adata_prot_subset = sc.AnnData(
+#     X=adata_prot_subset_original.obsm["X_pca"] - np.min(adata_prot_subset_original.obsm["X_pca"]),
+#     obs=adata_prot_subset_original.obs.copy(),
+#     var=pd.DataFrame(
+#         index=[f"PC_{i}" for i in range(adata_prot_subset_original.obsm["X_pca"].shape[1])]
+#     ),
+#     obsm=adata_prot_subset_original.obsm.copy(),
+#     uns=adata_prot_subset_original.uns.copy(),
+# )
 
 
 training_kwargs = {
-    "max_epochs": 2,
+    "max_epochs": 80,
     "batch_size": 1200,
     "train_size": 0.9,
     "validation_size": 0.1,
@@ -1049,9 +1224,10 @@ training_kwargs = {
     "plot_x_times": 3,
     "contrastive_weight": 10.0,
     "similarity_weight": 10000.0,
-    "matching_weight": 1.0,
-    "kl_weight_rna": 1.0,
-    "kl_weight_prot": 3000.0,
+    "matching_weight": 1000000.0,
+    "cell_type_clustering_weight": 100.0,
+    "kl_weight_rna": 0.1,
+    "kl_weight_prot": 10.0,
 }
 # %%
 rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
@@ -1077,6 +1253,7 @@ mlflow.log_params(
         "similarity_weight": training_kwargs["similarity_weight"],
         # "diversity_weight": training_kwargs["diversity_weight"],
         "matching_weight": training_kwargs["matching_weight"],
+        "cell_type_clustering_weight": training_kwargs["cell_type_clustering_weight"],
         "adv_weight": training_kwargs.get("adv_weight", None),
         "n_hidden_rna": training_kwargs.get("n_hidden_rna", None),
         "n_hidden_prot": training_kwargs.get("n_hidden_prot", None),
@@ -1099,66 +1276,15 @@ mlflow.log_metrics(
         # "final_train_similarity_weight": history["train_similarity_weight"][-1],
         "final_train_total_loss": history["train_total_loss"][-1],
         "final_val_total_loss": history["val_total_loss"][-1],
+        "final_train_cell_type_clustering_loss": history["train_cell_type_clustering_loss"][-1],
     }
 )
 
 
-print("\nPreparing models for visualization...")
-rna_vae_new.module.to(device)
-protein_vae.module.to(device)
-rna_vae_new.module.eval()
-protein_vae.module.eval()
-print("✓ Models prepared")
 # %%
-# Generate latent representatiindices = np.clip(indtensor(self.protein_vae.adata[indexices, 0, max_idx)ons
-print("\nGenerating latent representations...")
-with torch.no_grad():
-    # Prepare input tensors
-    # rna_tensors = {
-    #     "X": torch.tensor(rna_vae_new.adata.X, dtype=torch.float32).to(device),
-    #     "batch": torch.tensor(rna_vae_new.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device),
-    #     "labels": torch.tensor(rna_vae_new.adata.obs["index_col"].values, dtype=torch.long).to(device)
-    # }
-    # prot_tensors = {
-    #     "X": torch.tensor(protein_vae.adata.X, dtype=torch.float32).to(device),
-    #     "batch": torch.tensor(protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long).to(device),
-    #     "labels": torch.tensor(protein_vae.adata.obs["index_col"].values, dtype=torch.long).to(device)
-    # }
-
-    # rna_inference_outputs, _, rna_loss_output = rna_vae_new.module(
-    #     rna_tensors, loss_kwargs={"kl_weight": 1}
-    # )
-    # latent_rna = rna_inference_outputs["z"].detach().cpu().numpy()
-
-    # protein_inference_outputs, _, protein_loss_output = protein_vae.module(
-    #     prot_tensors, loss_kwargs={"kl_weight": 1}
-    # )
-    # latent_prot = protein_inference_outputs["z"].detach().cpu().numpy()
-    # if latent_rna_before is not None:
-    #     # chekc if latent_rna_before is the same as latent_rna
-    #     if np.allclose(latent_rna_before, latent_rna):
-    #         raise ValueError("Latent representations are the same as before training")
-    # if latent_prot_before is not None:
-    #     if np.allclose(latent_prot_before, latent_prot):
-    #         raise ValueError("Latent representations are the same as before training")
-    # latent_rna = rna_vae_new.get_latent_representation()
-    # latent_prot = protein_vae.get_latent_representation()
-    latent_rna = rna_vae_new.adata.obsm["X_latent"]
-    latent_prot = protein_vae.adata.obsm["X_latent"]
-    # with torch.no_grad():
-    #     inference_outputs = rna_vae_new.module.inference(
-    #     rna_tensors['X'],
-    #     batch_index=rna_vae_new.adata.obs["_scvi_batch"].values,
-    #         n_samples=1
-    #     )
-    #     latent_rna = inference_outputs["qz"].mean.detach().cpu().numpy()
-
-    #     inference_outputs = protein_vae.module.inference(
-    #     prot_tensors['X'],
-    #     batch_index=protein_vae.adata.obs["_scvi_batch"].values,
-    #         n_samples=1
-    #     )
-    #     latent_prot = inference_outputs["qz"].mean.detach().cpu().numpy()
+print("\nGer latent representations...")
+latent_rna = rna_vae_new.adata.obsm["X_latent"]
+latent_prot = protein_vae.adata.obsm["X_latent"]
 
 
 # Store latent representations
@@ -1276,13 +1402,16 @@ print("✓ Spatial data plotted")
 
 # Plot latent representations
 print("\nPlotting latent representations...")
-plot_latent_pca_both_modalities(
+plot_latent_pca_both_modalities_cn(
     latent_rna,
     latent_prot,
     rna_vae_new.adata,
     protein_vae.adata,
     index_rna=range(len(rna_vae_new.adata.obs.index)),
     index_prot=range(len(protein_vae.adata.obs.index)),
+)
+plot_latent_pca_both_modalities_by_celltype(
+    rna_vae_new.adata, protein_vae.adata, latent_rna, latent_prot
 )
 print("✓ Latent representations plotted")
 

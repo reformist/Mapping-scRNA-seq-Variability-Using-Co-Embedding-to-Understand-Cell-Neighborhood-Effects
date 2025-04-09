@@ -185,7 +185,7 @@ def plot_spatial_data_comparison(adata_rna, adata_prot):
 # This module contains functions for plotting VAE-specific visualizations.
 
 
-def plot_latent_pca_both_modalities(
+def plot_latent_pca_both_modalities_cn(
     rna_mean,
     protein_mean,
     adata_rna_subset,
@@ -254,6 +254,84 @@ def plot_latent_pca_both_modalities(
         safe_mlflow_log_figure(plt.gcf(), f"step_{global_step}_latent_pca_both_modalities.png")
     else:
         safe_mlflow_log_figure(plt.gcf(), "latent_pca_both_modalities.png")
+    plt.show()
+
+
+def plot_latent_pca_both_modalities_by_celltype(
+    adata_rna_subset,
+    adata_prot_subset,
+    latent_rna,
+    latent_prot,
+    index_rna=None,
+    index_prot=None,
+    global_step=None,
+):
+    """Plot PCA of latent space colored by cell type."""
+    if index_rna is None:
+        index_rna = range(len(adata_rna_subset))
+    if index_prot is None:
+        index_prot = range(len(adata_prot_subset))
+
+    # Ensure indices are within bounds
+    index_rna = [i for i in index_rna if i < len(adata_rna_subset) and i < latent_rna.shape[0]]
+    index_prot = [i for i in index_prot if i < len(adata_prot_subset) and i < latent_prot.shape[0]]
+
+    # Ensure indices are the same length (use the smaller length)
+    min_len = min(len(index_rna), len(index_prot))
+    index_rna = index_rna[:min_len]
+    index_prot = index_prot[:min_len]
+
+    # Ensure all indices are valid
+    if not index_rna or not index_prot:
+        print("Warning: No valid indices for plotting. Skipping plot.")
+        return
+
+    num_rna = len(index_rna)
+    # Use explicit selection from latent variables
+    rna_latent_subset = latent_rna[index_rna]
+    prot_latent_subset = latent_prot[index_prot]
+
+    combined_latent = np.vstack([rna_latent_subset, prot_latent_subset])
+    pca = PCA(n_components=2)
+    combined_pca = pca.fit_transform(combined_latent)
+
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    if "cell_type" in adata_rna_subset.obs:
+        hue_col = "cell_type"
+    elif "cell_types" in adata_rna_subset.obs:
+        hue_col = "cell_types"
+    else:
+        hue_col = "major_cell_types"
+
+    sns.scatterplot(
+        x=combined_pca[:num_rna, 0],
+        y=combined_pca[:num_rna, 1],
+        hue=adata_rna_subset[index_rna].obs[hue_col],
+    )
+    plt.title("RNA")
+
+    plt.subplot(1, 2, 2)
+    if "cell_type" in adata_prot_subset.obs:
+        hue_col = "cell_type"
+    elif "cell_types" in adata_prot_subset.obs:
+        hue_col = "cell_types"
+    else:
+        hue_col = "major_cell_types"
+
+    sns.scatterplot(
+        x=combined_pca[num_rna:, 0],
+        y=combined_pca[num_rna:, 1],
+        hue=adata_prot_subset[index_prot].obs[hue_col],
+    )
+    plt.title("protein")
+    plt.suptitle("PCA of latent space during training\nColor by cell type")
+    plt.tight_layout()
+
+    if global_step is not None:
+        safe_mlflow_log_figure(plt.gcf(), f"step_{global_step}_latent_pca_celltype.png")
+    else:
+        safe_mlflow_log_figure(plt.gcf(), "latent_pca_celltype.png")
     plt.show()
 
 
@@ -571,42 +649,60 @@ def plot_similarity_loss_history(
 
 
 def plot_normalized_losses(history):
-    """Plot normalized training losses."""
-    plt.figure(figsize=(15, 5))
-
+    """Plot normalized training and validation losses in separate figures."""
     # Get all loss keys from history
     loss_keys = [k for k in history.keys() if "loss" in k.lower() and len(history[k]) > 0]
 
-    # Normalize each loss
-    normalized_losses = {}
-    labels = {}
-    for key in loss_keys:
-        values = history[key]
-        if len(values) > 0:  # Only process non-empty lists
-            values = np.array(values)
-            # Remove inf and nan
-            values = values[~np.isinf(values) & ~np.isnan(values)]
-            if len(values) > 0:  # Check again after filtering
-                min_val = np.min(values)
-                max_val = np.max(values)
-                label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
-                labels[key] = label
-                if max_val > min_val:  # Avoid division by zero
-                    normalized_losses[key] = (values - min_val) / (max_val - min_val)
+    # Split into train and validation losses
+    train_loss_keys = [k for k in loss_keys if k.startswith("train_") and "adv" not in k.lower()]
+    val_loss_keys = [
+        k
+        for k in loss_keys
+        if (k.startswith("val_") or k.startswith("validation_")) and "adv" not in k.lower()
+    ]
 
-    # Plot each normalized loss
-    for key, values in normalized_losses.items():
-        min_val = np.min(values)
-        max_val = np.max(values)
-        plt.plot(values, label=labels[key], alpha=0.7)
+    # Function to normalize and plot losses
+    def plot_losses(keys, title):
+        plt.figure(figsize=(15, 5))
+        normalized_losses = {}
+        labels = {}
 
-    plt.title("Normalized Training Losses")
-    plt.xlabel("Step")
-    plt.ylabel("Normalized Loss")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    plt.grid(True)
-    safe_mlflow_log_figure(plt.gcf(), "normalized_losses.png")
-    plt.show()
+        for key in keys:
+            values = history[key]
+            if len(values) > 0:  # Only process non-empty lists
+                values = np.array(values)
+                # Remove inf and nan
+                values = values[~np.isinf(values) & ~np.isnan(values)]
+                if len(values) > 0:  # Check again after filtering
+                    min_val = np.min(values)
+                    max_val = np.max(values)
+                    label = f"{key} min: {min_val:.0f} max: {max_val:.0f}"
+                    labels[key] = label
+                    if max_val > min_val:  # Avoid division by zero
+                        normalized_losses[key] = (values - min_val) / (max_val - min_val)
+
+        # Plot each normalized loss
+        for key, values in normalized_losses.items():
+            if "total" in key.lower():
+                plt.plot(values, label=labels[key], alpha=0.7, linestyle="--")
+            else:
+                plt.plot(values, label=labels[key], alpha=0.7)
+
+        plt.title(title)
+        plt.xlabel("Step")
+        plt.ylabel("Normalized Loss")
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True)
+        safe_mlflow_log_figure(plt.gcf(), f"{title.lower().replace(' ', '_')}.png")
+        plt.show()
+
+    # Plot training losses
+    if train_loss_keys:
+        plot_losses(train_loss_keys, "Normalized Training Losses")
+
+    # Plot validation losses
+    if val_loss_keys:
+        plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
 def plot_cosine_distance(rna_batch, protein_batch):

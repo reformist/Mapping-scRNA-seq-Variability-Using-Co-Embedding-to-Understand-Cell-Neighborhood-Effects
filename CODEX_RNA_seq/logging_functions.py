@@ -7,6 +7,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import torch
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -113,16 +115,36 @@ def log_training_metrics(
     total_loss,
     adv_loss,
     diversity_loss,
+    cell_type_clustering_loss=None,
 ):
-    """Log training metrics"""
-    update_log(log_file, "train_total_loss", total_loss.item())
-    update_log(log_file, "train_rna_reconstruction_loss", rna_loss_output.loss.item())
-    update_log(log_file, "train_protein_reconstruction_loss", protein_loss_output.loss.item())
-    update_log(log_file, "train_contrastive_loss", contrastive_loss.item())
-    update_log(log_file, "train_matching_rna_protein_loss", matching_loss.item())
-    update_log(log_file, "train_similarity_loss", similarity_loss.item())
-    update_log(log_file, "train_adv_loss", adv_loss.item())
-    update_log(log_file, "train_diversity_loss", diversity_loss.item())
+    """Log training metrics to a JSON file."""
+    with open(log_file, "r") as f:
+        logs = json.load(f)
+
+    if "train_metrics" not in logs:
+        logs["train_metrics"] = []
+
+    metrics_dict = {
+        "rna_loss": rna_loss_output.loss.item(),
+        "protein_loss": protein_loss_output.loss.item(),
+        "contrastive_loss": contrastive_loss.item(),
+        "matching_loss": matching_loss.item(),
+        "similarity_loss": similarity_loss.item(),
+        "total_loss": total_loss.item(),
+        "adv_loss": adv_loss.item(),
+        "diversity_loss": diversity_loss.item(),
+    }
+
+    if cell_type_clustering_loss is not None:
+        if isinstance(cell_type_clustering_loss, torch.Tensor):
+            metrics_dict["cell_type_clustering_loss"] = cell_type_clustering_loss.item()
+        else:
+            metrics_dict["cell_type_clustering_loss"] = cell_type_clustering_loss
+
+    logs["train_metrics"].append(metrics_dict)
+
+    with open(log_file, "w") as f:
+        json.dump(logs, f, indent=2)
 
 
 def log_validation_metrics(
@@ -132,17 +154,35 @@ def log_validation_metrics(
     contrastive_loss,
     validation_total_loss,
     matching_rna_protein_latent_distances,
+    cell_type_clustering_loss=None,
 ):
-    """Log validation metrics"""
-    update_log(log_file, "validation_total_loss", validation_total_loss.item())
-    update_log(log_file, "validation_rna_loss", rna_loss_output.loss.item())
-    update_log(log_file, "validation_protein_loss", protein_loss_output.loss.item())
-    update_log(log_file, "validation_contrastive_loss", contrastive_loss.item())
-    update_log(
-        log_file,
-        "validation_matching_latent_distances",
-        matching_rna_protein_latent_distances.mean().item(),
-    )
+    """Log validation metrics to a file."""
+    with open(log_file, "r") as f:
+        logs = json.load(f)
+
+    if "validation_metrics" not in logs:
+        logs["validation_metrics"] = []
+
+    metrics_dict = {
+        "val_total_loss": validation_total_loss.item(),
+        "val_rna_loss": rna_loss_output.loss.item(),
+        "val_protein_loss": protein_loss_output.loss.item(),
+        "val_contrastive_loss": contrastive_loss.item(),
+        "val_matching_distances_mean": matching_rna_protein_latent_distances.mean().item(),
+        "val_matching_distances_min": matching_rna_protein_latent_distances.min().item(),
+        "val_matching_distances_max": matching_rna_protein_latent_distances.max().item(),
+    }
+
+    if cell_type_clustering_loss is not None:
+        if isinstance(cell_type_clustering_loss, torch.Tensor):
+            metrics_dict["val_cell_type_clustering_loss"] = cell_type_clustering_loss.item()
+        else:
+            metrics_dict["val_cell_type_clustering_loss"] = cell_type_clustering_loss
+
+    logs["validation_metrics"].append(metrics_dict)
+
+    with open(log_file, "w") as f:
+        json.dump(logs, f, indent=2)
 
 
 def log_batch_metrics(
@@ -254,6 +294,7 @@ def print_training_metrics(
     num_acceptable,
     num_cells,
     exact_pairs,
+    cell_type_clustering_loss=None,
 ):
     """Print training metrics in a structured format."""
     print("\n" + "=" * 80)
@@ -277,6 +318,14 @@ def print_training_metrics(
     print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss.item())}")
     print(f"Similarity Loss: {format_loss(similarity_loss.item(), total_loss.item())}")
     print(f"Diversity Loss: {format_loss(diversity_loss.item(), total_loss.item())}")
+
+    if cell_type_clustering_loss is not None:
+        if isinstance(cell_type_clustering_loss, torch.Tensor):
+            loss_value = cell_type_clustering_loss.item()
+        else:
+            loss_value = cell_type_clustering_loss
+        print(f"Cell Type Clustering Loss: {format_loss(loss_value, total_loss.item())}")
+
     print(f"Total Loss: {total_loss.item():.3f}")
 
     print("\nDistance Metrics:")
