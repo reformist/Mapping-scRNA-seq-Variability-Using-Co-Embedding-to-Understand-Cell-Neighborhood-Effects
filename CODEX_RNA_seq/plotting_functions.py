@@ -576,6 +576,7 @@ def plot_rna_protein_matching_means_and_scale(
     plt.title("PCA of RNA and Protein with Scale Halos")
     plt.legend()
     plt.gca().set_aspect("equal")
+    plt.tight_layout()
 
     if global_step is not None:
         safe_mlflow_log_figure(
@@ -685,6 +686,7 @@ def plot_similarity_loss_history(
         alpha=0.5,
     )
     plt.legend(handles=[red_patch, blue_patch])
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), f"step_{global_step}_similarity_loss_history.png")
     plt.show()
 
@@ -734,6 +736,7 @@ def plot_normalized_losses(history):
         plt.ylabel("Normalized Loss")
         plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.grid(True)
+        plt.tight_layout()
         safe_mlflow_log_figure(plt.gcf(), f"{title.lower().replace(' ', '_')}.png")
         plt.show()
 
@@ -774,6 +777,7 @@ def plot_cosine_distance(rna_batch, protein_batch):
     plt.xlabel("PC1 (Normalized)")
     plt.ylabel("PC2 (Normalized)")
     plt.legend()
+    plt.tight_layout()
     plt.show()
 
 
@@ -821,7 +825,7 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
     """Plot combined latent space visualizations"""
     # Subsample if requested
     if use_subsample:
-        n_subsample = min(7000, combined_latent.shape[0])
+        n_subsample = min(10000, combined_latent.shape[0])
         subsample_idx = np.random.choice(combined_latent.shape[0], n_subsample, replace=False)
         combined_latent_plot = combined_latent[subsample_idx].copy()
     else:
@@ -839,6 +843,7 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
         ],
         alpha=0.5,
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_umap.png")
 
     # Plot PCA
@@ -848,6 +853,7 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
         title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
         alpha=0.5,
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_pca.png")
 
 
@@ -876,6 +882,7 @@ def plot_cell_type_distributions(combined_latent, top_n=3, use_subsample=True):
             ],
             alpha=0.5,
         )
+        plt.tight_layout()
         safe_mlflow_log_figure(plt.gcf(), f"cell_type_distribution_{cell_type}.png")
 
 
@@ -906,6 +913,7 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae, use_subs
         basis="X_scVI",
         title=["RNA_latent_CN", "RNA_Latent_CellTypes"],
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "rna_latent_embeddings.png")
 
     sc.pl.embedding(
@@ -914,6 +922,7 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae, use_subs
         basis="X_scVI",
         title=["Protein_latent_CN", "Protein_Laten_CellTypes"],
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "protein_latent_embeddings.png")
 
 
@@ -956,6 +965,7 @@ def plot_archetype_embedding(rna_vae_new, protein_vae, use_subsample=True):
         color=["CN", "cell_types"],
         title=["RNA_Archetype_UMAP_CN", "RNA_Archetype_UMAP_CellTypes"],
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "rna_archetype_umap.png")
 
     sc.pl.umap(
@@ -966,6 +976,7 @@ def plot_archetype_embedding(rna_vae_new, protein_vae, use_subsample=True):
             "Protein_Archetype_UMAP_CellTypes",
         ],
     )
+    plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "protein_archetype_umap.png")
 
 
@@ -1428,6 +1439,7 @@ def plot_training_metrics_history(metrics_history):
         plt.title(metric)
         plt.tight_layout()
 
+    plt.tight_layout()
     safe_mlflow_log_figure(fig, "training_metrics.png")
     plt.close()
 
