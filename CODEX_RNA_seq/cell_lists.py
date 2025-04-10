@@ -35,14 +35,14 @@ import plotting_functions as pf
 
 import bar_nick_utils
 
-importlib.reload(pf)
+# importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 
 
 # load /home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad
-adata = sc.read(
-    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad"
-)
+# adata = sc.read(
+#     "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/CODEX_RNA_seq/data/trained_data/protein_vae_trained.h5ad"
+# )
 
 # %%
 terminal_exhaustion = [
