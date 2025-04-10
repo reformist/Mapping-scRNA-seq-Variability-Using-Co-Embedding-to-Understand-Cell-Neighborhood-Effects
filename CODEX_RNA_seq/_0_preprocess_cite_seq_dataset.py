@@ -261,8 +261,8 @@ def save_processed_data(adata_1, adata_2, save_dir):
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    rna_file = save_dir / f"preprocessed_adata_rna_maxfuse_{time_stamp}.h5ad"
-    prot_file = save_dir / f"preprocessed_adata_prot_maxfuse_{time_stamp}.h5ad"
+    rna_file = save_dir / f"preprocessed_adata_rna_cite_seq_{time_stamp}.h5ad"
+    prot_file = save_dir / f"preprocessed_adata_prot_cite_seq_{time_stamp}.h5ad"
 
     print(f"\nRNA data dimensions: {adata_1.shape[0]} samples x {adata_1.shape[1]} features")
     print(f"Protein data dimensions: {adata_2.shape[0]} samples x {adata_2.shape[1]} features\n")
