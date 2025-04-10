@@ -23,6 +23,7 @@ from plotting_functions import (
 )
 from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_mutual_info_score
+from tqdm import tqdm
 
 from bar_nick_utils import clean_uns_for_h5ad, compare_distance_distributions, mixing_score
 
@@ -132,13 +133,13 @@ def process_latent_spaces(rna_adata, protein_adata):
     return rna_latent, prot_latent, combined_latent
 
 
-def batched_cdist(X, Y, batch_size=1000):
+def batched_cdist(X, Y, batch_size=5000):
     """Calculate pairwise distances in batches to prevent memory issues."""
     n_x = X.shape[0]
     n_y = Y.shape[0]
     distances = np.zeros((n_x, n_y))
 
-    for i in range(0, n_x, batch_size):
+    for i in tqdm(range(0, n_x, batch_size), desc="Processing rows", total=n_x // batch_size):
         end_i = min(i + batch_size, n_x)
         batch_X = X[i:end_i]
 

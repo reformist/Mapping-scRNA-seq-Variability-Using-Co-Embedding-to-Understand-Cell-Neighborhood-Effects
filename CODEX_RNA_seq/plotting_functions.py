@@ -307,13 +307,11 @@ def plot_latent_pca_both_modalities_by_celltype(
 ):
     """Plot PCA of latent space colored by cell type."""
     if index_rna is None:
-        index_rna = range(len(adata_rna_subset))
+        index_rna = range(len(latent_rna))
     if index_prot is None:
-        index_prot = range(len(adata_prot_subset))
+        index_prot = range(len(latent_prot))
 
     # Ensure indices are within bounds
-    index_rna = [i for i in index_rna if i < len(adata_rna_subset) and i < latent_rna.shape[0]]
-    index_prot = [i for i in index_prot if i < len(adata_prot_subset) and i < latent_prot.shape[0]]
 
     # Subsample if requested - use separate sampling for RNA and protein
     if use_subsample:
@@ -321,16 +319,12 @@ def plot_latent_pca_both_modalities_by_celltype(
         n_subsample_rna = min(1000, len(index_rna))
         rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
         index_rna = np.array(index_rna)[rna_subsample_idx]
-
+        latent_rna = latent_rna[rna_subsample_idx]
         # Sample protein data (separately)
         n_subsample_prot = min(1000, len(index_prot))
         prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
         index_prot = np.array(index_prot)[prot_subsample_idx]
-    else:
-        # Ensure indices are the same length (use the smaller length)
-        min_len = min(len(index_rna), len(index_prot))
-        index_rna = index_rna[:min_len]
-        index_prot = index_prot[:min_len]
+        latent_prot = latent_prot[prot_subsample_idx]
 
     # Ensure all indices are valid
     if len(index_rna) == 0 or len(index_prot) == 0:
@@ -338,11 +332,8 @@ def plot_latent_pca_both_modalities_by_celltype(
         return
 
     num_rna = len(index_rna)
-    # Use explicit selection from latent variables
-    rna_latent_subset = latent_rna[index_rna]
-    prot_latent_subset = latent_prot[index_prot]
 
-    combined_latent = np.vstack([rna_latent_subset, prot_latent_subset])
+    combined_latent = np.vstack([latent_rna, latent_prot])
     pca = PCA(n_components=2)
     combined_pca = pca.fit_transform(combined_latent)
 

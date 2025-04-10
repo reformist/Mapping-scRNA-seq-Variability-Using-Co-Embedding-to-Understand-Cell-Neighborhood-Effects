@@ -82,10 +82,10 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [5],
-    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [31],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [0.0],  # [0.0, 100.0, 100_000],
+    "contrastive_weight": [0.0, 100.0, 100_000],
     "similarity_weight": [0.0, 10000.0, 1000000.0],
     "diversity_weight": [0.0],
     "matching_weight": [0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
@@ -95,7 +95,7 @@ param_grid = {
     "n_layers": [3],
     "latent_dim": [10],
     "kl_weight_rna": [0.001, 0.01],
-    "kl_weight_prot": [0.001, 0.1],
+    "kl_weight_prot": [10, 0.1],
     "adv_weight": [0.0],
     "train_size": [0.85],
     "validation_size": [0.15],
@@ -212,9 +212,9 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             # Process latent spaces
             # subsample the adata_rna_subset and adata_prot_subset to 1000 cells
             rna_adata = rna_vae.adata
-            rna_adata = sc.pp.subsample(rna_adata, n_obs=5000, copy=True)
+            rna_adata = sc.pp.subsample(rna_adata, n_obs=1500, copy=True)
             prot_adata = protein_vae.adata
-            prot_adata = sc.pp.subsample(prot_adata, n_obs=5000, copy=True)
+            prot_adata = sc.pp.subsample(prot_adata, n_obs=1500, copy=True)
             rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_adata, prot_adata)
 
             # Match cells and calculate distances
@@ -222,7 +222,7 @@ for i, params in enumerate(ParameterGrid(param_grid)):
 
             # Calculate metrics
             metrics = calculate_metrics(
-                rna_vae, protein_vae, matching_results["prot_matches_in_rna"]
+                rna_adata, prot_adata, matching_results["prot_matches_in_rna"]
             )
 
             # Log metrics
@@ -231,8 +231,8 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             # Generate visualizations
 
             generate_visualizations(
-                rna_vae,
-                protein_vae,
+                rna_adata,
+                prot_adata,
                 rna_latent,
                 prot_latent,
                 combined_latent,
