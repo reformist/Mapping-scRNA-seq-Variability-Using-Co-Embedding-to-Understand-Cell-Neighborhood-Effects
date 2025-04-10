@@ -81,23 +81,23 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
     return rna_vae, protein_vae, latent_rna_before, latent_prot_before
 
 
-def process_latent_spaces(rna_vae, protein_vae):
+def process_latent_spaces(rna_adata, protein_adata):
     """Process and combine latent spaces from both modalities."""
     # Get latent representations
-    latent_rna = rna_vae.adata.obsm["X_scVI"]
-    latent_prot = protein_vae.adata.obsm["X_scVI"]
+    latent_rna = rna_adata.obsm["X_scVI"]
+    latent_prot = protein_adata.obsm["X_scVI"]
 
     # Store latent representations
     SCVI_LATENT_KEY = "X_scVI"
-    rna_vae.adata.obs["CN"] = rna_vae.adata.obs["CN"].values
-    rna_vae.adata.obsm[SCVI_LATENT_KEY] = latent_rna
-    protein_vae.adata.obsm[SCVI_LATENT_KEY] = latent_prot
+    rna_adata.obs["CN"] = rna_adata.obs["CN"].values
+    rna_adata.obsm[SCVI_LATENT_KEY] = latent_rna
+    protein_adata.obsm[SCVI_LATENT_KEY] = latent_prot
 
     # Prepare AnnData objects
-    rna_latent = AnnData(rna_vae.adata.obsm[SCVI_LATENT_KEY].copy())
-    prot_latent = AnnData(protein_vae.adata.obsm[SCVI_LATENT_KEY].copy())
-    rna_latent.obs = rna_vae.adata.obs.copy()
-    prot_latent.obs = protein_vae.adata.obs.copy()
+    rna_latent = AnnData(rna_adata.obsm[SCVI_LATENT_KEY].copy())
+    prot_latent = AnnData(protein_adata.obsm[SCVI_LATENT_KEY].copy())
+    rna_latent.obs = rna_adata.obs.copy()
+    prot_latent.obs = protein_adata.obs.copy()
 
     # Run dimensionality reduction
     sc.pp.pca(rna_latent)
@@ -115,15 +115,15 @@ def process_latent_spaces(rna_vae, protein_vae):
         keys=["RNA", "Protein"],
     )
     combined_major_cell_types = pd.concat(
-        (rna_vae.adata.obs["major_cell_types"], protein_vae.adata.obs["major_cell_types"]),
+        (rna_adata.obs["major_cell_types"], protein_adata.obs["major_cell_types"]),
         join="outer",
     )
     combined_latent.obs["major_cell_types"] = combined_major_cell_types
     combined_latent.obs["cell_types"] = pd.concat(
-        (rna_vae.adata.obs["cell_types"], protein_vae.adata.obs["cell_types"]), join="outer"
+        (rna_adata.obs["cell_types"], protein_adata.obs["cell_types"]), join="outer"
     )
     combined_latent.obs["CN"] = pd.concat(
-        (rna_vae.adata.obs["CN"], protein_vae.adata.obs["CN"]), join="outer"
+        (rna_adata.obs["CN"], protein_adata.obs["CN"]), join="outer"
     )
     sc.pp.pca(combined_latent)
     sc.pp.neighbors(combined_latent, n_neighbors=15)
@@ -177,35 +177,35 @@ def match_cells_and_calculate_distances(rna_latent, prot_latent):
     }
 
 
-def calculate_metrics(rna_vae, protein_vae, prot_matches_in_rna):
+def calculate_metrics(rna_adata, protein_adata, prot_matches_in_rna):
     """Calculate various metrics for model evaluation."""
     # Calculate NMI scores
     nmi_cell_types_cn_rna = adjusted_mutual_info_score(
-        rna_vae.adata.obs["cell_types"], rna_vae.adata.obs["CN"]
+        rna_adata.obs["cell_types"], rna_adata.obs["CN"]
     )
     nmi_cell_types_cn_prot = adjusted_mutual_info_score(
-        protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
+        protein_adata.obs["cell_types"], protein_adata.obs["CN"]
     )
     nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae.adata.obs["cell_types"].values[prot_matches_in_rna],
-        protein_vae.adata.obs["cell_types"].values,
+        rna_adata.obs["cell_types"].values[prot_matches_in_rna],
+        protein_adata.obs["cell_types"].values,
     )
 
     # Calculate accuracy
     matches = (
-        rna_vae.adata.obs["cell_types"].values[prot_matches_in_rna]
-        == protein_vae.adata.obs["cell_types"].values
+        rna_adata.obs["cell_types"].values[prot_matches_in_rna]
+        == protein_adata.obs["cell_types"].values
     )
     accuracy = matches.sum() / len(matches)
 
     # Calculate mixing score
     mixing_result = mixing_score(
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
-        rna_vae.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae.adata)),
-        index_prot=range(len(protein_vae.adata)),
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        index_rna=range(len(rna_adata)),
+        index_prot=range(len(protein_adata)),
         plot_flag=True,
     )
 
@@ -220,7 +220,7 @@ def calculate_metrics(rna_vae, protein_vae, prot_matches_in_rna):
 
 
 def generate_visualizations(
-    rna_vae, protein_vae, rna_latent, prot_latent, combined_latent, history, matching_results
+    rna_adata, protein_adata, rna_latent, prot_latent, combined_latent, history, matching_results
 ):
     """Generate all visualizations for the model."""
     # Plot training results
@@ -228,20 +228,20 @@ def generate_visualizations(
 
     # Plot latent representations
     plot_latent_pca_both_modalities_cn(
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
-        rna_vae.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae.adata.obs.index)),
-        index_prot=range(len(protein_vae.adata.obs.index)),
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        index_rna=range(len(rna_adata.obs.index)),
+        index_prot=range(len(protein_adata.obs.index)),
         use_subsample=True,
     )
 
     plot_latent_pca_both_modalities_by_celltype(
-        rna_vae.adata,
-        protein_vae.adata,
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
         use_subsample=True,
     )
 
@@ -259,8 +259,8 @@ def generate_visualizations(
     plot_cell_type_distributions(combined_latent, 3, use_subsample=True)
 
     # Plot archetype and embedding visualizations
-    plot_archetype_embedding(rna_vae, protein_vae, use_subsample=True)
-    plot_rna_protein_latent_cn_cell_type_umap(rna_vae, protein_vae, use_subsample=True)
+    plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True)
+    plot_rna_protein_latent_cn_cell_type_umap(rna_adata, protein_adata, use_subsample=True)
 
 
 def save_results(rna_vae, protein_vae, save_dir):
@@ -314,6 +314,19 @@ def handle_error(e, params, run_name):
     """Handle errors during hyperparameter search."""
     import traceback
 
+    print("\n" + "=" * 80)
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("❌ RUN FAILED ❌".center(80))
+    print("=" * 80 + "\n")
+
     error_msg = f"""
     Error in run {run_name}:
     Error Type: {type(e).__name__}
@@ -330,3 +343,123 @@ def handle_error(e, params, run_name):
     mlflow.log_param("error_memory_usage", f"{get_memory_usage():.2f} GB")
     mlflow.log_param("error_stack_trace", traceback.format_exc())
     clear_memory()  # Clear memory on error
+
+
+def run_cell_type_clustering_loss(
+    adata, latent_mean, indices, device="cuda:0" if torch.cuda.is_available() else "cpu"
+):
+    cell_types = torch.tensor(adata[indices].obs["cell_types"].cat.codes.values).to(device)
+
+    # Combine cell types and latent representations from both modalities
+    # Calculate centroid for each cell type
+    unique_cell_types = torch.unique(cell_types)
+    num_cell_types = len(unique_cell_types)
+
+    # Skip the cell type clustering loss if there's only one cell type
+    cell_type_clustering_loss = torch.tensor(0.0).to(device)
+
+    if num_cell_types > 1:
+        # Calculate centroids for each cell type in latent space
+        centroids = []
+        cells_per_type = []
+        type_to_idx = {}
+
+        for i, cell_type in enumerate(unique_cell_types):
+            mask = cell_types == cell_type
+            type_to_idx[cell_type.item()] = i
+            if mask.sum() > 0:
+                cells = latent_mean[mask]
+                centroid = cells.mean(dim=0)
+                centroids.append(centroid)
+                cells_per_type.append(cells)
+
+        if len(centroids) > 1:  # Need at least 2 centroids
+            centroids = torch.stack(centroids)
+
+            # Get original structure from archetype vectors
+            # Compute the structure matrix once and cache it
+            all_cell_types = adata.obs["cell_types"].cat.codes.values
+            all_unique_types = np.unique(all_cell_types)
+
+            # Get centroids in archetype space for each cell type
+            original_centroids = []
+            for ct in all_unique_types:
+                mask = all_cell_types == ct
+                if mask.sum() > 0:
+                    ct_archetype_vecs = adata.obsm["archetype_vec"][mask]
+                    original_centroids.append(np.mean(ct_archetype_vecs, axis=0))
+
+            # Convert to torch tensor
+            original_centroids = torch.tensor(np.array(original_centroids), dtype=torch.float32).to(
+                device
+            )
+
+            # Compute affinity/structure matrix (using Gaussian kernel)
+            sigma = torch.cdist(original_centroids, original_centroids).mean()
+            dists = torch.cdist(original_centroids, original_centroids)
+            original_structure_matrix = torch.exp(-(dists**2) / (2 * sigma**2))
+
+            # Set diagonal to 0 to focus on between-cluster relationships
+            original_structure_matrix = original_structure_matrix * (
+                1 - torch.eye(len(all_unique_types), device=device)
+            )
+
+            # Compute current structure matrix in latent space
+            # Use same sigma as original for consistency
+            sigma = torch.cdist(centroids, centroids).mean()
+            latent_dists = torch.cdist(centroids, centroids)
+            current_structure_matrix = torch.exp(-(latent_dists**2) / (2 * sigma**2))
+
+            # Set diagonal to 0 to focus on between-cluster relationships
+            current_structure_matrix = current_structure_matrix * (
+                1 - torch.eye(len(centroids), device=device)
+            )
+
+            # Now compute the structure preservation loss
+            structure_preservation_loss = 0.0
+            count = 0
+
+            # For each cell type in the batch, compare its relationships
+            for i, type_i in enumerate(unique_cell_types):
+                if type_i.item() < len(original_structure_matrix):
+                    for j, type_j in enumerate(unique_cell_types):
+                        if i != j and type_j.item() < len(original_structure_matrix):
+                            # Get original and current affinity values
+                            orig_affinity = original_structure_matrix[type_i.item(), type_j.item()]
+                            current_affinity = current_structure_matrix[i, j]
+
+                            # Square difference
+                            diff = (orig_affinity - current_affinity) ** 2
+                            structure_preservation_loss += diff
+                            count += 1
+
+            if count > 0:
+                structure_preservation_loss = structure_preservation_loss / count
+
+            # Calculate within-cluster cohesion
+            cohesion_loss = 0.0
+            total_cells = 0
+
+            for i, cells in enumerate(cells_per_type):
+                if len(cells) > 1:
+                    # Calculate distances to centroid
+                    dists = torch.norm(cells - centroids[i], dim=1)
+                    cohesion_loss += dists.mean()
+                    total_cells += 1
+
+            if total_cells > 0:
+                cohesion_loss = cohesion_loss / total_cells
+
+            # Normalize the cohesion loss by the average inter-centroid distance
+            # This makes it scale-invariant
+            avg_inter_centroid_dist = torch.cdist(centroids, centroids).mean()
+            if avg_inter_centroid_dist > 0:
+                normalized_cohesion_loss = cohesion_loss / avg_inter_centroid_dist
+            else:
+                normalized_cohesion_loss = cohesion_loss
+
+            # Combined loss: balance between structure preservation and cohesion
+            # The higher weight on structure_preservation_loss (2.0) prioritizes
+            # preserving the original relationships between clusters
+            cell_type_clustering_loss = 2.0 * structure_preservation_loss + normalized_cohesion_loss
+            return cell_type_clustering_loss

@@ -896,26 +896,24 @@ def plot_cell_type_distributions(combined_latent, top_n=3, use_subsample=True):
         safe_mlflow_log_figure(plt.gcf(), f"cell_type_distribution_{cell_type}.png")
 
 
-def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae, use_subsample=True):
+def plot_rna_protein_latent_cn_cell_type_umap(rna_adata, protein_adata, use_subsample=True):
     """Plot RNA and protein embeddings"""
     # Create copies to avoid modifying the original data
     if use_subsample:
         # Subsample RNA data
-        n_subsample_rna = min(300, rna_vae_new.adata.shape[0])
-        subsample_idx_rna = np.random.choice(
-            rna_vae_new.adata.shape[0], n_subsample_rna, replace=False
-        )
-        rna_adata_plot = rna_vae_new.adata[subsample_idx_rna].copy()
+        n_subsample_rna = min(300, rna_adata.shape[0])
+        subsample_idx_rna = np.random.choice(rna_adata.shape[0], n_subsample_rna, replace=False)
+        rna_adata_plot = rna_adata[subsample_idx_rna].copy()
 
         # Subsample protein data
-        n_subsample_prot = min(300, protein_vae.adata.shape[0])
+        n_subsample_prot = min(300, protein_adata.shape[0])
         subsample_idx_prot = np.random.choice(
-            protein_vae.adata.shape[0], n_subsample_prot, replace=False
+            protein_adata.shape[0], n_subsample_prot, replace=False
         )
-        prot_adata_plot = protein_vae.adata[subsample_idx_prot].copy()
+        prot_adata_plot = protein_adata[subsample_idx_prot].copy()
     else:
-        rna_adata_plot = rna_vae_new.adata.copy()
-        prot_adata_plot = protein_vae.adata.copy()
+        rna_adata_plot = rna_adata.copy()
+        prot_adata_plot = protein_adata.copy()
 
     sc.pl.embedding(
         rna_adata_plot,
@@ -936,14 +934,14 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_vae_new, protein_vae, use_subs
     safe_mlflow_log_figure(plt.gcf(), "protein_latent_embeddings.png")
 
 
-def plot_archetype_embedding(rna_vae_new, protein_vae, use_subsample=True):
+def plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True):
     """Plot archetype embedding"""
     # Create AnnData objects from archetype vectors
-    rna_archtype = AnnData(rna_vae_new.adata.obsm["archetype_vec"])
-    rna_archtype.obs = rna_vae_new.adata.obs.copy()
+    rna_archtype = AnnData(rna_adata.obsm["archetype_vec"])
+    rna_archtype.obs = rna_adata.obs.copy()
 
-    prot_archtype = AnnData(protein_vae.adata.obsm["archetype_vec"])
-    prot_archtype.obs = protein_vae.adata.obs.copy()
+    prot_archtype = AnnData(protein_adata.obsm["archetype_vec"])
+    prot_archtype.obs = protein_adata.obs.copy()
 
     # Apply subsampling if requested
     if use_subsample:

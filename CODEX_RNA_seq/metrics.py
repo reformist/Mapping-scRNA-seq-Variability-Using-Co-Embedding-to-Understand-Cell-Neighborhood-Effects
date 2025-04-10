@@ -69,7 +69,7 @@ def matching_accuracy(latent_rna, latent_prot):
 
 def normalize_silhouette(silhouette_vals):
     """Normalize silhouette scores from [-1, 1] to [0, 1]."""
-    return
+    return (np.mean(silhouette_vals) + 1) / 2
 
 
 def compute_silhouette_f1(latent_rna, latent_prot):

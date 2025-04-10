@@ -4,6 +4,7 @@
 import importlib.util
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -80,24 +81,24 @@ sys.path.append(str(project_root))
 # Define hyperparameter search space
 param_grid = {
     "plot_x_times": [5],
-    "max_epochs": [200],  # Changed from n_epochs to max_epochs to match train_vae
+    "check_val_every_n_epoch": [5],
+    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [0.0, 100.0, 100_000],
-    "similarity_weight": [0.0, 1000.0, 100000.0],
+    "contrastive_weight": [0.0],  # [0.0, 100.0, 100_000],
+    "similarity_weight": [0.0, 10000.0, 1000000.0],
     "diversity_weight": [0.0],
     "matching_weight": [0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [0, 10.0, 1000.0],  # Added cell type clustering weight
+    "cell_type_clustering_weight": [0, 100.0, 10000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [0.1, 1.0],
-    "kl_weight_prot": [1.0, 10.0],
+    "kl_weight_rna": [0.001, 0.01],
+    "kl_weight_prot": [0.001, 0.1],
     "adv_weight": [0.0],
     "train_size": [0.85],
     "validation_size": [0.15],
-    "check_val_every_n_epoch": [100000],
     "gradient_clip_val": [1.0],
 }
 
@@ -184,6 +185,9 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             )
             log_memory_usage("After training: ")
 
+            # Log successful run
+            mlflow.log_param("run_failed", False)
+
             # Clear memory after training
             clear_memory()
             log_memory_usage("After clearing memory: ")
@@ -206,7 +210,12 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             )
 
             # Process latent spaces
-            rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_vae, protein_vae)
+            # subsample the adata_rna_subset and adata_prot_subset to 1000 cells
+            rna_adata = rna_vae.adata
+            rna_adata = sc.pp.subsample(rna_adata, n_obs=5000, copy=True)
+            prot_adata = protein_vae.adata
+            prot_adata = sc.pp.subsample(prot_adata, n_obs=5000, copy=True)
+            rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_adata, prot_adata)
 
             # Match cells and calculate distances
             matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)
@@ -241,7 +250,10 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             print(f"\nIteration completed in: {iter_time}")
 
         except Exception as e:
+            # Log failed run
+            mlflow.log_param("run_failed", True)
             handle_error(e, params, run_name)
+            time.sleep(5)  # Sleep for 5 seconds after failure
             continue
 
     # Clear memory after each iteration
