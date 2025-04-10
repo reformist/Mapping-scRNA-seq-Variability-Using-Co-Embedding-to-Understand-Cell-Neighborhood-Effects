@@ -296,7 +296,7 @@ sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
 # Select PCA components based on variance explained
 print("Selecting PCA components...")
 max_dim = 50
-variance_ratio_selected = 0.75
+variance_ratio_selected = 0.50 # was 0.75
 
 cumulative_variance_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
