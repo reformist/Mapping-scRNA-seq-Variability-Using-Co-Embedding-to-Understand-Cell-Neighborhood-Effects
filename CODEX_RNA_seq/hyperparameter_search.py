@@ -82,7 +82,7 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [5],
-    "max_epochs": [31],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
     "contrastive_weight": [0.0],  # [0.0, 100.0, 100_000],
@@ -95,7 +95,7 @@ param_grid = {
     "n_layers": [3],
     "latent_dim": [10],
     "kl_weight_rna": [0.001, 0.01],
-    "kl_weight_prot": [0.01, 0.1],
+    "kl_weight_prot": [0.001, 0.1],
     "adv_weight": [0.0],
     "train_size": [0.85],
     "validation_size": [0.15],

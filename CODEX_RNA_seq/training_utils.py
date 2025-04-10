@@ -177,35 +177,35 @@ def match_cells_and_calculate_distances(rna_latent, prot_latent):
     }
 
 
-def calculate_metrics(rna_vae, protein_vae, prot_matches_in_rna):
+def calculate_metrics(rna_adata, protein_adata, prot_matches_in_rna):
     """Calculate various metrics for model evaluation."""
     # Calculate NMI scores
     nmi_cell_types_cn_rna = adjusted_mutual_info_score(
-        rna_vae.adata.obs["cell_types"], rna_vae.adata.obs["CN"]
+        rna_adata.obs["cell_types"], rna_adata.obs["CN"]
     )
     nmi_cell_types_cn_prot = adjusted_mutual_info_score(
-        protein_vae.adata.obs["cell_types"], protein_vae.adata.obs["CN"]
+        protein_adata.obs["cell_types"], protein_adata.obs["CN"]
     )
     nmi_cell_types_modalities = adjusted_mutual_info_score(
-        rna_vae.adata.obs["cell_types"].values[prot_matches_in_rna],
-        protein_vae.adata.obs["cell_types"].values,
+        rna_adata.obs["cell_types"].values[prot_matches_in_rna],
+        protein_adata.obs["cell_types"].values,
     )
 
     # Calculate accuracy
     matches = (
-        rna_vae.adata.obs["cell_types"].values[prot_matches_in_rna]
-        == protein_vae.adata.obs["cell_types"].values
+        rna_adata.obs["cell_types"].values[prot_matches_in_rna]
+        == protein_adata.obs["cell_types"].values
     )
     accuracy = matches.sum() / len(matches)
 
     # Calculate mixing score
     mixing_result = mixing_score(
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
-        rna_vae.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae.adata)),
-        index_prot=range(len(protein_vae.adata)),
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        index_rna=range(len(rna_adata)),
+        index_prot=range(len(protein_adata)),
         plot_flag=True,
     )
 
@@ -220,7 +220,7 @@ def calculate_metrics(rna_vae, protein_vae, prot_matches_in_rna):
 
 
 def generate_visualizations(
-    rna_vae, protein_vae, rna_latent, prot_latent, combined_latent, history, matching_results
+    rna_adata, protein_adata, rna_latent, prot_latent, combined_latent, history, matching_results
 ):
     """Generate all visualizations for the model."""
     # Plot training results
@@ -228,20 +228,20 @@ def generate_visualizations(
 
     # Plot latent representations
     plot_latent_pca_both_modalities_cn(
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
-        rna_vae.adata,
-        protein_vae.adata,
-        index_rna=range(len(rna_vae.adata.obs.index)),
-        index_prot=range(len(protein_vae.adata.obs.index)),
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        index_rna=range(len(rna_adata.obs.index)),
+        index_prot=range(len(protein_adata.obs.index)),
         use_subsample=True,
     )
 
     plot_latent_pca_both_modalities_by_celltype(
-        rna_vae.adata,
-        protein_vae.adata,
-        rna_vae.adata.obsm["X_scVI"],
-        protein_vae.adata.obsm["X_scVI"],
+        rna_adata,
+        protein_adata,
+        rna_adata.obsm["X_scVI"],
+        protein_adata.obsm["X_scVI"],
         use_subsample=True,
     )
 
@@ -259,8 +259,8 @@ def generate_visualizations(
     plot_cell_type_distributions(combined_latent, 3, use_subsample=True)
 
     # Plot archetype and embedding visualizations
-    plot_archetype_embedding(rna_vae, protein_vae, use_subsample=True)
-    plot_rna_protein_latent_cn_cell_type_umap(rna_vae, protein_vae, use_subsample=True)
+    plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True)
+    plot_rna_protein_latent_cn_cell_type_umap(rna_adata, protein_adata, use_subsample=True)
 
 
 def save_results(rna_vae, protein_vae, save_dir):

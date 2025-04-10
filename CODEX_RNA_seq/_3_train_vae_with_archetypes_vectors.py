@@ -222,6 +222,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.lr = kwargs.pop("lr", 0.001)
         self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
+        self.matching_weight = kwargs.pop("matching_weight", 1000.0)
         train_size = kwargs.pop("train_size", 0.9)
         validation_size = kwargs.pop("validation_size", 0.1)
         device = kwargs.pop("device", "cuda:0" if torch.cuda.is_available() else "cpu")
@@ -258,6 +259,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.protein_vae.module.to(device)
         self.rna_vae.module = self.rna_vae.module.to(device)
         self.first_step = True
+
         n_samples = len(self.train_indices_rna)  # Use training set size
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
         self.total_steps = steps_per_epoch * max_epochs
@@ -468,6 +470,7 @@ class DualVAETrainingPlan(TrainingPlan):
         reward_strength = 0
         reward = reward_strength * (num_acceptable.float() / num_cells)
         matching_loss = stress_loss - reward + exact_pairs
+        matching_loss = matching_loss * self.matching_weight
         rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
         prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
 
@@ -477,7 +480,7 @@ class DualVAETrainingPlan(TrainingPlan):
         #     rna_distances = rna_distances[:min_size, :min_size]
         #     prot_distances = prot_distances[:min_size, :min_size]
 
-        distances = 5 * prot_distances + rna_distances
+        distances = prot_distances + rna_distances
 
         rna_size = prot_size = rna_batch["X"].shape[0]
         mixed_latent = torch.cat([rna_latent_mean, protein_latent_mean], dim=0)
@@ -1340,6 +1343,7 @@ def train_vae(
     similarity_weight=1000.0,
     diversity_weight=0.1,
     matching_weight=100.0,
+    cell_type_clustering_weight=1.0,
     train_size=0.9,
     check_val_every_n_epoch=1,
     adv_weight=0.1,
@@ -1408,6 +1412,7 @@ def train_vae(
         "contrastive_weight": contrastive_weight,
         "similarity_weight": similarity_weight,
         "diversity_weight": diversity_weight,
+        "cell_type_clustering_weight": cell_type_clustering_weight,
         "matching_weight": matching_weight,
         "adv_weight": adv_weight,
         "plot_x_times": kwargs.pop("plot_x_times", 5),
