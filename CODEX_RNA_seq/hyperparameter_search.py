@@ -2,6 +2,7 @@
 """Hyperparameter search for VAE training with archetypes vectors."""
 
 import importlib.util
+import json
 import os
 import sys
 import time
@@ -82,7 +83,7 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [5],
-    "max_epochs": [31],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [10],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
     "contrastive_weight": [0.0, 100.0, 100_000],
@@ -94,8 +95,8 @@ param_grid = {
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [0, 0.001, 0.01],
-    "kl_weight_prot": [1, 10000],
+    "kl_weight_rna": [0, 0.001, 0.00001],
+    "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
     "validation_size": [0.15],
@@ -178,6 +179,26 @@ for i, params in enumerate(ParameterGrid(param_grid)):
 
     with mlflow.start_run(run_name=run_name):
         try:
+            # Create loss weights JSON
+            loss_weights = {
+                "kl_weight_rna": params["kl_weight_rna"],
+                "kl_weight_prot": params["kl_weight_prot"],
+                "contrastive_weight": params["contrastive_weight"],
+                "similarity_weight": params["similarity_weight"],
+                "matching_weight": params["matching_weight"],
+                "cell_type_clustering_weight": params["cell_type_clustering_weight"],
+            }
+
+            # Save loss weights to a temporary JSON file
+            loss_weights_path = "loss_weights.json"
+            with open(loss_weights_path, "w") as f:
+                json.dump(loss_weights, f, indent=4)
+
+            # Log loss weights JSON as artifact
+            mlflow.log_artifact(loss_weights_path)
+            # Clean up temporary file
+            os.remove(loss_weights_path)
+
             # Setup and train model
             log_memory_usage("Before training: ")
             rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(

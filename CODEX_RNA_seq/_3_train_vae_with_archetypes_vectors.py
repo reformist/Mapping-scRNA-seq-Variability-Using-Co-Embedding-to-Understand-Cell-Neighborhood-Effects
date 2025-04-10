@@ -212,18 +212,6 @@ class DualVAETrainingPlan(TrainingPlan):
     def __init__(self, rna_module, **kwargs):
         protein_vae = kwargs.pop("protein_vae")
         rna_vae = kwargs.pop("rna_vae")
-
-        # Print initial protein VAE parameters
-        print("\nInitial Protein VAE Parameters:")
-        for name, param in protein_vae.module.named_parameters():
-            if param.requires_grad:
-                print(f"{name}:")
-                print(f"  Mean: {param.data.mean().item():.4f}")
-                print(f"  Std: {param.data.std().item():.4f}")
-                print(f"  Min: {param.data.min().item():.4f}")
-                print(f"  Max: {param.data.max().item():.4f}")
-                print("---")
-
         self.plot_x_times = kwargs.pop("plot_x_times", 5)
         contrastive_weight = kwargs.pop("contrastive_weight", 1.0)
         self.batch_size = kwargs.pop("batch_size", 1000)
@@ -367,18 +355,8 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
-        # Print protein VAE parameters every 100 steps
-        if self.global_step % 100 == 0:
-            print("\nProtein VAE Parameters:")
-            for name, param in self.protein_vae.module.named_parameters():
-                if param.requires_grad:
-                    print(f"{name}:")
-                    print(f"  Mean: {param.data.mean().item():.4f}")
-                    print(f"  Std: {param.data.std().item():.4f}")
-                    print(f"  Min: {param.data.min().item():.4f}")
-                    print(f"  Max: {param.data.max().item():.4f}")
-                    # print(f"  Grad Mean: {param.grad.mean().item() if param.grad is not None else 'None':.4f}")
-                    print("---")
+        # if self.pbar is None:
+        #     self.pbar = tqdm(total=self.total_steps, desc="Training", leave=True)
 
         indices = range(self.batch_size)
         indices_rna = np.random.choice(
@@ -1132,17 +1110,6 @@ class DualVAETrainingPlan(TrainingPlan):
         """Called when training ends."""
         print("\nTraining completed!")
 
-        # Print final protein VAE parameters
-        print("\nFinal Protein VAE Parameters:")
-        for name, param in self.protein_vae.module.named_parameters():
-            if param.requires_grad:
-                print(f"{name}:")
-                print(f"  Mean: {param.data.mean().item():.4f}")
-                print(f"  Std: {param.data.std().item():.4f}")
-                print(f"  Min: {param.data.min().item():.4f}")
-                print(f"  Max: {param.data.max().item():.4f}")
-                print("---")
-
         # Get final latent representations
         with torch.no_grad():
             # Get RNA latent
@@ -1586,6 +1553,23 @@ if __name__ == "__main__":
         "gradient_clip_val": 1.0,
     }
 
+    # Create loss weights JSON
+    loss_weights = {
+        "kl_weight_rna": training_params["kl_weight_rna"],
+        "kl_weight_prot": training_params["kl_weight_prot"],
+        "contrastive_weight": training_params["contrastive_weight"],
+        "similarity_weight": training_params["similarity_weight"],
+        # "diversity_weight": training_params["diversity_weight"],
+        "matching_weight": training_params["matching_weight"],
+        "cell_type_clustering_weight": training_params["cell_type_clustering_weight"],
+        # "adv_weight": training_params["adv_weight"]
+    }
+
+    # Save loss weights to a temporary JSON file
+    loss_weights_path = "loss_weights.json"
+    with open(loss_weights_path, "w") as f:
+        json.dump(loss_weights, f, indent=4)
+
     # Log parameters
     log_parameters(training_params, 0, 1)
 
@@ -1594,6 +1578,11 @@ if __name__ == "__main__":
     run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     with mlflow.start_run(run_name=run_name):
+        # Log loss weights JSON as artifact at the start
+        mlflow.log_artifact(loss_weights_path)
+        # Clean up temporary file
+        os.remove(loss_weights_path)
+
         # Setup and train model
         log_memory_usage("Before training: ")
         rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
