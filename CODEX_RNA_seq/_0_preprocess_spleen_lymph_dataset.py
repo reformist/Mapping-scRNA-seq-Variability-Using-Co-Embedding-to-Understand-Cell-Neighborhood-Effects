@@ -301,14 +301,14 @@ def process_spatial_data(adata):
     import pandas as pd
 
     # Generate random coordinates between 0 and 100
-    num_cells = adata.n_obs  # number of observations
-    x_coor = np.random.uniform(0, 100, size=num_cells)
-    y_coor = np.random.uniform(0, 100, size=num_cells)
+#     num_cells = adata.n_obs  # number of observations
+#     x_coor = np.random.uniform(0, 100, size=num_cells)
+#     y_coor = np.random.uniform(0, 100, size=num_cells)
 
-    spatial_coords = np.column_stack((x_coor, y_coor))
+#     spatial_coords = np.column_stack((x_coor, y_coor))
 
-# Assign to adata.obsm
-    adata.obsm["spatial"] = spatial_coords
+# # Assign to adata.obsm
+#     adata.obsm["spatial"] = spatial_coords
 
 
     # ACTUAL SPATIAL DATA WORK
@@ -354,12 +354,17 @@ def process_spatial_data(adata):
 
     adata,horizontal_splits,vertical_splits = bar_nick_utils.add_spatial_data_to_prot(adata, major_to_minor_dict)
     adata.obsm['spatial_location'] = pd.DataFrame([adata.obs['X'],adata.obs['Y']]).T
+
+
     if plot_flag:
         sc.pl.scatter(adata[adata.obs['major_cell_types']=='B cells'], x='X', y='Y', color='cell_types', title='B Cell subtypes locations')
         sc.pl.scatter(adata[adata.obs['major_cell_types']=='CD4 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
         sc.pl.scatter(adata[adata.obs['major_cell_types']=='CD8 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
 
-
+    adata.obsm['spatial'] = adata.obsm['spatial_location']
+    
+    if isinstance(adata.obsm["spatial"], pd.DataFrame):
+        adata.obsm["spatial"] = adata.obsm["spatial"].values
 
     # Store in a dataframe and add to AnnData object
     # temp = pd.DataFrame([x_coor, y_coor], index=["x", "y"]).T
@@ -370,11 +375,11 @@ def process_spatial_data(adata):
 
     # x_coor = adata.obsm["spatial"][:, 0]
     # y_coor = adata.obsm["spatial"][:, 1]
-    temp = pd.DataFrame([x_coor, y_coor], index=["x", "y"]).T
-    temp.index = adata.obs.index
-    adata.obsm["spatial_location"] = temp
-    adata.obs["X"] = x_coor
-    adata.obs["Y"] = y_coor
+    # temp = pd.DataFrame([x_coor, y_coor], index=["x", "y"]).T
+    # temp.index = adata.obs.index
+    # adata.obsm["spatial_location"] = temp
+    # adata.obs["X"] = x_coor
+    # adata.obs["Y"] = y_coor
     return adata
 
 
