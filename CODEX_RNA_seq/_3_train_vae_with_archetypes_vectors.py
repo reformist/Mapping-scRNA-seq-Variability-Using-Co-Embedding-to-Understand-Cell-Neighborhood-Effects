@@ -32,7 +32,6 @@ import mlflow
 import numpy as np
 import pandas as pd
 import scanpy as sc
-from sklearn.metrics import adjusted_mutual_info_score, silhouette_samples
 
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,11 +64,11 @@ from CODEX_RNA_seq.training_utils import (
     calculate_metrics,
     clear_memory,
     generate_visualizations,
-    handle_error,
     log_memory_usage,
     log_parameters,
     match_cells_and_calculate_distances,
     process_latent_spaces,
+    run_cell_type_clustering_loss,
     save_results,
     setup_and_train_model,
 )
@@ -136,7 +135,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from scipy.sparse import issparse
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
-from sklearn.metrics import adjusted_mutual_info_score
 from torch.nn.functional import normalize
 
 import bar_nick_utils
@@ -578,134 +576,15 @@ class DualVAETrainingPlan(TrainingPlan):
         # and before the in_steady_state calculation
 
         # Compute cell type clustering loss to keep cell types in distinct clusters
-        rna_cell_types = torch.tensor(
-            self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
-        ).to(self.device)
-        protein_cell_types = torch.tensor(
-            self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
-        ).to(self.device)
-
-        # Combine cell types and latent representations from both modalities
-        combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
-        combined_latent_means = torch.cat([rna_latent_mean, protein_latent_mean])
-
-        # Calculate centroid for each cell type
-        unique_cell_types = torch.unique(combined_cell_types)
-        num_cell_types = len(unique_cell_types)
-
-        # Skip the cell type clustering loss if there's only one cell type
-        cell_type_clustering_loss = torch.tensor(0.0).to(self.device)
-
-        if num_cell_types > 1:
-            # Calculate centroids for each cell type in latent space
-            centroids = []
-            cells_per_type = []
-            type_to_idx = {}
-
-            for i, cell_type in enumerate(unique_cell_types):
-                mask = combined_cell_types == cell_type
-                type_to_idx[cell_type.item()] = i
-                if mask.sum() > 0:
-                    cells = combined_latent_means[mask]
-                    centroid = cells.mean(dim=0)
-                    centroids.append(centroid)
-                    cells_per_type.append(cells)
-
-            if len(centroids) > 1:  # Need at least 2 centroids
-                centroids = torch.stack(centroids)
-
-                # Get original structure from archetype vectors
-                if not hasattr(self, "original_structure_matrix"):
-                    # Compute the structure matrix once and cache it
-                    all_cell_types = self.rna_vae.adata.obs["cell_types"].cat.codes.values
-                    all_unique_types = np.unique(all_cell_types)
-
-                    # Get centroids in archetype space for each cell type
-                    original_centroids = []
-                    for ct in all_unique_types:
-                        mask = all_cell_types == ct
-                        if mask.sum() > 0:
-                            ct_archetype_vecs = self.rna_vae.adata.obsm["archetype_vec"][mask]
-                            original_centroids.append(np.mean(ct_archetype_vecs, axis=0))
-
-                    # Convert to torch tensor
-                    original_centroids = torch.tensor(
-                        np.array(original_centroids), dtype=torch.float32
-                    ).to(self.device)
-
-                    # Compute affinity/structure matrix (using Gaussian kernel)
-                    sigma = torch.cdist(original_centroids, original_centroids).mean()
-                    dists = torch.cdist(original_centroids, original_centroids)
-                    self.original_structure_matrix = torch.exp(-(dists**2) / (2 * sigma**2))
-
-                    # Set diagonal to 0 to focus on between-cluster relationships
-                    self.original_structure_matrix = self.original_structure_matrix * (
-                        1 - torch.eye(len(all_unique_types), device=self.device)
-                    )
-
-                # Compute current structure matrix in latent space
-                # Use same sigma as original for consistency
-                sigma = torch.cdist(centroids, centroids).mean()
-                latent_dists = torch.cdist(centroids, centroids)
-                current_structure_matrix = torch.exp(-(latent_dists**2) / (2 * sigma**2))
-
-                # Set diagonal to 0 to focus on between-cluster relationships
-                current_structure_matrix = current_structure_matrix * (
-                    1 - torch.eye(len(centroids), device=self.device)
-                )
-
-                # Now compute the structure preservation loss
-                structure_preservation_loss = 0.0
-                count = 0
-
-                # For each cell type in the batch, compare its relationships
-                for i, type_i in enumerate(unique_cell_types):
-                    if type_i.item() < len(self.original_structure_matrix):
-                        for j, type_j in enumerate(unique_cell_types):
-                            if i != j and type_j.item() < len(self.original_structure_matrix):
-                                # Get original and current affinity values
-                                orig_affinity = self.original_structure_matrix[
-                                    type_i.item(), type_j.item()
-                                ]
-                                current_affinity = current_structure_matrix[i, j]
-
-                                # Square difference
-                                diff = (orig_affinity - current_affinity) ** 2
-                                structure_preservation_loss += diff
-                                count += 1
-
-                if count > 0:
-                    structure_preservation_loss = structure_preservation_loss / count
-
-                # Calculate within-cluster cohesion
-                cohesion_loss = 0.0
-                total_cells = 0
-
-                for i, cells in enumerate(cells_per_type):
-                    if len(cells) > 1:
-                        # Calculate distances to centroid
-                        dists = torch.norm(cells - centroids[i], dim=1)
-                        cohesion_loss += dists.mean()
-                        total_cells += 1
-
-                if total_cells > 0:
-                    cohesion_loss = cohesion_loss / total_cells
-
-                # Normalize the cohesion loss by the average inter-centroid distance
-                # This makes it scale-invariant
-                avg_inter_centroid_dist = torch.cdist(centroids, centroids).mean()
-                if avg_inter_centroid_dist > 0:
-                    normalized_cohesion_loss = cohesion_loss / avg_inter_centroid_dist
-                else:
-                    normalized_cohesion_loss = cohesion_loss
-
-                # Combined loss: balance between structure preservation and cohesion
-                # The higher weight on structure_preservation_loss (2.0) prioritizes
-                # preserving the original relationships between clusters
-                cell_type_clustering_loss = (
-                    2.0 * structure_preservation_loss + normalized_cohesion_loss
-                ) * self.cell_type_clustering_weight
-
+        rna_raw_cell_type_clustering_loss = run_cell_type_clustering_loss(
+            self.rna_vae.adata, rna_latent_mean, indices_rna
+        )
+        prot_raw_cell_type_clustering_loss = run_cell_type_clustering_loss(
+            self.protein_vae.adata, protein_latent_mean, indices_prot
+        )
+        cell_type_clustering_loss = (
+            rna_raw_cell_type_clustering_loss + prot_raw_cell_type_clustering_loss
+        ) * self.cell_type_clustering_weight
         # Existing loss calculations
         in_steady_state = False
         coeff_of_variation = 0  # default value
@@ -1002,134 +881,15 @@ class DualVAETrainingPlan(TrainingPlan):
         else:
             similarity_loss = torch.tensor(0.0).to(self.device)
 
-        # Calculate cell type clustering loss
-        rna_cell_types = torch.tensor(
-            self.rna_vae.adata[indices_rna].obs["cell_types"].cat.codes.values
-        ).to(self.device)
-        protein_cell_types = torch.tensor(
-            self.protein_vae.adata[indices_prot].obs["cell_types"].cat.codes.values
-        ).to(self.device)
-
-        # Combine cell types and latent representations from both modalities
-        combined_cell_types = torch.cat([rna_cell_types, protein_cell_types])
-        combined_latent_means = torch.cat([rna_latent_mean, protein_latent_mean])
-
-        # Calculate centroid for each cell type
-        unique_cell_types = torch.unique(combined_cell_types)
-        num_cell_types = len(unique_cell_types)
-
-        # Skip the cell type clustering loss if there's only one cell type
-        cell_type_clustering_loss = torch.tensor(0.0).to(self.device)
-
-        if num_cell_types > 1:
-            # Calculate centroids for each cell type in latent space
-            centroids = []
-            cells_per_type = []
-            type_to_idx = {}
-
-            for i, cell_type in enumerate(unique_cell_types):
-                mask = combined_cell_types == cell_type
-                type_to_idx[cell_type.item()] = i
-                if mask.sum() > 0:
-                    cells = combined_latent_means[mask]
-                    centroid = cells.mean(dim=0)
-                    centroids.append(centroid)
-                    cells_per_type.append(cells)
-
-            if len(centroids) > 1:  # Need at least 2 centroids
-                centroids = torch.stack(centroids)
-
-                # Get original structure from archetype vectors
-                if not hasattr(self, "original_structure_matrix"):
-                    # Compute the structure matrix once and cache it
-                    all_cell_types = self.rna_vae.adata.obs["cell_types"].cat.codes.values
-                    all_unique_types = np.unique(all_cell_types)
-
-                    # Get centroids in archetype space for each cell type
-                    original_centroids = []
-                    for ct in all_unique_types:
-                        mask = all_cell_types == ct
-                        if mask.sum() > 0:
-                            ct_archetype_vecs = self.rna_vae.adata.obsm["archetype_vec"][mask]
-                            original_centroids.append(np.mean(ct_archetype_vecs, axis=0))
-
-                    # Convert to torch tensor
-                    original_centroids = torch.tensor(
-                        np.array(original_centroids), dtype=torch.float32
-                    ).to(device)
-
-                    # Compute affinity/structure matrix (using Gaussian kernel)
-                    sigma = torch.cdist(original_centroids, original_centroids).mean()
-                    dists = torch.cdist(original_centroids, original_centroids)
-                    self.original_structure_matrix = torch.exp(-(dists**2) / (2 * sigma**2))
-
-                    # Set diagonal to 0 to focus on between-cluster relationships
-                    self.original_structure_matrix = self.original_structure_matrix * (
-                        1 - torch.eye(len(all_unique_types), device=self.device)
-                    )
-
-                # Compute current structure matrix in latent space
-                # Use same sigma as original for consistency
-                sigma = torch.cdist(centroids, centroids).mean()
-                latent_dists = torch.cdist(centroids, centroids)
-                current_structure_matrix = torch.exp(-(latent_dists**2) / (2 * sigma**2))
-
-                # Set diagonal to 0 to focus on between-cluster relationships
-                current_structure_matrix = current_structure_matrix * (
-                    1 - torch.eye(len(centroids), device=self.device)
-                )
-
-                # Now compute the structure preservation loss
-                structure_preservation_loss = 0.0
-                count = 0
-
-                # For each cell type in the batch, compare its relationships
-                for i, type_i in enumerate(unique_cell_types):
-                    if type_i.item() < len(self.original_structure_matrix):
-                        for j, type_j in enumerate(unique_cell_types):
-                            if i != j and type_j.item() < len(self.original_structure_matrix):
-                                # Get original and current affinity values
-                                orig_affinity = self.original_structure_matrix[
-                                    type_i.item(), type_j.item()
-                                ]
-                                current_affinity = current_structure_matrix[i, j]
-
-                                # Square difference
-                                diff = (orig_affinity - current_affinity) ** 2
-                                structure_preservation_loss += diff
-                                count += 1
-
-                if count > 0:
-                    structure_preservation_loss = structure_preservation_loss / count
-
-                # Calculate within-cluster cohesion
-                cohesion_loss = 0.0
-                total_cells = 0
-
-                for i, cells in enumerate(cells_per_type):
-                    if len(cells) > 1:
-                        # Calculate distances to centroid
-                        dists = torch.norm(cells - centroids[i], dim=1)
-                        cohesion_loss += dists.mean()
-                        total_cells += 1
-
-                if total_cells > 0:
-                    cohesion_loss = cohesion_loss / total_cells
-
-                # Normalize the cohesion loss by the average inter-centroid distance
-                # This makes it scale-invariant
-                avg_inter_centroid_dist = torch.cdist(centroids, centroids).mean()
-                if avg_inter_centroid_dist > 0:
-                    normalized_cohesion_loss = cohesion_loss / avg_inter_centroid_dist
-                else:
-                    normalized_cohesion_loss = cohesion_loss
-
-                # Combined loss: balance between structure preservation and cohesion
-                # The higher weight on structure_preservation_loss (2.0) prioritizes
-                # preserving the original relationships between clusters
-                cell_type_clustering_loss = (
-                    2.0 * structure_preservation_loss + normalized_cohesion_loss
-                ) * self.cell_type_clustering_weight
+        rna_cell_type_clustering_loss = run_cell_type_clustering_loss(
+            self.rna_vae.adata, rna_latent_mean, indices_rna
+        )
+        prot_cell_type_clustering_loss = run_cell_type_clustering_loss(
+            self.protein_vae.adata, protein_latent_mean, indices_prot
+        )
+        cell_type_clustering_loss = (
+            rna_cell_type_clustering_loss + prot_cell_type_clustering_loss
+        ) * self.cell_type_clustering_weight
 
         # Calculate total validation loss with same components as training
         validation_total_loss = (
@@ -1245,22 +1005,22 @@ class DualVAETrainingPlan(TrainingPlan):
             label="modality",
             keys=["RNA", "Protein"],
         )
-        sc.pp.pca(combined_latent)
-        sc.pp.neighbors(combined_latent, n_neighbors=8)
-        print("   ✓ Latent spaces combined")
+        # sc.pp.pca(combined_latent)
+        # sc.pp.neighbors(combined_latent, n_neighbors=8)
+        # print("   ✓ Latent spaces combined")
 
-        print("5. Calculating metrics...")
-        print("   Calculating silhouette score...")
-        silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(combined_latent)
-        print("   ✓ Silhouette score calculated")
+        # print("5. Calculating metrics...")
+        # print("   Calculating silhouette score...")
+        # silhouette = CODEX_RNA_seq.metrics.silhouette_score_calc(combined_latent)
+        # print("   ✓ Silhouette score calculated")
 
-        print("   Calculating F1 score...")
-        f1 = CODEX_RNA_seq.metrics.f1_score_calc(val_rna_latent, val_prot_latent)
-        print("   ✓ F1 score calculated")
+        # print("   Calculating F1 score...")
+        # f1 = CODEX_RNA_seq.metrics.f1_score_calc(val_rna_latent, val_prot_latent)
+        # print("   ✓ F1 score calculated")
 
-        print("   Calculating ARI score...")
-        ari = CODEX_RNA_seq.metrics.ari_score_calc(val_rna_latent, val_prot_latent)
-        print("   ✓ ARI score calculated")
+        # print("   Calculating ARI score...")
+        # ari = CODEX_RNA_seq.metrics.ari_score_calc(val_rna_latent, val_prot_latent)
+        # print("   ✓ ARI score calculated")
 
         print("   Calculating matching accuracy...")
         accuracy = CODEX_RNA_seq.metrics.matching_accuracy(val_rna_latent, val_prot_latent)
@@ -1271,63 +1031,65 @@ class DualVAETrainingPlan(TrainingPlan):
         print("   ✓ Silhouette F1 calculated")
 
         print("   Calculating ARI F1...")
+        sc.pp.pca(combined_latent)
+        sc.pp.neighbors(combined_latent, n_neighbors=10)
         ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(combined_latent)
         print("   ✓ ARI F1 calculated")
 
-        print("   Calculating mixing scores...")
-        mixing_result = bar_nick_utils.mixing_score(
-            val_rna_latent,
-            val_prot_latent,
-            val_rna_adata,
-            val_prot_adata,
-            plot_flag=False,
-        )
-        print("   ✓ Mixing scores calculated")
+        # print("   Calculating mixing scores...")
+        # mixing_result = bar_nick_utils.mixing_score(
+        #     val_rna_latent,
+        #     val_prot_latent,
+        #     val_rna_adata,
+        #     val_prot_adata,
+        #     plot_flag=False,
+        # )
+        # print("   ✓ Mixing scores calculated")
 
-        print("   Calculating NMI scores...")
-        nmi_cell_types_cn_rna = adjusted_mutual_info_score(
-            val_rna_adata.obs["cell_types"],
-            val_rna_adata.obs["CN"],
-        )
-        nmi_cell_types_cn_prot = adjusted_mutual_info_score(
-            val_prot_adata.obs["cell_types"],
-            val_prot_adata.obs["CN"],
-        )
-        print("   ✓ NMI scores calculated")
+        # print("   Calculating NMI scores...")
+        # nmi_cell_types_cn_rna = adjusted_mutual_info_score(
+        #     val_rna_adata.obs["cell_types"],
+        #     val_rna_adata.obs["CN"],
+        # )
+        # nmi_cell_types_cn_prot = adjusted_mutual_info_score(
+        #     val_prot_adata.obs["cell_types"],
+        #     val_prot_adata.obs["CN"],
+        # )
+        # print("   ✓ NMI scores calculated")
 
-        print("   Calculating cross-modality NMI...")
-        nn_celltypes_prot = CODEX_RNA_seq.metrics.calc_dist(val_rna_latent, val_prot_latent)
-        nmi_cell_types_modalities = adjusted_mutual_info_score(
-            val_rna_adata.obs["cell_types"].values,
-            nn_celltypes_prot,
-        )
-        print("   ✓ Cross-modality NMI calculated")
+        # print("   Calculating cross-modality NMI...")
+        # nn_celltypes_prot = CODEX_RNA_seq.metrics.calc_dist(val_rna_latent, val_prot_latent)
+        # nmi_cell_types_modalities = adjusted_mutual_info_score(
+        #     val_rna_adata.obs["cell_types"].values,
+        #     nn_celltypes_prot,
+        # )
+        # print("   ✓ Cross-modality NMI calculated")
 
-        print("   Calculating Leiden clustering metrics...")
-        sc.tl.leiden(combined_latent)
+        # print("   Calculating Leiden clustering metrics...")
+        # sc.tl.leiden(combined_latent)
         # Extract cluster labels
-        leiden_clusters = combined_latent.obs["leiden"].astype(int).values
-        print("   ✓ Leiden clustering completed")
+        # leiden_clusters = combined_latent.obs["leiden"].astype(int).values
+        # print("   ✓ Leiden clustering completed")
 
-        print("   Calculating normalized silhouette scores...")
-        silhouette_vals = silhouette_samples(combined_latent, leiden_clusters)
-        normalized_silhouette = (np.mean(silhouette_vals) + 1) / 2
-        print("   ✓ Normalized silhouette scores calculated")
+        # print("   Calculating normalized silhouette scores...")
+        # silhouette_vals = silhouette_samples(combined_latent, leiden_clusters)
+        # normalized_silhouette = (np.mean(silhouette_vals) + 1) / 2
+        # print("   ✓ Normalized silhouette scores calculated")
 
         print("6. Storing metrics...")
         # Store metrics for this epoch
         epoch_metrics = {
-            "silhouette_score": silhouette,
-            "f1_score": f1,
-            "ari_score": ari,
-            "matching_accuracy": accuracy,
-            "mixing_score_ilisi": mixing_result["iLISI"],
-            "mixing_score_clisi": mixing_result["cLISI"],
-            "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
-            "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
-            "nmi_cell_types_modalities": nmi_cell_types_modalities,
-            "normalized_silhouette": normalized_silhouette,
-            "num_leiden_clusters": len(np.unique(leiden_clusters)),
+            # "silhouette_score": silhouette,
+            # "f1_score": f1,
+            # "ari_score": ari,
+            "val_cell_type_matching_accuracy": accuracy,
+            # "mixing_score_ilisi": mixing_result["iLISI"],
+            # "mixing_score_clisi": mixing_result["cLISI"],
+            # "nmi_cell_types_cn_rna": nmi_cell_types_cn_rna,
+            # "nmi_cell_types_cn_prot": nmi_cell_types_cn_prot,
+            # "nmi_cell_types_modalities": nmi_cell_types_modalities,
+            # "normalized_silhouette": normalized_silhouette,
+            # "num_leiden_clusters": len(np.unique(leiden_clusters)),
             "val_silhouette_f1_score": silhouette_f1.mean(),
             "val_ari_f1_score": ari_f1,
         }
@@ -1687,8 +1449,6 @@ def train_vae(
 
     rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
 
-    print("Training completed")
-
     # Manually set trained flag
     rna_vae.is_trained_ = True
     protein_vae.is_trained_ = True
@@ -1731,7 +1491,6 @@ if __name__ == "__main__":
         calculate_metrics,
         clear_memory,
         generate_visualizations,
-        handle_error,
         log_memory_usage,
         log_parameters,
         match_cells_and_calculate_distances,
@@ -1766,12 +1525,12 @@ if __name__ == "__main__":
 
     # Define training parameters
     training_params = {
-        "plot_x_times": 5,
-        "max_epochs": 200,
+        "plot_x_times": 3,
+        "max_epochs": 20,
         "batch_size": 1000,
         "lr": 1e-4,
-        "contrastive_weight": 10.0,
-        "similarity_weight": 10000.0,
+        "contrastive_weight": 0,
+        "similarity_weight": 10.0,
         "diversity_weight": 0.1,
         "matching_weight": 100000.0,
         "cell_type_clustering_weight": 1.0,
@@ -1793,79 +1552,65 @@ if __name__ == "__main__":
 
     # Start MLflow run
     run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     with mlflow.start_run(run_name=run_name):
-        try:
-            # Log parameters
-            mlflow.log_params(training_params)
+        # Setup and train model
+        log_memory_usage("Before training: ")
+        rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
+            adata_rna_subset, adata_prot_subset, training_params
+        )
+        log_memory_usage("After training: ")
 
-            # Setup and train model
-            log_memory_usage("Before training: ")
-            rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
-                adata_rna_subset, adata_prot_subset, training_params
-            )
-            log_memory_usage("After training: ")
+        # Clear memory after training
+        clear_memory()
+        log_memory_usage("After clearing memory: ")
 
-            # Clear memory after training
-            clear_memory()
-            log_memory_usage("After clearing memory: ")
+        # Get training history
+        history = rna_vae._training_plan.get_history()
 
-            # Get training history
-            history = rna_vae._training_plan.get_history()
+        # Log training history metrics
+        mlflow.log_metrics(
+            {
+                key: history[hist_key][-1] if history[hist_key] else float("nan")
+                for key, hist_key in {
+                    "final_train_similarity_loss": "train_similarity_loss",
+                    "final_train_similarity_loss_raw": "train_similarity_loss_raw",
+                    "final_train_total_loss": "train_total_loss",
+                    "final_val_total_loss": "val_total_loss",
+                    "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
+                }.items()
+            }
+        )
 
-            # Log training history metrics
-            mlflow.log_metrics(
-                {
-                    key: history[hist_key][-1] if history[hist_key] else float("nan")
-                    for key, hist_key in {
-                        "final_train_similarity_loss": "train_similarity_loss",
-                        "final_train_similarity_loss_raw": "train_similarity_loss_raw",
-                        "final_train_total_loss": "train_total_loss",
-                        "final_val_total_loss": "val_total_loss",
-                        "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
-                    }.items()
-                }
-            )
+        # Process latent spaces
+        rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_vae, protein_vae)
 
-            # Process latent spaces
-            rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_vae, protein_vae)
+        # Match cells and calculate distances
+        matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)
 
-            # Match cells and calculate distances
-            matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)
+        # Calculate metrics
+        metrics = calculate_metrics(rna_vae, protein_vae, matching_results["prot_matches_in_rna"])
 
-            # Calculate metrics
-            metrics = calculate_metrics(
-                rna_vae, protein_vae, matching_results["prot_matches_in_rna"]
-            )
+        # Log metrics
+        mlflow.log_metrics(metrics)
 
-            # Log metrics
-            mlflow.log_metrics(metrics)
+        # Generate visualizations
 
-            # Generate visualizations
-            generate_visualizations(
-                rna_vae,
-                protein_vae,
-                rna_latent,
-                prot_latent,
-                combined_latent,
-                history,
-                matching_results,
-            )
+        generate_visualizations(
+            rna_vae,
+            protein_vae,
+            rna_latent,
+            prot_latent,
+            combined_latent,
+            history,
+            matching_results,
+        )
 
-            # Save results
-            save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
-            time_stamp = save_results(rna_vae, protein_vae, save_dir)
+        # Save results
+        save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
+        save_results(rna_vae, protein_vae, save_dir)
 
-            print(
-                f"\nTraining completed successfully at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            print(f"Results saved to: {save_dir}/rna_vae_trained_{time_stamp}.h5ad")
-            print(f"Results saved to: {save_dir}/protein_vae_trained_{time_stamp}.h5ad")
-
-        except Exception as e:
-            handle_error(e, training_params, run_name)
-
-    # Clean up: restore original stdout and close log file
     sys.stdout = original_stdout
     log_file.close()
 
