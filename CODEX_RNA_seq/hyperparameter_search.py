@@ -83,19 +83,25 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [5],
-    "max_epochs": [10],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [0.0, 100.0, 100_000],
-    "similarity_weight": [0.0, 10000.0, 1000000.0],
+    "contrastive_weight": [0.001, 0.01, 0.1],
+    "similarity_weight": [100, 1000.0, 10_000.0],
     "diversity_weight": [0.0],
-    "matching_weight": [0, 10_000.0, 1_000_000.0],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [0, 100.0, 10000.0],  # Added cell type clustering weight
+    "matching_weight": [
+        1,
+        10,
+        100,
+        10_000.0,
+        1_000_000.0,
+    ],  # Updated range to reflect typical values
+    "cell_type_clustering_weight": [1, 10, 100.0, 100000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [0, 0.001, 0.00001],
+    "kl_weight_rna": [0.001, 0.01, 0.1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -195,7 +201,7 @@ for i, params in enumerate(ParameterGrid(param_grid)):
                 json.dump(loss_weights, f, indent=4)
 
             # Log loss weights JSON as artifact
-            mlflow.log_artifact(loss_weights_path)
+            mlflow.log_artifact(loss_weights_path, "losses")
             # Clean up temporary file
             os.remove(loss_weights_path)
 
@@ -233,9 +239,9 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             # Process latent spaces
             # subsample the adata_rna_subset and adata_prot_subset to 1000 cells
             rna_adata = rna_vae.adata
-            rna_adata = sc.pp.subsample(rna_adata, n_obs=1500, copy=True)
+            rna_adata = sc.pp.subsample(rna_adata, n_obs=5000, copy=True)
             prot_adata = protein_vae.adata
-            prot_adata = sc.pp.subsample(prot_adata, n_obs=1500, copy=True)
+            prot_adata = sc.pp.subsample(prot_adata, n_obs=5000, copy=True)
             rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_adata, prot_adata)
 
             # Match cells and calculate distances
@@ -247,7 +253,7 @@ for i, params in enumerate(ParameterGrid(param_grid)):
             )
 
             # Log metrics
-            mlflow.log_metrics(metrics)
+            mlflow.log_metrics({k: round(v, 3) for k, v in metrics.items()})
 
             # Generate visualizations
 

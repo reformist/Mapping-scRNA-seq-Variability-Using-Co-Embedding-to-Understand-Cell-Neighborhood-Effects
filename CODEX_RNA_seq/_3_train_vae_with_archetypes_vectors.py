@@ -25,6 +25,7 @@ self._training_plan = training_plan # add this line
 import importlib
 import json
 import os
+import pprint
 import sys
 
 import anndata
@@ -261,7 +262,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         n_samples = len(self.train_indices_rna)  # Use training set size
         steps_per_epoch = int(np.ceil(n_samples / self.batch_size))
-        self.total_steps = steps_per_epoch * max_epochs
+        self.total_steps = steps_per_epoch * (max_epochs)
         self.similarity_loss_history = []
         self.steady_state_window = 5
         self.steady_state_tolerance = 0.5
@@ -706,31 +707,32 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Store the clustering loss
         self.train_cell_type_clustering_losses.append(cell_type_clustering_loss.item())
+        if should_plot:
+            self.metric_input_dict = {
+                "global_step": self.global_step,
+                "current_epoch": self.current_epoch,
+                "rna_loss_output": rna_loss_output,
+                "protein_loss_output": protein_loss_output,
+                "contrastive_loss": contrastive_loss,
+                "adv_loss": adv_loss,
+                "matching_loss": matching_loss,
+                "similarity_loss": similarity_loss,
+                "diversity_loss": diversity_loss,
+                "total_loss": total_loss,
+                "latent_distances": latent_distances,
+                "similarity_loss_raw": similarity_loss_raw,
+                "similarity_weight": self.similarity_weight,
+                "similarity_active": self.similarity_active,
+                "num_acceptable": num_acceptable,
+                "num_cells": num_cells,
+                "exact_pairs": exact_pairs,
+                "cell_type_clustering_loss": cell_type_clustering_loss,
+            }
 
+            print_training_metrics(**self.metric_input_dict)
         if should_plot:
             plot_similarity_loss_history(
                 self.similarity_losses, self.active_similarity_loss_active_history, self.global_step
-            )
-
-            print_training_metrics(
-                self.global_step,
-                self.current_epoch,
-                rna_loss_output,
-                protein_loss_output,
-                contrastive_loss,
-                adv_loss,
-                matching_loss,
-                similarity_loss,
-                diversity_loss,
-                total_loss,
-                latent_distances,
-                similarity_loss_raw,
-                self.similarity_weight,
-                self.similarity_active,
-                num_acceptable,
-                num_cells,
-                exact_pairs,
-                cell_type_clustering_loss=cell_type_clustering_loss,
             )
 
             print(f"min latent distances: {round(latent_distances.min().item(),3)}")
@@ -1110,6 +1112,7 @@ class DualVAETrainingPlan(TrainingPlan):
         """Called when training ends."""
         print("\nTraining completed!")
 
+        print_training_metrics(**self.metric_input_dict, last_step=True)
         # Get final latent representations
         with torch.no_grad():
             # Get RNA latent
@@ -1432,7 +1435,8 @@ def train_vae(
         "gradient_clip_val": gradient_clip_val,
         "accumulate_grad_batches": accumulate_grad_batches,
     }
-    print("Plan parameters:", plan_kwargs)
+    print("Plan parameters:")
+    pprint.pprint(plan_kwargs)
 
     # Create training plan instance
     print("Creating training plan...")
@@ -1612,7 +1616,9 @@ if __name__ == "__main__":
         )
 
         # Process latent spaces
-        rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_vae, protein_vae)
+        rna_latent, prot_latent, combined_latent = process_latent_spaces(
+            rna_vae.adata, protein_vae.adata
+        )
 
         # Match cells and calculate distances
         matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)

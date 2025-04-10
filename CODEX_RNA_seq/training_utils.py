@@ -3,6 +3,7 @@
 import gc
 import os
 from pathlib import Path
+from pprint import pprint
 
 import anndata as ad
 import mlflow
@@ -66,16 +67,18 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
     # Log parameters
     mlflow.log_params(
         {
-            "batch_size": params["batch_size"],
-            "contrastive_weight": params["contrastive_weight"],
-            "similarity_weight": params["similarity_weight"],
-            "matching_weight": params["matching_weight"],
-            "cell_type_clustering_weight": params["cell_type_clustering_weight"],
-            "adv_weight": params.get("adv_weight", None),
-            "n_hidden_rna": params.get("n_hidden_rna", None),
-            "n_hidden_prot": params.get("n_hidden_prot", None),
-            "n_layers": params.get("n_layers", None),
-            "latent_dim": params.get("latent_dim", None),
+            "batch_size": round(params["batch_size"], 3),
+            "contrastive_weight": round(params["contrastive_weight"], 3),
+            "similarity_weight": round(params["similarity_weight"], 3),
+            "matching_weight": round(params["matching_weight"], 3),
+            "cell_type_clustering_weight": round(params["cell_type_clustering_weight"], 3),
+            "kl_weight_rna": round(params["kl_weight_rna"], 3),
+            "kl_weight_prot": round(params["kl_weight_prot"], 3),
+            "adv_weight": round(params.get("adv_weight", 0), 3),
+            "n_hidden_rna": round(params.get("n_hidden_rna", 0), 3),
+            "n_hidden_prot": round(params.get("n_hidden_prot", 0), 3),
+            "n_layers": round(params.get("n_layers", 0), 3),
+            "latent_dim": round(params.get("latent_dim", 0), 3),
         }
     )
 
@@ -338,7 +341,7 @@ def handle_error(e, params, run_name):
     Parameters used:
     {params}
     """
-    print(error_msg)
+    pprint(error_msg)
     mlflow.log_param("error_type", type(e).__name__)
     mlflow.log_param("error_message", str(e))
     mlflow.log_param("error_memory_usage", f"{get_memory_usage():.2f} GB")

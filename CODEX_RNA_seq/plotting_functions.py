@@ -55,7 +55,13 @@ importlib.reload(bar_nick_utils)
 def safe_mlflow_log_figure(fig, filename):
     """Safely log a figure to MLflow if an experiment is active."""
     try:
-        mlflow.log_figure(fig, filename)
+        # If filename starts with step_, save to train folder in MLflow artifacts
+        if filename.startswith("step_"):
+            # Log to MLflow in train folder
+            mlflow.log_figure(fig, f"train/{filename}")
+        else:
+            # Regular logging for non-step files
+            mlflow.log_figure(fig, filename)
     except Exception as e:
         print(f"Warning: Could not log figure to MLflow: {str(e)}")
         print("Continuing without MLflow logging...")
@@ -214,13 +220,13 @@ def plot_latent_pca_both_modalities_cn(
     # Subsample if requested - use separate sampling for RNA and protein
     if use_subsample:
         # Sample RNA data
-        n_subsample_rna = min(300, len(index_rna))
+        n_subsample_rna = min(700, len(index_rna))
         rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
         index_rna = np.array(index_rna)[rna_subsample_idx]
         rna_mean = rna_mean[rna_subsample_idx]
 
         # Sample protein data (separately)
-        n_subsample_prot = min(300, len(index_prot))
+        n_subsample_prot = min(700, len(index_prot))
         prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
         index_prot = np.array(index_prot)[prot_subsample_idx]
         protein_mean = protein_mean[prot_subsample_idx]
@@ -395,7 +401,7 @@ def plot_latent_mean_std_legacy(
         adata_prot: Protein AnnData object
         index_rna: Indices for RNA data (optional)
         index_prot: Indices for protein data (optional)
-        use_subsample: Whether to subsample to 300 points (default: True)
+        use_subsample: Whether to subsample to 700 points (default: True)
     """
     if index_rna is None:
         index_rna = range(len(adata_rna.obs.index))
@@ -411,14 +417,14 @@ def plot_latent_mean_std_legacy(
     # Subsample if requested - use separate sampling for RNA and protein
     if use_subsample:
         # Sample RNA data
-        n_subsample_rna = min(300, len(index_rna))
+        n_subsample_rna = min(700, len(index_rna))
         rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
         index_rna = np.array(index_rna)[rna_subsample_idx]
         rna_mean = rna_mean[rna_subsample_idx]
         rna_std = rna_std[rna_subsample_idx]
 
         # Sample protein data (separately)
-        n_subsample_prot = min(300, len(index_prot))
+        n_subsample_prot = min(700, len(index_prot))
         prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
         index_prot = np.array(index_prot)[prot_subsample_idx]
         protein_mean = protein_mean[prot_subsample_idx]
@@ -516,7 +522,7 @@ def plot_rna_protein_matching_means_and_scale(
         global_step: the current training step, if None then not during training
     """
     if use_subsample:
-        subsample_indexes = np.random.choice(rna_latent_mean.shape[0], 300, replace=False)
+        subsample_indexes = np.random.choice(rna_latent_mean.shape[0], 700, replace=False)
     else:
         subsample_indexes = np.arange(rna_latent_mean.shape[0])
     prot_new_order = archetype_dis_mat.argmin(axis=0).detach().cpu().numpy()
@@ -713,8 +719,8 @@ def plot_normalized_losses(history):
 
         for key in keys:
             values = history[key]
-            if len(values) > 0:  # Only process non-empty lists
-                values = np.array(values)
+            if len(values) > 1:  # Only process if we have more than 1 value
+                values = np.array(values[1:])  # Skip first step
                 # Remove inf and nan
                 values = values[~np.isinf(values) & ~np.isnan(values)]
                 if len(values) > 0:  # Check again after filtering
@@ -866,8 +872,8 @@ def plot_cell_type_distributions(combined_latent, top_n=3, use_subsample=True):
         cell_type_data = combined_latent[combined_latent.obs["cell_types"] == cell_type]
 
         # Subsample if requested
-        if use_subsample and cell_type_data.shape[0] > 300:
-            n_subsample = min(300, cell_type_data.shape[0])
+        if use_subsample and cell_type_data.shape[0] > 700:
+            n_subsample = min(700, cell_type_data.shape[0])
             subsample_idx = np.random.choice(cell_type_data.shape[0], n_subsample, replace=False)
             cell_type_data_plot = cell_type_data[subsample_idx].copy()
         else:
@@ -892,12 +898,12 @@ def plot_rna_protein_latent_cn_cell_type_umap(rna_adata, protein_adata, use_subs
     # Create copies to avoid modifying the original data
     if use_subsample:
         # Subsample RNA data
-        n_subsample_rna = min(300, rna_adata.shape[0])
+        n_subsample_rna = min(700, rna_adata.shape[0])
         subsample_idx_rna = np.random.choice(rna_adata.shape[0], n_subsample_rna, replace=False)
         rna_adata_plot = rna_adata[subsample_idx_rna].copy()
 
         # Subsample protein data
-        n_subsample_prot = min(300, protein_adata.shape[0])
+        n_subsample_prot = min(700, protein_adata.shape[0])
         subsample_idx_prot = np.random.choice(
             protein_adata.shape[0], n_subsample_prot, replace=False
         )
@@ -937,12 +943,12 @@ def plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True):
     # Apply subsampling if requested
     if use_subsample:
         # Subsample RNA data
-        n_subsample_rna = min(300, rna_archtype.shape[0])
+        n_subsample_rna = min(700, rna_archtype.shape[0])
         subsample_idx_rna = np.random.choice(rna_archtype.shape[0], n_subsample_rna, replace=False)
         rna_archtype_plot = rna_archtype[subsample_idx_rna].copy()
 
         # Subsample protein data
-        n_subsample_prot = min(300, prot_archtype.shape[0])
+        n_subsample_prot = min(700, prot_archtype.shape[0])
         subsample_idx_prot = np.random.choice(
             prot_archtype.shape[0], n_subsample_prot, replace=False
         )

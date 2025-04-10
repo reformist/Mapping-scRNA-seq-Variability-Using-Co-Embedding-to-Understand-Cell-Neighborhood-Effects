@@ -1,11 +1,14 @@
 # %%
 # Setup paths
 # %%
+# Log detailed losses as JSON artifact
+import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
+import mlflow
 import torch
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -241,6 +244,7 @@ def print_training_metrics(
     num_cells,
     exact_pairs,
     cell_type_clustering_loss=None,
+    last_step=False,
 ):
     """Print training metrics in a structured format."""
     print("\n" + "=" * 80)
@@ -255,24 +259,87 @@ def print_training_metrics(
             return f"{round(loss, 2)} ({round(abs_loss/abs_total*100, 1)}%)"
         return f"{loss:.3f} ({round(abs_loss/abs_total*100, 1)}%)"
 
-    print("\nLosses:")
-    print("-" * 40)
-    print(f"RNA Loss: {format_loss(rna_loss_output.item(), total_loss.item())}")
-    print(f"Protein Loss: {format_loss(protein_loss_output.item(), total_loss.item())}")
-    print(f"Contrastive Loss: {format_loss(contrastive_loss.item(), total_loss.item())}")
-    print(f"Adversarial Loss: {format_loss(adv_loss.item(), total_loss.item())}")
-    print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss.item())}")
-    print(f"Similarity Loss: {format_loss(similarity_loss.item(), total_loss.item())}")
-    print(f"Diversity Loss: {format_loss(diversity_loss.item(), total_loss.item())}")
+    # Calculate all losses and percentages
+    total_loss_value = total_loss.item()
+    losses = {
+        "rna_loss": {
+            "value": round(rna_loss_output.item(), 3),
+            "percentage": round(abs(rna_loss_output.item()) / abs(total_loss_value) * 100, 1),
+        },
+        "protein_loss": {
+            "value": round(protein_loss_output.item(), 3),
+            "percentage": round(abs(protein_loss_output.item()) / abs(total_loss_value) * 100, 1),
+        },
+        "contrastive_loss": {
+            "value": round(contrastive_loss.item(), 3),
+            "percentage": round(abs(contrastive_loss.item()) / abs(total_loss_value) * 100, 1),
+        },
+        # "adversarial_loss": {
+        #     "value": round(adv_loss.item(), 3),
+        #     "percentage": round(abs(adv_loss.item())/abs(total_loss_value)*100, 1)
+        # },
+        "matching_loss": {
+            "value": round(matching_loss.item(), 3),
+            "percentage": round(abs(matching_loss.item()) / abs(total_loss_value) * 100, 1),
+        },
+        "similarity_loss": {
+            "value": round(similarity_loss.item(), 3),
+            "percentage": round(abs(similarity_loss.item()) / abs(total_loss_value) * 100, 1),
+        },
+        # "diversity_loss": {
+        #     "value": round(diversity_loss.item(), 3),
+        #     "percentage": round(abs(diversity_loss.item())/abs(total_loss_value)*100, 1)
+        # },
+        "total_loss": round(total_loss_value, 3),
+    }
 
     if cell_type_clustering_loss is not None:
         if isinstance(cell_type_clustering_loss, torch.Tensor):
             loss_value = cell_type_clustering_loss.item()
         else:
             loss_value = cell_type_clustering_loss
-        print(f"Cell Type Clustering Loss: {format_loss(loss_value, total_loss.item())}")
+        losses["cell_type_clustering_loss"] = {
+            "value": round(loss_value, 3),
+            "percentage": round(abs(loss_value) / abs(total_loss_value) * 100, 1),
+        }
 
-    print(f"Total Loss: {total_loss.item():.3f}")
+    # Log to MLflow
+    mlflow.log_metrics(
+        {
+            "total_loss": losses.get("total_loss", float("nan")),
+            "rna_loss": losses.get("rna_loss", {}).get("value", float("nan")),
+            "protein_loss": losses.get("protein_loss", {}).get("value", float("nan")),
+            "contrastive_loss": losses.get("contrastive_loss", {}).get("value", float("nan")),
+            "adversarial_loss": losses.get("adversarial_loss", {}).get("value", float("nan")),
+            "matching_loss": losses.get("matching_loss", {}).get("value", float("nan")),
+            "similarity_loss": losses.get("similarity_loss", {}).get("value", float("nan")),
+            "diversity_loss": losses.get("diversity_loss", {}).get("value", float("nan")),
+            "cell_type_clustering_loss": losses.get("cell_type_clustering_loss", {}).get(
+                "value", float("nan")
+            ),
+        }
+    )
+
+    # Only save losses JSON on the last step
+    if last_step:
+        losses_file = "final_losses.json"
+        with open(losses_file, "w") as f:
+            json.dump(losses, f, indent=4)
+        mlflow.log_artifact(losses_file, "losses")
+        os.remove(losses_file)
+
+    print("\nLosses:")
+    print("-" * 40)
+    print(f"RNA Loss: {format_loss(rna_loss_output.item(), total_loss_value)}")
+    print(f"Protein Loss: {format_loss(protein_loss_output.item(), total_loss_value)}")
+    print(f"Contrastive Loss: {format_loss(contrastive_loss.item(), total_loss_value)}")
+    print(f"Adversarial Loss: {format_loss(adv_loss.item(), total_loss_value)}")
+    print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss_value)}")
+    print(f"Similarity Loss: {format_loss(similarity_loss.item(), total_loss_value)}")
+    print(f"Diversity Loss: {format_loss(diversity_loss.item(), total_loss_value)}")
+    print(f"Cell Type Clustering Loss: {format_loss(loss_value, total_loss_value)}")
+
+    print(f"Total Loss: {total_loss_value:.3f}")
 
     print("\nDistance Metrics:")
     print("-" * 40)
