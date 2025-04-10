@@ -64,8 +64,8 @@ def log_training_metrics(
 
     with open(log_file, "a") as f:
         f.write("\n--- TRAINING METRICS ---\n")
-        f.write(f"RNA loss: {rna_loss_output.loss.item()}\n")
-        f.write(f"Protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"RNA loss: {rna_loss_output.item()}\n")
+        f.write(f"Protein loss: {protein_loss_output.item()}\n")
         f.write(f"Contrastive loss: {contrastive_loss.item()}\n")
         f.write(f"Matching loss: {matching_loss.item()}\n")
         f.write(f"Similarity loss: {similarity_loss.item()}\n")
@@ -96,8 +96,8 @@ def log_validation_metrics(
     with open(log_file, "a") as f:
         f.write("\n--- VALIDATION METRICS ---\n")
         f.write(f"Validation total loss: {validation_total_loss.item()}\n")
-        f.write(f"Validation RNA loss: {rna_loss_output.loss.item()}\n")
-        f.write(f"Validation protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Validation RNA loss: {rna_loss_output.item()}\n")
+        f.write(f"Validation protein loss: {protein_loss_output.item()}\n")
         f.write(f"Validation contrastive loss: {contrastive_loss.item()}\n")
         f.write(
             f"Validation matching distances mean: {matching_rna_protein_latent_distances.mean().item()}\n"
@@ -133,8 +133,8 @@ def log_batch_metrics(
     with open(log_file, "a") as f:
         f.write(f"\n--- BATCH {batch_idx} METRICS ---\n")
         f.write(f"Batch total loss: {validation_total_loss.item()}\n")
-        f.write(f"Batch RNA loss: {rna_loss_output.loss.item()}\n")
-        f.write(f"Batch protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Batch RNA loss: {rna_loss_output.item()}\n")
+        f.write(f"Batch protein loss: {protein_loss_output.item()}\n")
         f.write(f"Batch contrastive loss: {contrastive_loss.item()}\n")
 
 
@@ -155,8 +155,8 @@ def log_step_metrics(
     with open(log_file, "a") as f:
         f.write(f"\n--- STEP {global_step} METRICS ---\n")
         f.write(f"Step total loss: {total_loss.item()}\n")
-        f.write(f"Step RNA loss: {rna_loss_output.loss.item()}\n")
-        f.write(f"Step protein loss: {protein_loss_output.loss.item()}\n")
+        f.write(f"Step RNA loss: {rna_loss_output.item()}\n")
+        f.write(f"Step protein loss: {protein_loss_output.item()}\n")
         f.write(f"Step contrastive loss: {contrastive_loss.item()}\n")
         f.write(f"Step matching loss: {matching_loss.item()}\n")
         f.write(f"Step similarity loss: {similarity_loss.item()}\n")
@@ -257,8 +257,8 @@ def print_training_metrics(
 
     print("\nLosses:")
     print("-" * 40)
-    print(f"RNA Loss: {format_loss(rna_loss_output.loss.item(), total_loss.item())}")
-    print(f"Protein Loss: {format_loss(protein_loss_output.loss.item(), total_loss.item())}")
+    print(f"RNA Loss: {format_loss(rna_loss_output.item(), total_loss.item())}")
+    print(f"Protein Loss: {format_loss(protein_loss_output.item(), total_loss.item())}")
     print(f"Contrastive Loss: {format_loss(contrastive_loss.item(), total_loss.item())}")
     print(f"Adversarial Loss: {format_loss(adv_loss.item(), total_loss.item())}")
     print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss.item())}")

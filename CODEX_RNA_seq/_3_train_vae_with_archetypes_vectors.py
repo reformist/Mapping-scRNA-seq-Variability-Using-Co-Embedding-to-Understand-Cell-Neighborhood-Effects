@@ -146,7 +146,6 @@ import CODEX_RNA_seq.logging_functions
 
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
-
 # Force reimport logging functions
 import CODEX_RNA_seq.logging_functions
 from CODEX_RNA_seq.logging_functions import (
@@ -213,6 +212,18 @@ class DualVAETrainingPlan(TrainingPlan):
     def __init__(self, rna_module, **kwargs):
         protein_vae = kwargs.pop("protein_vae")
         rna_vae = kwargs.pop("rna_vae")
+
+        # Print initial protein VAE parameters
+        print("\nInitial Protein VAE Parameters:")
+        for name, param in protein_vae.module.named_parameters():
+            if param.requires_grad:
+                print(f"{name}:")
+                print(f"  Mean: {param.data.mean().item():.4f}")
+                print(f"  Std: {param.data.std().item():.4f}")
+                print(f"  Min: {param.data.min().item():.4f}")
+                print(f"  Max: {param.data.max().item():.4f}")
+                print("---")
+
         self.plot_x_times = kwargs.pop("plot_x_times", 5)
         contrastive_weight = kwargs.pop("contrastive_weight", 1.0)
         self.batch_size = kwargs.pop("batch_size", 1000)
@@ -356,8 +367,18 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
-        # if self.pbar is None:
-        #     self.pbar = tqdm(total=self.total_steps, desc="Training", leave=True)
+        # Print protein VAE parameters every 100 steps
+        if self.global_step % 100 == 0:
+            print("\nProtein VAE Parameters:")
+            for name, param in self.protein_vae.module.named_parameters():
+                if param.requires_grad:
+                    print(f"{name}:")
+                    print(f"  Mean: {param.data.mean().item():.4f}")
+                    print(f"  Std: {param.data.std().item():.4f}")
+                    print(f"  Min: {param.data.min().item():.4f}")
+                    print(f"  Max: {param.data.max().item():.4f}")
+                    # print(f"  Grad Mean: {param.grad.mean().item() if param.grad is not None else 'None':.4f}")
+                    print("---")
 
         indices = range(self.batch_size)
         indices_rna = np.random.choice(
@@ -375,14 +396,13 @@ class DualVAETrainingPlan(TrainingPlan):
         rna_batch = self._get_rna_batch(batch, indices_rna)
         if rna_batch["X"].shape[0] != self.batch_size:
             raise ValueError("RNA batch size is not equal to the batch size")
-        rna_inference_outputs, _, rna_loss_output = self.rna_vae.module(
-            rna_batch, loss_kwargs={"kl_weight": self.kl_weight_rna}
-        )
+        rna_inference_outputs, _, rna_loss_output_raw = self.rna_vae.module(rna_batch)
+        rna_loss_output = rna_loss_output_raw.loss * self.kl_weight_rna
         protein_batch = self._get_protein_batch(batch, indices_prot)
-        protein_inference_outputs, _, protein_loss_output = self.protein_vae.module(
-            protein_batch, loss_kwargs={"kl_weight": self.kl_weight_prot}
+        protein_inference_outputs, _, protein_loss_output_raw = self.protein_vae.module(
+            protein_batch
         )
-
+        protein_loss_output = protein_loss_output_raw.loss * self.kl_weight_prot
         # rna_inference_outputs = self.rna_vae.module.inference(
         #     rna_batch["X"], batch_index=rna_batch["batch"], n_samples=1
         # )
@@ -696,8 +716,8 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Add cell type clustering loss to the total loss
         total_loss = (
-            rna_loss_output.loss
-            + protein_loss_output.loss
+            rna_loss_output
+            + protein_loss_output
             + contrastive_loss
             # + adv_loss # dont remove comment for now
             + matching_loss
@@ -769,8 +789,8 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         self.train_losses.append(total_loss.item())
-        self.train_rna_losses.append(rna_loss_output.loss.item())
-        self.train_protein_losses.append(protein_loss_output.loss.item())
+        self.train_rna_losses.append(rna_loss_output.item())
+        self.train_protein_losses.append(protein_loss_output.item())
         self.train_matching_losses.append(matching_loss.item())
         self.train_contrastive_losses.append(contrastive_loss.item())
         self.train_adv_losses.append(adv_loss.item())
@@ -814,9 +834,12 @@ class DualVAETrainingPlan(TrainingPlan):
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
-        rna_inference_outputs, _, rna_loss_output = self.rna_vae.module(rna_batch)
-        protein_inference_outputs, _, protein_loss_output = self.protein_vae.module(protein_batch)
-
+        rna_inference_outputs, _, rna_loss_output_raw = self.rna_vae.module(rna_batch)
+        protein_inference_outputs, _, protein_loss_output_raw = self.protein_vae.module(
+            protein_batch
+        )
+        rna_loss_output = rna_loss_output_raw.loss * self.kl_weight_rna
+        protein_loss_output = protein_loss_output_raw.loss * self.kl_weight_prot
         rna_latent_mean = rna_inference_outputs["qz"].mean
         rna_latent_std = rna_inference_outputs["qz"].scale
         protein_latent_mean = protein_inference_outputs["qz"].mean
@@ -896,8 +919,8 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Calculate total validation loss with same components as training
         validation_total_loss = (
-            rna_loss_output.loss
-            + protein_loss_output.loss
+            rna_loss_output
+            + protein_loss_output
             + self.contrastive_weight * distances.mean()
             + matching_loss
             + similarity_loss
@@ -920,8 +943,8 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         self.val_losses.append(validation_total_loss.item())
-        self.val_rna_losses.append(rna_loss_output.loss.item())
-        self.val_protein_losses.append(protein_loss_output.loss.item())
+        self.val_rna_losses.append(rna_loss_output.item())
+        self.val_protein_losses.append(protein_loss_output.item())
         self.val_matching_losses.append(matching_loss.item())
         self.val_adv_losses.append(adv_loss.item())
 
@@ -1108,6 +1131,17 @@ class DualVAETrainingPlan(TrainingPlan):
     def on_train_end(self, plot_flag=True):
         """Called when training ends."""
         print("\nTraining completed!")
+
+        # Print final protein VAE parameters
+        print("\nFinal Protein VAE Parameters:")
+        for name, param in self.protein_vae.module.named_parameters():
+            if param.requires_grad:
+                print(f"{name}:")
+                print(f"  Mean: {param.data.mean().item():.4f}")
+                print(f"  Std: {param.data.std().item():.4f}")
+                print(f"  Min: {param.data.min().item():.4f}")
+                print(f"  Max: {param.data.max().item():.4f}")
+                print("---")
 
         # Get final latent representations
         with torch.no_grad():
