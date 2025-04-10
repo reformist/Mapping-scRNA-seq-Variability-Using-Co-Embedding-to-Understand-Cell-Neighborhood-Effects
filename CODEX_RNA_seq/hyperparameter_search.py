@@ -333,15 +333,10 @@ results_df.to_csv("hyperparameter_search_results.csv", index=False)
 mlflow.log_artifact("hyperparameter_search_results.csv")
 
 # Find best parameters
-best_params = results_df.loc[results_df["final_val_loss"].idxmin()]
-print("Best parameters:")
-print(best_params)
+
 
 # Clean up: restore original stdout and close log file
 print(f"\nHyperparameter search completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Log saved to: logs/hyperparameter_search_{log_timestamp}.log")
 sys.stdout = original_stdout
 log_file.close()
-
-# Log the log file to MLflow
-mlflow.log_artifact(f"logs/hyperparameter_search_{log_timestamp}.log")

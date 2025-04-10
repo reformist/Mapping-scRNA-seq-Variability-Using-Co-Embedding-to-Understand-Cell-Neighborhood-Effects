@@ -1,12 +1,7 @@
-# %%
-# Setup paths
-# %%
-# Log detailed losses as JSON artifact
 import json
 import os
 import sys
-from datetime import datetime
-from pathlib import Path
+from pprint import pprint
 
 import mlflow
 import torch
@@ -19,346 +14,240 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # %%
 
 
-def setup_logging(log_dir="logs"):
-    """Initialize logging directory and return log file path"""
-    print("Setting up logging...")
-    # Get the directory of the current file
-    current_dir = Path(__file__).parent
-    print(f"Current directory: {current_dir.relative_to(Path.cwd())}")
-    log_dir = current_dir / log_dir
-    print(f"Log directory: {log_dir.relative_to(Path.cwd())}")
-    log_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"training_log_{timestamp}.txt"
-    print(f"Log file path: {log_file.relative_to(Path.cwd())}")
-
-    # Create an empty log file
-    with open(log_file, "w") as f:
-        f.write(f"Training log started at {datetime.now()}\n")
-
-    print("Logging setup complete")
-    return log_file
-
-
-def update_log(log_file, key, value):
-    """Update log file with new value for given key"""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write(f"{key}: {value}\n")
-
-
-def log_training_metrics(
-    log_file,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    matching_loss,
-    similarity_loss,
-    total_loss,
-    adv_loss,
-    diversity_loss,
-    cell_type_clustering_loss=None,
-):
-    """Log training metrics to a file."""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write("\n--- TRAINING METRICS ---\n")
-        f.write(f"RNA loss: {rna_loss_output.item()}\n")
-        f.write(f"Protein loss: {protein_loss_output.item()}\n")
-        f.write(f"Contrastive loss: {contrastive_loss.item()}\n")
-        f.write(f"Matching loss: {matching_loss.item()}\n")
-        f.write(f"Similarity loss: {similarity_loss.item()}\n")
-        f.write(f"Total loss: {total_loss.item()}\n")
-        f.write(f"Adversarial loss: {adv_loss.item()}\n")
-        f.write(f"Diversity loss: {diversity_loss.item()}\n")
-
-        if cell_type_clustering_loss is not None:
-            if isinstance(cell_type_clustering_loss, torch.Tensor):
-                f.write(f"Cell type clustering loss: {cell_type_clustering_loss.item()}\n")
-            else:
-                f.write(f"Cell type clustering loss: {cell_type_clustering_loss}\n")
-
-
-def log_validation_metrics(
-    log_file,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    validation_total_loss,
-    matching_rna_protein_latent_distances,
-    cell_type_clustering_loss=None,
-):
-    """Log validation metrics to a file."""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write("\n--- VALIDATION METRICS ---\n")
-        f.write(f"Validation total loss: {validation_total_loss.item()}\n")
-        f.write(f"Validation RNA loss: {rna_loss_output.item()}\n")
-        f.write(f"Validation protein loss: {protein_loss_output.item()}\n")
-        f.write(f"Validation contrastive loss: {contrastive_loss.item()}\n")
-        f.write(
-            f"Validation matching distances mean: {matching_rna_protein_latent_distances.mean().item()}\n"
-        )
-        f.write(
-            f"Validation matching distances min: {matching_rna_protein_latent_distances.min().item()}\n"
-        )
-        f.write(
-            f"Validation matching distances max: {matching_rna_protein_latent_distances.max().item()}\n"
-        )
-
-        if cell_type_clustering_loss is not None:
-            if isinstance(cell_type_clustering_loss, torch.Tensor):
-                f.write(
-                    f"Validation cell type clustering loss: {cell_type_clustering_loss.item()}\n"
-                )
-            else:
-                f.write(f"Validation cell type clustering loss: {cell_type_clustering_loss}\n")
-
-
-def log_batch_metrics(
-    log_file,
-    batch_idx,
-    validation_total_loss,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-):
-    """Log batch metrics"""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write(f"\n--- BATCH {batch_idx} METRICS ---\n")
-        f.write(f"Batch total loss: {validation_total_loss.item()}\n")
-        f.write(f"Batch RNA loss: {rna_loss_output.item()}\n")
-        f.write(f"Batch protein loss: {protein_loss_output.item()}\n")
-        f.write(f"Batch contrastive loss: {contrastive_loss.item()}\n")
-
-
-def log_step_metrics(
-    log_file,
-    global_step,
-    total_loss,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    matching_loss,
-    similarity_loss,
-):
-    """Log step metrics"""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write(f"\n--- STEP {global_step} METRICS ---\n")
-        f.write(f"Step total loss: {total_loss.item()}\n")
-        f.write(f"Step RNA loss: {rna_loss_output.item()}\n")
-        f.write(f"Step protein loss: {protein_loss_output.item()}\n")
-        f.write(f"Step contrastive loss: {contrastive_loss.item()}\n")
-        f.write(f"Step matching loss: {matching_loss.item()}\n")
-        f.write(f"Step similarity loss: {similarity_loss.item()}\n")
-
-
 def print_distance_metrics(
-    log_file, prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
+    prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
 ):
-    """Log distance metrics during training"""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    with open(log_file, "a") as f:
-        f.write("\n--- DISTANCE METRICS ---\n")
-        f.write(f"Mean protein distances: {prot_distances.mean().item()}\n")
-        f.write(f"Mean RNA distances: {rna_distances.mean().item()}\n")
-        f.write(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}\n")
-        f.write(f"Stress loss: {stress_loss.item()}\n")
-        f.write(f"Matching loss: {matching_loss.item()}\n")
+    print("\n--- DISTANCE METRICS ---\n")
+    print(f"Mean protein distances: {prot_distances.mean().item()}")
+    print(f"Mean RNA distances: {rna_distances.mean().item()}")
+    print(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}")
+    print(f"Stress loss: {stress_loss.item()}")
+    print(f"Matching loss: {matching_loss.item()}")
 
 
-def log_extra_metrics(
-    log_file,
-    num_acceptable,
-    num_cells,
-    stress_loss,
-    reward,
-    exact_pairs,
-    mixing_score_,
-    batch_pred,
-    batch_labels,
-):
-    """Log extra metrics during training."""
-    if not log_file or not os.path.exists(log_file):
-        return
-
-    # Log accuracy
-    accuracy = (batch_pred.argmax(dim=1) == batch_labels).float().mean()
-
-    with open(log_file, "a") as f:
-        f.write("\n--- EXTRA METRICS ---\n")
-        f.write(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}\n")
-        f.write(f"Stress loss: {stress_loss.item()}\n")
-        f.write(f"Reward: {reward.item()}\n")
-        f.write(f"Exact pairs loss: {exact_pairs.item()}\n")
-        f.write(f"iLISI: {mixing_score_['iLISI']}\n")
-        f.write(f"cLISI: {mixing_score_['cLISI']}\n")
-        f.write(f"Accuracy: {accuracy.item()}\n")
-
-
-def log_epoch_end(log_file, current_epoch, train_losses, val_losses):
-    """Log epoch end metrics"""
-    if not log_file or not os.path.exists(log_file):
-        return
-
+def log_epoch_end(current_epoch, train_losses, val_losses):
     # Calculate epoch averages
     epoch_avg_train_loss = sum(train_losses) / len(train_losses)
     epoch_avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else float("nan")
-
-    with open(log_file, "a") as f:
-        f.write(f"\n--- EPOCH {current_epoch} SUMMARY ---\n")
-        f.write(f"Average train loss: {epoch_avg_train_loss}\n")
-        f.write(f"Average validation loss: {epoch_avg_val_loss}\n")
-
-
-def print_training_metrics(
-    global_step,
-    current_epoch,
-    rna_loss_output,
-    protein_loss_output,
-    contrastive_loss,
-    adv_loss,
-    matching_loss,
-    similarity_loss,
-    diversity_loss,
-    total_loss,
-    latent_distances,
-    similarity_loss_raw,
-    similarity_weight,
-    similarity_active,
-    num_acceptable,
-    num_cells,
-    exact_pairs,
-    cell_type_clustering_loss=None,
-    last_step=False,
-):
-    """Print training metrics in a structured format."""
-    print("\n" + "=" * 80)
-    print(f"Step {global_step}, Epoch {current_epoch}")
-    print("=" * 80)
-
-    # Helper function to format loss with percentage
-    def format_loss(loss, total):
-        abs_total = abs(total)
-        abs_loss = abs(loss)
-        if abs_loss > 100:
-            return f"{round(loss, 2)} ({round(abs_loss/abs_total*100, 1)}%)"
-        return f"{loss:.3f} ({round(abs_loss/abs_total*100, 1)}%)"
-
-    # Calculate all losses and percentages
-    total_loss_value = total_loss.item()
-    losses = {
-        "rna_loss": {
-            "value": round(rna_loss_output.item(), 3),
-            "percentage": round(abs(rna_loss_output.item()) / abs(total_loss_value) * 100, 1),
-        },
-        "protein_loss": {
-            "value": round(protein_loss_output.item(), 3),
-            "percentage": round(abs(protein_loss_output.item()) / abs(total_loss_value) * 100, 1),
-        },
-        "contrastive_loss": {
-            "value": round(contrastive_loss.item(), 3),
-            "percentage": round(abs(contrastive_loss.item()) / abs(total_loss_value) * 100, 1),
-        },
-        # "adversarial_loss": {
-        #     "value": round(adv_loss.item(), 3),
-        #     "percentage": round(abs(adv_loss.item())/abs(total_loss_value)*100, 1)
-        # },
-        "matching_loss": {
-            "value": round(matching_loss.item(), 3),
-            "percentage": round(abs(matching_loss.item()) / abs(total_loss_value) * 100, 1),
-        },
-        "similarity_loss": {
-            "value": round(similarity_loss.item(), 3),
-            "percentage": round(abs(similarity_loss.item()) / abs(total_loss_value) * 100, 1),
-        },
-        # "diversity_loss": {
-        #     "value": round(diversity_loss.item(), 3),
-        #     "percentage": round(abs(diversity_loss.item())/abs(total_loss_value)*100, 1)
-        # },
-        "total_loss": round(total_loss_value, 3),
-    }
-
-    if cell_type_clustering_loss is not None:
-        if isinstance(cell_type_clustering_loss, torch.Tensor):
-            loss_value = cell_type_clustering_loss.item()
-        else:
-            loss_value = cell_type_clustering_loss
-        losses["cell_type_clustering_loss"] = {
-            "value": round(loss_value, 3),
-            "percentage": round(abs(loss_value) / abs(total_loss_value) * 100, 1),
-        }
-
-    # Log to MLflow
+    print(f"\n--- EPOCH {current_epoch} SUMMARY ---\n")
+    print(f"Average train loss: {epoch_avg_train_loss}")
+    print(f"Average validation loss: {epoch_avg_val_loss}")
     mlflow.log_metrics(
-        {
-            "total_loss": losses.get("total_loss", float("nan")),
-            "rna_loss": losses.get("rna_loss", {}).get("value", float("nan")),
-            "protein_loss": losses.get("protein_loss", {}).get("value", float("nan")),
-            "contrastive_loss": losses.get("contrastive_loss", {}).get("value", float("nan")),
-            "adversarial_loss": losses.get("adversarial_loss", {}).get("value", float("nan")),
-            "matching_loss": losses.get("matching_loss", {}).get("value", float("nan")),
-            "similarity_loss": losses.get("similarity_loss", {}).get("value", float("nan")),
-            "diversity_loss": losses.get("diversity_loss", {}).get("value", float("nan")),
-            "cell_type_clustering_loss": losses.get("cell_type_clustering_loss", {}).get(
-                "value", float("nan")
-            ),
-        }
+        {"epoch_avg_train_loss": epoch_avg_train_loss, "epoch_avg_val_loss": epoch_avg_val_loss},
+        step=current_epoch,
     )
 
-    # Only save losses JSON on the last step
+
+def save_to_json(losses, global_step, total_steps):
+    losss_to_save = losses.copy()
+    losss_to_save = {
+        k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losss_to_save.items()
+    }
+    if global_step is not None:
+        last_step = global_step == total_steps - 1 if total_steps is not None else False
     if last_step:
         losses_file = "final_losses.json"
     else:
         losses_file = f"losses_{global_step:05d}.json"
     with open(losses_file, "w") as f:
-        json.dump(losses, f, indent=4)
+        json.dump(losss_to_save, f, indent=4)
     mlflow.log_artifact(losses_file, "losses")
     os.remove(losses_file)
 
-    print("\nLosses:")
-    print("-" * 40)
-    print(f"RNA Loss: {format_loss(rna_loss_output.item(), total_loss_value)}")
-    print(f"Protein Loss: {format_loss(protein_loss_output.item(), total_loss_value)}")
-    print(f"Contrastive Loss: {format_loss(contrastive_loss.item(), total_loss_value)}")
-    print(f"Adversarial Loss: {format_loss(adv_loss.item(), total_loss_value)}")
-    print(f"Matching Loss: {format_loss(matching_loss.item(), total_loss_value)}")
-    print(f"Similarity Loss: {format_loss(similarity_loss.item(), total_loss_value)}")
-    print(f"Diversity Loss: {format_loss(diversity_loss.item(), total_loss_value)}")
-    print(f"Cell Type Clustering Loss: {format_loss(loss_value, total_loss_value)}")
 
-    print(f"Total Loss: {total_loss_value:.3f}")
+def log_step(
+    losses,
+    metrics=None,
+    global_step=None,
+    current_epoch=None,
+    is_validation=False,
+    similarity_weight=None,
+    similarity_active=None,
+    num_acceptable=None,
+    num_cells=None,
+    latent_distances=None,
+    print_to_console=True,
+    total_steps=None,
+):
+    """Unified function to log and print metrics for both training and validation steps.
 
-    print("\nDistance Metrics:")
-    print("-" * 40)
-    print(f"Min Latent Distances: {round(latent_distances.min().item(),3)}")
-    print(f"Max Latent Distances: {round(latent_distances.max().item(),3)}")
-    print(f"Mean Latent Distances: {round(latent_distances.mean().item(),3)}")
+    Args:
+        losses: Dictionary containing all loss values
+        metrics: Dictionary containing additional metrics (iLISI, cLISI, accuracy, etc.)
+        global_step: Current global step (optional)
+        current_epoch: Current epoch (optional)
+        is_validation: Whether this is validation or training
+        similarity_weight: Weight for similarity loss (optional for training)
+        similarity_active: Whether similarity loss is active (optional for training)
+        num_acceptable: Number of acceptable matches (optional for training)
+        num_cells: Number of cells (optional for training)
+        exact_pairs: Exact pairs metric (optional for training)
+        latent_distances: Latent distances (optional)
+        print_to_console: Whether to print metrics to console
+    """
+    prefix = "Validation " if is_validation else ""
+    metrics = metrics or {}
 
-    print("\nSimilarity Metrics:")
-    print("-" * 40)
-    print(f"Similarity Loss Raw: {similarity_loss_raw.item():.3f}")
-    print(f"Similarity Weight: {similarity_weight}")
-    print(f"Similarity Active: {similarity_active}")
+    # Convert tensor values to Python scalars for logging
+    def get_value(x):
+        if x is None:
+            return 0
+        return round(x.item(), 4) if isinstance(x, torch.Tensor) else x
 
-    print("\nMatching Metrics:")
-    print("-" * 40)
-    print(f"Number of Acceptable Pairs: {num_acceptable.item()}")
-    print(f"Total Pairs: {num_cells}")
-    print(f"Acceptable Ratio: {num_acceptable.item()/num_cells:.3f}")
-    print(f"Exact Pairs Loss: {exact_pairs.item():.3f}")
-    print("=" * 80 + "\n")
+    # Extract loss values
+    total_loss = get_value(losses.get("total_loss", float("nan")))
+    rna_loss = get_value(losses.get("rna_loss", float("nan")))
+    protein_loss = get_value(losses.get("protein_loss", float("nan")))
+    contrastive_loss = get_value(losses.get("contrastive_loss", float("nan")))
+    matching_loss = get_value(losses.get("matching_loss", float("nan")))
+    similarity_loss = get_value(losses.get("similarity_loss", float("nan")))
+    similarity_loss_raw = get_value(losses.get("similarity_loss_raw", float("nan")))
+    cell_type_clustering_loss = get_value(losses.get("cell_type_clustering_loss", float("nan")))
+    adv_loss = get_value(losses.get("adversarial_loss", float("nan")))
+    diversity_loss = get_value(losses.get("diversity_loss", float("nan")))
+    stress_loss = get_value(losses.get("stress_loss", float("nan")))
+    reward = get_value(losses.get("reward", float("nan")))
+
+    # Handle parameters that might be in losses dict or passed directly
+    exact_pairs = get_value(metrics.get("exact_pairs", float("nan")))
+    num_acceptable = get_value(metrics.get("num_acceptable", float("nan")))
+    num_cells = get_value(metrics.get("num_cells", float("nan")))
+
+    # Extract additional metrics
+    ilisi = get_value(metrics.get("iLISI", float("nan")))
+    clisi = get_value(metrics.get("cLISI", float("nan")))
+    accuracy = get_value(metrics.get("accuracy", float("nan")))
+
+    def format_loss(loss, total):
+        if loss is None:
+            return
+        percentage = (loss / total) * 100 if total != 0 else 0
+        return f"{loss:.3f} ({percentage:.1f}%)"
+
+    def format_loss_mlflow(loss_dict, total=None):
+        loss_dict = loss_dict.copy()
+        loss_dict = {
+            k: v.item() if isinstance(v, torch.Tensor) else v for k, v in loss_dict.items()
+        }
+        return {
+            k: round(v, 4) if isinstance(v, (int, float)) else v
+            for k, v in loss_dict.items()
+            if v is not None
+        }
+
+    # Format metrics for printing to console
+    if print_to_console:
+        save_to_json(format_loss_mlflow(losses), global_step, total_steps)
+
+        print("\n" + "=" * 80)
+        step_info = ""
+        if global_step is not None:
+            step_info += f"Step {global_step}"
+        if current_epoch is not None:
+            step_info += f", Epoch {current_epoch}" if step_info else f"Epoch {current_epoch}"
+        if is_validation:
+            print(f"VALIDATION {step_info}")
+        else:
+            print(f"{step_info}")
+        print("=" * 80)
+
+        losses_to_print = {
+            f"{prefix}RNA Loss": format_loss(rna_loss, total_loss),
+            f"{prefix}Protein Loss": format_loss(protein_loss, total_loss),
+            f"{prefix}Contrastive Loss": format_loss(contrastive_loss, total_loss),
+            f"{prefix}Matching Loss": format_loss(matching_loss, total_loss),
+            f"{prefix}Similarity Loss": format_loss(similarity_loss, total_loss),
+            f"{prefix}Cell Type Clustering Loss": format_loss(
+                cell_type_clustering_loss, total_loss
+            ),
+            #   f"{prefix}Adversarial Loss": format_loss(adv_loss, total_loss),
+            #   f"{prefix}Diversity Loss": format_loss(diversity_loss, total_loss),
+            f"{prefix}Total Loss": total_loss,
+        }
+        # add nice print formatting
+        print("\nLosses:")
+        print("-" * 40)
+        pprint({loss: value for loss, value in losses_to_print.items() if value is not None})
+        # Print additional metrics for training
+        if not is_validation:
+            similarity_metrics_to_print = {
+                f"{prefix}Similarity Loss Raw": similarity_loss_raw,
+                f"{prefix}Similarity Weight": similarity_weight,
+                f"{prefix}Similarity Active": similarity_active,
+                f"{prefix}Num Acceptable": num_acceptable,
+                f"{prefix}Num Cells": num_cells,
+                f"{prefix}Exact Pairs": exact_pairs,
+                f"{prefix}Latent Distances": get_value(latent_distances),
+            }
+            print("\nSimilarity Metrics:")
+            print("-" * 40)
+            pprint(
+                {
+                    loss: value
+                    for loss, value in similarity_metrics_to_print.items()
+                    if value is not None
+                }
+            )
+
+        # Print validation-specific metrics
+        if is_validation and latent_distances is not None:
+            print("\nMatching Distances:")
+            print("-" * 40)
+            print(f"Mean: {get_value(latent_distances)}")
+            if isinstance(latent_distances, torch.Tensor):
+                print(f"Min: {latent_distances.min().item()}")
+                print(f"Max: {latent_distances.max().item()}")
+
+        # Print extra metrics if available
+        if any(x != 0 for x in [stress_loss, reward, exact_pairs, ilisi, clisi, accuracy]):
+            print("\nExtra Metrics:")
+            print("-" * 40)
+            extra_metrics_to_print = {
+                f"{prefix}Stress Loss": stress_loss,
+                f"{prefix}Reward": reward,
+                f"{prefix}Exact Pairs": exact_pairs,
+                f"{prefix}iLISI": ilisi,
+                f"{prefix}cLISI": clisi,
+                f"{prefix}Accuracy": accuracy,
+            }
+            pprint(
+                {loss: value for loss, value in extra_metrics_to_print.items() if value is not None}
+            )
+        print("=" * 80 + "\n")
+
+    # Log to MLflow
+    step = global_step if global_step is not None else None
+    prefix = "val_" if is_validation else ""
+    items_to_log = {
+        f"{prefix}total_loss": total_loss,
+        f"{prefix}rna_loss": rna_loss,
+        f"{prefix}protein_loss": protein_loss,
+        f"{prefix}contrastive_loss": contrastive_loss,
+        f"{prefix}matching_loss": matching_loss,
+        f"{prefix}similarity_loss": similarity_loss,
+        f"{prefix}cell_type_clustering_loss": cell_type_clustering_loss,
+        f"{prefix}adversarial_loss": adv_loss,
+        f"{prefix}diversity_loss": diversity_loss,
+    }
+
+    # Add training-specific metrics
+    if not is_validation and similarity_loss_raw is not None:
+        items_to_log["similarity_loss_raw"] = similarity_loss_raw
+
+    if not is_validation and all(
+        x is not None for x in [num_acceptable, num_cells, exact_pairs, latent_distances]
+    ):
+        items_to_log["acceptable_ratio"] = num_acceptable / num_cells if num_cells > 0 else 0
+        items_to_log["exact_pairs"] = exact_pairs
+        items_to_log["latent_distances"] = get_value(latent_distances)
+
+    # Add extra metrics if available
+    items_to_log[f"{prefix}iLISI"] = ilisi
+    items_to_log[f"{prefix}cLISI"] = clisi
+    items_to_log[f"{prefix}accuracy"] = accuracy
+    items_to_log[f"{prefix}stress_loss"] = stress_loss
+    items_to_log[f"{prefix}reward"] = reward
+
+    mlflow.log_metrics(format_loss_mlflow(losses), step=step)
+
+    return items_to_log
