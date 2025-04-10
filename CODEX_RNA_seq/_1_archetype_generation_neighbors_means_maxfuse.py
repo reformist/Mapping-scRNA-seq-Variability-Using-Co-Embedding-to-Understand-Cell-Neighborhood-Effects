@@ -253,6 +253,7 @@ if "major_cell_types" not in adata_2_prot.obs.columns:
     adata_2_prot.obs["major_cell_types"] = adata_2_prot.obs["cell_types"]
 major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
 minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
+major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 if "major_cell_types" not in adata_1_rna.obs.columns:
     adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
     major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
@@ -277,13 +278,13 @@ adata_1_rna.var_names = adata_1_rna.var_names.str.upper()
 adata_2_prot.var_names = adata_2_prot.var_names.str.upper()
 
 # Compute gene module scores
-sc.tl.score_genes(
-    adata_1_rna, gene_list=terminal_exhaustion, score_name="terminal_exhaustion_score"
-)
+# sc.tl.score_genes(
+#     adata_1_rna, gene_list=terminal_exhaustion, score_name="terminal_exhaustion_score"
+# )
 
-if plot_flag:
-    sc.pl.umap(adata_1_rna, color="terminal_exhaustion_score", cmap="viridis")
-    plt.close()
+# if plot_flag:
+#     sc.pl.umap(adata_1_rna, color="terminal_exhaustion_score", cmap="viridis")
+#     plt.close()
 
 # %% Compute PCA Dimensions
 # Compute PCA dimensions
@@ -296,7 +297,7 @@ sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
 # Select PCA components based on variance explained
 print("Selecting PCA components...")
 max_dim = 50
-variance_ratio_selected = 0.75
+variance_ratio_selected = 0.05 # was 0.75
 
 cumulative_variance_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
