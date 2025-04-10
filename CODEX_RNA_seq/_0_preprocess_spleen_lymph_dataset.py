@@ -18,6 +18,8 @@
 import json
 import os
 import sys
+import seaborn as sns
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +56,7 @@ import torch
 from scipy.io import mmread
 
 import bar_nick_utils
+importlib.reload(bar_nick_utils)
 import covet_utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -310,15 +313,51 @@ def process_spatial_data(adata):
 
     # ACTUAL SPATIAL DATA WORK
 
-    assert adata_2_prot.obs.index.is_unique
+    assert adata.obs.index.is_unique
+    
+    major_to_minor_dict ={}
+    # from major to minor dict
+    cell_type_mapping = {
+        "Activated CD4 T": "CD4 T",
+        "B1 B": "B cells",
+        "CD122+ CD8 T": "CD8 T",
+        "CD4 T": "CD4 T",
+        "CD8 T": "CD8 T",
+        "Erythrocytes": "RBC",
+        "GD T": "T cells",
+        "ICOS-high Tregs": "CD4 T",
+        "Ifit3-high B": "B cells",
+        "Ifit3-high CD4 T": "CD4 T",
+        "Ifit3-high CD8 T": "CD8 T",
+        "Ly6-high mono": "Monocytes",
+        "Ly6-low mono": "Monocytes",
+        "MZ B": "B cells",
+        "MZ/Marco-high macrophages": "Macrophages",
+        "Mature B": "B cells",
+        "Migratory DCs": "cDCs",
+        "NK": "NK",
+        "NKT": "T cells",
+        "Neutrophils": "Neutrophils",
+        "Plasma B": "B cells",
+        "Red-pulp macrophages": "Macrophages",
+        "Transitional B": "B cells",
+        "Tregs": "Treg",
+        "cDC1s": "cDCs",
+        "cDC2s": "cDCs",
+        "pDCs": "pDCs",
+    }
+    for k,v in cell_type_mapping.items():
+        if v not in major_to_minor_dict:
+            major_to_minor_dict[v] = [k]
+        else:
+            major_to_minor_dict[v].append(k)
 
-    adata_2_prot,horizontal_splits,vertical_splits = add_spatial_data_to_prot(adata_2_prot, major_to_minor_dict)
-    adata_2_prot.obsm['spatial_location'] = pd.DataFrame([adata_2_prot.obs['X'],adata_2_prot.obs['Y']]).T
+    adata,horizontal_splits,vertical_splits = bar_nick_utils.add_spatial_data_to_prot(adata, major_to_minor_dict)
+    adata.obsm['spatial_location'] = pd.DataFrame([adata.obs['X'],adata.obs['Y']]).T
     if plot_flag:
-        sc.pl.scatter(adata_2_prot[adata_2_prot.obs['major_cell_types']=='B cells'], x='X', y='Y', color='cell_types', title='B Cell subtypes locations')
-        sc.pl.scatter(adata_2_prot[adata_2_prot.obs['major_cell_types']=='CD4 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
-        sc.pl.scatter(adata_2_prot[adata_2_prot.obs['major_cell_types']=='CD8 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
-
+        sc.pl.scatter(adata[adata.obs['major_cell_types']=='B cells'], x='X', y='Y', color='cell_types', title='B Cell subtypes locations')
+        sc.pl.scatter(adata[adata.obs['major_cell_types']=='CD4 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
+        sc.pl.scatter(adata[adata.obs['major_cell_types']=='CD8 T'], x='X', y='Y', color='cell_types', title='T Cell subtypes locations')
 
 
 
