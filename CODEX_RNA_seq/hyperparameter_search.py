@@ -82,8 +82,8 @@ sys.path.append(str(project_root))
 # Define hyperparameter search space
 param_grid = {
     "plot_x_times": [5],
-    "check_val_every_n_epoch": [5],
-    "max_epochs": [2],  # Changed from n_epochs to max_epochs to match train_vae
+    "check_val_every_n_epoch": [4],
+    "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
     "contrastive_weight": [0.001, 0.01, 0.1],
@@ -92,16 +92,13 @@ param_grid = {
     "matching_weight": [
         1,
         10,
-        100,
-        10_000.0,
-        1_000_000.0,
     ],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [1, 10, 100.0, 100000.0],  # Added cell type clustering weight
+    "cell_type_clustering_weight": [10, 100.0, 100000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [0.001, 0.01, 0.1],
+    "kl_weight_rna": [0.01, 0.1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -111,9 +108,52 @@ param_grid = {
 
 # Setup MLflow
 mlflow.set_tracking_uri("file:./mlruns")
-experiment_name = f"vae_hyperparameter_search_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-experiment_id = mlflow.create_experiment(experiment_name)
+
+# Get existing experiment or create new one
+experiment_name = "vae_hyperparameter_search"  # Fixed name instead of timestamp
+try:
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = mlflow.create_experiment(experiment_name)
+    else:
+        experiment_id = experiment.experiment_id
+except Exception:
+    experiment_id = mlflow.create_experiment(experiment_name)
+
 mlflow.set_experiment(experiment_name)
+
+# Get existing runs and their parameters
+existing_runs = mlflow.search_runs(experiment_ids=[experiment_id])
+existing_params = []
+for _, run in existing_runs.iterrows():
+    run_params = {}
+    for param in param_grid.keys():
+        param_key = f"params.{param}"
+        if param_key in run.index and param not in [
+            "plot_x_times",
+            "check_val_every_n_epoch",
+            "max_epochs",
+        ]:
+            run_params[param] = run[param_key]
+    if run_params:  # Only add if we have parameters
+        existing_params.append(run_params)
+
+# Filter out parameter combinations that have already been tried
+all_combinations = list(ParameterGrid(param_grid))
+new_combinations = []
+for combo in all_combinations:
+    # Create a copy of the combo without the ignored keys
+    combo_to_check = {
+        k: v
+        for k, v in combo.items()
+        if k not in ["plot_x_times", "check_val_every_n_epoch", "max_epochs"]
+    }
+    if combo_to_check not in existing_params:
+        new_combinations.append(combo)
+
+print(f"Total combinations: {len(all_combinations)}")
+print(f"Already tried: {len(existing_params)}")
+print(f"New combinations to try: {len(new_combinations)}")
 
 # Load data
 save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
@@ -142,14 +182,14 @@ print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
 
 # Run hyperparameter search
 results = []
-total_combinations = len(ParameterGrid(param_grid))
-print(f"Number of combinations: {total_combinations}")
+total_combinations = len(new_combinations)
+print(f"Number of new combinations to try: {total_combinations}")
 
 # Initialize timing variables
 start_time = datetime.now()
 elapsed_times = []
 
-for i, params in enumerate(ParameterGrid(param_grid)):
+for i, params in enumerate(new_combinations):
     iter_start_time = datetime.now()
     log_memory_usage(f"Start of iteration {i+1}: ")
 
