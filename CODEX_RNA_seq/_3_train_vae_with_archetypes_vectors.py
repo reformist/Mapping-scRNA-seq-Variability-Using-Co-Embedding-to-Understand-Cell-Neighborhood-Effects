@@ -588,7 +588,7 @@ class DualVAETrainingPlan(TrainingPlan):
         )
 
         # Calculate training metrics with subsampling
-        print("7. Calculating training metrics...")
+        print("Calculating training metrics...")
         train_metrics = self.calculate_metrics_for_data(
             self.rna_vae.adata[self.train_indices_rna],
             self.protein_vae.adata[self.train_indices_prot],

@@ -1,10 +1,9 @@
-import json
 import os
 import sys
-from pprint import pprint
 
 import mlflow
 import torch
+from tabulate import tabulate
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,11 +17,15 @@ def print_distance_metrics(
     prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
 ):
     print("\n--- DISTANCE METRICS ---\n")
-    print(f"Mean protein distances: {prot_distances.mean().item()}")
-    print(f"Mean RNA distances: {rna_distances.mean().item()}")
-    print(f"Acceptable ratio: {num_acceptable.float().item() / num_cells}")
-    print(f"Stress loss: {stress_loss.item()}")
-    print(f"Matching loss: {matching_loss.item()}")
+    table_data = [
+        ["Metric", "Value"],
+        ["Mean protein distances", f"{prot_distances.mean().item():.4f}"],
+        ["Mean RNA distances", f"{rna_distances.mean().item():.4f}"],
+        ["Acceptable ratio", f"{num_acceptable.float().item() / num_cells:.4f}"],
+        ["Stress loss", f"{stress_loss.item():.4f}"],
+        ["Matching loss", f"{matching_loss.item():.4f}"],
+    ]
+    print(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
 
 
 def log_epoch_end(current_epoch, train_losses, val_losses):
@@ -30,27 +33,62 @@ def log_epoch_end(current_epoch, train_losses, val_losses):
     epoch_avg_train_loss = sum(train_losses) / len(train_losses)
     epoch_avg_val_loss = sum(val_losses) / len(val_losses) if val_losses else float("nan")
     print(f"\n--- EPOCH {current_epoch} SUMMARY ---\n")
-    print(f"Average train loss: {epoch_avg_train_loss}")
-    print(f"Average validation loss: {epoch_avg_val_loss}")
+
+    table_data = [
+        ["Metric", "Value"],
+        ["Average train loss", f"{epoch_avg_train_loss:.4f}"],
+        ["Average validation loss", f"{epoch_avg_val_loss:.4f}"],
+    ]
+    print(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
+
     mlflow.log_metrics(
         {"epoch_avg_train_loss": epoch_avg_train_loss, "epoch_avg_val_loss": epoch_avg_val_loss},
         step=current_epoch,
     )
 
 
-def save_to_json(losses, global_step, total_steps):
-    losss_to_save = losses.copy()
-    losss_to_save = {
-        k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losss_to_save.items()
+def save_tabulate_to_txt(losses, global_step, total_steps):
+    """Save losses as a formatted table and log it to MLflow.
+
+    Args:
+        losses: Dictionary containing loss values
+        global_step: Current global step
+        total_steps: Total number of steps
+    """
+    # Convert tensor values to Python scalars
+    losses_to_save = {
+        k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.copy().items()
     }
+
+    # Determine filename based on step
     if global_step is not None:
         last_step = global_step == total_steps - 1 if total_steps is not None else False
     if last_step:
-        losses_file = "final_losses.json"
+        losses_file = "final_losses.txt"
     else:
-        losses_file = f"losses_{global_step:05d}.json"
+        losses_file = f"losses_{global_step:05d}.txt"
+
+    # Create tabulate table
+    table_data = [["Loss Type", "Value"]]
+
+    # Get total loss for percentage calculations
+    total_loss = losses_to_save.get("total_loss", 0)
+
+    # Format losses with percentages
+    for loss_name, value in losses_to_save.items():
+        if value is not None:
+            if isinstance(value, (int, float)) and loss_name != "total_loss" and total_loss != 0:
+                percentage = (value / total_loss) * 100 if total_loss != 0 else 0
+                formatted_value = f"{value:.3f} ({percentage:.1f}%)"
+            else:
+                formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else value
+            table_data.append([loss_name, formatted_value])
+
+    # Save formatted table to text file
     with open(losses_file, "w") as f:
-        json.dump(losss_to_save, f, indent=4)
+        f.write(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
+
+    # Log to MLflow and clean up
     mlflow.log_artifact(losses_file, "losses")
     os.remove(losses_file)
 
@@ -137,7 +175,7 @@ def log_step(
 
     # Format metrics for printing to console
     if print_to_console:
-        save_to_json(format_loss_mlflow(losses), global_step, total_steps)
+        save_tabulate_to_txt(format_loss_mlflow(losses), global_step, total_steps)
 
         print("\n" + "=" * 80)
         step_info = ""
@@ -151,6 +189,10 @@ def log_step(
             print(f"{step_info}")
         print("=" * 80)
 
+        # Prepare loss data for tabulate
+        losses_table = []
+        losses_table.append(["Loss Type", "Value"])
+
         losses_to_print = {
             f"{prefix}RNA Loss": format_loss(rna_loss, total_loss),
             f"{prefix}Protein Loss": format_loss(protein_loss, total_loss),
@@ -160,16 +202,21 @@ def log_step(
             f"{prefix}Cell Type Clustering Loss": format_loss(
                 cell_type_clustering_loss, total_loss
             ),
-            #   f"{prefix}Adversarial Loss": format_loss(adv_loss, total_loss),
-            #   f"{prefix}Diversity Loss": format_loss(diversity_loss, total_loss),
             f"{prefix}Total Loss": total_loss,
         }
-        # add nice print formatting
+
+        for loss_name, value in losses_to_print.items():
+            if value is not None:
+                losses_table.append([loss_name, value])
+
         print("\nLosses:")
-        print("-" * 40)
-        pprint({loss: value for loss, value in losses_to_print.items() if value is not None})
+        print(tabulate(losses_table, headers="firstrow", tablefmt="fancy_grid"))
+
         # Print additional metrics for training
         if not is_validation:
+            similarity_metrics = []
+            similarity_metrics.append(["Metric", "Value"])
+
             similarity_metrics_to_print = {
                 f"{prefix}Similarity Loss Raw": similarity_loss_raw,
                 f"{prefix}Similarity Weight": similarity_weight,
@@ -179,29 +226,34 @@ def log_step(
                 f"{prefix}Exact Pairs": exact_pairs,
                 f"{prefix}Latent Distances": get_value(latent_distances),
             }
+
+            for metric_name, value in similarity_metrics_to_print.items():
+                if value is not None:
+                    similarity_metrics.append([metric_name, value])
+
             print("\nSimilarity Metrics:")
-            print("-" * 40)
-            pprint(
-                {
-                    loss: value
-                    for loss, value in similarity_metrics_to_print.items()
-                    if value is not None
-                }
-            )
+            print(tabulate(similarity_metrics, headers="firstrow", tablefmt="fancy_grid"))
 
         # Print validation-specific metrics
         if is_validation and latent_distances is not None:
-            print("\nMatching Distances:")
-            print("-" * 40)
-            print(f"Mean: {get_value(latent_distances)}")
+            distance_metrics = []
+            distance_metrics.append(["Statistic", "Value"])
+
+            mean_val = get_value(latent_distances)
+            distance_metrics.append(["Mean", mean_val])
+
             if isinstance(latent_distances, torch.Tensor):
-                print(f"Min: {latent_distances.min().item()}")
-                print(f"Max: {latent_distances.max().item()}")
+                distance_metrics.append(["Min", f"{latent_distances.min().item():.4f}"])
+                distance_metrics.append(["Max", f"{latent_distances.max().item():.4f}"])
+
+            print("\nMatching Distances:")
+            print(tabulate(distance_metrics, headers="firstrow", tablefmt="fancy_grid"))
 
         # Print extra metrics if available
         if any(x != 0 for x in [stress_loss, reward, exact_pairs, ilisi, clisi, accuracy]):
-            print("\nExtra Metrics:")
-            print("-" * 40)
+            extra_metrics = []
+            extra_metrics.append(["Metric", "Value"])
+
             extra_metrics_to_print = {
                 f"{prefix}Stress Loss": stress_loss,
                 f"{prefix}Reward": reward,
@@ -210,9 +262,14 @@ def log_step(
                 f"{prefix}cLISI": clisi,
                 f"{prefix}Accuracy": accuracy,
             }
-            pprint(
-                {loss: value for loss, value in extra_metrics_to_print.items() if value is not None}
-            )
+
+            for metric_name, value in extra_metrics_to_print.items():
+                if value is not None:
+                    extra_metrics.append([metric_name, value])
+
+            print("\nExtra Metrics:")
+            print(tabulate(extra_metrics, headers="firstrow", tablefmt="fancy_grid"))
+
         print("=" * 80 + "\n")
 
     # Log to MLflow
