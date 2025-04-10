@@ -57,8 +57,12 @@ def safe_mlflow_log_figure(fig, filename):
     try:
         # If filename starts with step_, save to train folder in MLflow artifacts
         if filename.startswith("step_"):
-            # Log to MLflow in train folder
-            mlflow.log_figure(fig, f"train/{filename}")
+            # Extract step number and pad with leading zeros
+            step_num = filename.split("_")[1].split(".")[0]
+            padded_step = f"{int(step_num):05d}"
+            new_filename = f"step_{padded_step}_{'_'.join(filename.split('_')[2:])}"
+            # Log to MLflow in train folder with padded step number
+            mlflow.log_figure(fig, f"train/{new_filename}")
         else:
             # Regular logging for non-step files
             mlflow.log_figure(fig, filename)

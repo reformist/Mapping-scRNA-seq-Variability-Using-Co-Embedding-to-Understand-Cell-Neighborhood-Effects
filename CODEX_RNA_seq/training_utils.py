@@ -2,6 +2,7 @@
 
 import gc
 import os
+from datetime import datetime
 from pathlib import Path
 from pprint import pprint
 
@@ -26,7 +27,7 @@ from scipy.spatial.distance import cdist
 from sklearn.metrics import adjusted_mutual_info_score
 from tqdm import tqdm
 
-from bar_nick_utils import clean_uns_for_h5ad, compare_distance_distributions, mixing_score
+from bar_nick_utils import compare_distance_distributions, mixing_score
 
 
 def log_parameters(params, run_index, total_runs):
@@ -268,18 +269,16 @@ def generate_visualizations(
 
 
 def save_results(rna_vae, protein_vae, save_dir):
-    """Save model results and artifacts."""
-    clean_uns_for_h5ad(rna_vae.adata)
-    clean_uns_for_h5ad(protein_vae.adata)
-    time_stamp = pd.Timestamp.now().strftime("%Y-%m-%d-%H-%M-%S")
-    os.makedirs(save_dir, exist_ok=True)
+    """Save trained models and their data."""
+    time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Save to local directory
     sc.write(Path(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad"), rna_vae.adata)
     sc.write(Path(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad"), protein_vae.adata)
 
-    # Log artifacts
-    mlflow.log_artifact(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad")
-    mlflow.log_artifact(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad")
+    # Log to MLflow in models folder
+    mlflow.log_artifact(f"{save_dir}/rna_vae_trained_{time_stamp}.h5ad", "models")
+    mlflow.log_artifact(f"{save_dir}/protein_vae_trained_{time_stamp}.h5ad", "models")
 
     return time_stamp
 
