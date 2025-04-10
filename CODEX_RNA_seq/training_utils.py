@@ -60,11 +60,6 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
     """Setup and train the VAE models with given parameters."""
     from _3_train_vae_with_archetypes_vectors import train_vae
 
-    # Training setup and execution
-    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
-        adata_rna_subset=adata_rna_subset, adata_prot_subset=adata_prot_subset, **params
-    )
-
     # Log parameters
     mlflow.log_params(
         {
@@ -81,6 +76,10 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
             "n_layers": round(params.get("n_layers", 0), 3),
             "latent_dim": round(params.get("latent_dim", 0), 3),
         }
+    )
+    # Training setup and execution
+    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
+        adata_rna_subset=adata_rna_subset, adata_prot_subset=adata_prot_subset, **params
     )
 
     return rna_vae, protein_vae, latent_rna_before, latent_prot_before

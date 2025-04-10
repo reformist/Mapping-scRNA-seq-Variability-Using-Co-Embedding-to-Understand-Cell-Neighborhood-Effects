@@ -323,10 +323,12 @@ def print_training_metrics(
     # Only save losses JSON on the last step
     if last_step:
         losses_file = "final_losses.json"
-        with open(losses_file, "w") as f:
-            json.dump(losses, f, indent=4)
-        mlflow.log_artifact(losses_file, "losses")
-        os.remove(losses_file)
+    else:
+        losses_file = f"losses_{global_step:05d}.json"
+    with open(losses_file, "w") as f:
+        json.dump(losses, f, indent=4)
+    mlflow.log_artifact(losses_file, "losses")
+    os.remove(losses_file)
 
     print("\nLosses:")
     print("-" * 40)
