@@ -169,11 +169,20 @@ def load_protein_data(data_dir):
             major_to_minor_dict[v] = [k]
         else:
             major_to_minor_dict[v].append(k)
-            
-    protein_adata = adata_1
+
+    
+    # protein_adata = adata_1
+
+    protein_matrix = adata_1.obsm['protein_expression']
+
+    # Optional: include obs and var names
+    obs = adata_1.obs.copy()
+    # var = pd.DataFrame(index=[f"protein_{i}" for i in range(protein_matrix.shape[1])])
+
+    # Create a new AnnData object for protein data
+    protein_adata= ad.AnnData(X=protein_matrix, obs=obs)
 
     return protein_adata
-# fmt: on
 
 
 def load_rna_data(data_dir):
