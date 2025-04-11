@@ -67,7 +67,7 @@ importlib.reload(CODEX_RNA_seq.training_utils)
 # Import training utilities
 from CODEX_RNA_seq.training_utils import (
     Tee,
-    calculate_metrics,
+    calculate_post_training_metrics,
     clear_memory,
     generate_visualizations,
     log_memory_usage,
@@ -979,7 +979,7 @@ if __name__ == "__main__":
 
     # Import utility functions
     from CODEX_RNA_seq.training_utils import (
-        calculate_metrics,
+        calculate_post_training_metrics,
         clear_memory,
         generate_visualizations,
         log_memory_usage,
@@ -1099,7 +1099,9 @@ if __name__ == "__main__":
         matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)
 
         # Calculate metrics
-        metrics = calculate_metrics(rna_vae, protein_vae, matching_results["prot_matches_in_rna"])
+        metrics = calculate_post_training_metrics(
+            rna_vae, protein_vae, matching_results["prot_matches_in_rna"]
+        )
 
         # Log metrics
         mlflow.log_metrics(metrics)

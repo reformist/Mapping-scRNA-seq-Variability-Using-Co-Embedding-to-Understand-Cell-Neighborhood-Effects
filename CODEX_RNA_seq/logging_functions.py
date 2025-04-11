@@ -68,20 +68,32 @@ def save_tabulate_to_txt(losses, global_step, total_steps):
     else:
         losses_file = f"losses_{global_step:05d}.txt"
 
-    # Create tabulate table
-    table_data = [["Loss Type", "Value"]]
-
     # Get total loss for percentage calculations
     total_loss = losses_to_save.get("total_loss", 0)
 
-    # Format losses with percentages
-    for loss_name, value in losses_to_save.items():
-        if value is not None:
-            if isinstance(value, (int, float)) and loss_name != "total_loss" and total_loss != 0:
-                percentage = (value / total_loss) * 100 if total_loss != 0 else 0
-                formatted_value = f"{value:.3f} ({percentage:.1f}%)"
-            else:
-                formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) else value
+    # Create tabulate table with only main losses
+    table_data = [["Loss Type", "Value"]]
+
+    # Define main losses in order
+    main_losses = [
+        "total_loss",
+        "rna_loss",
+        "protein_loss",
+        "contrastive_loss",
+        "matching_loss",
+        "similarity_loss",
+        "cell_type_clustering_loss",
+    ]
+    # Format main losses with percentages
+    for loss_name in main_losses:
+        value = losses_to_save.get(loss_name, 0)
+
+        if loss_name == "total_loss":
+            table_data.append([loss_name, f"{value:.4f}"])
+        else:
+            # Calculate percentage of total
+            percentage = (value / total_loss) * 100 if total_loss != 0 else 0
+            formatted_value = f"{value:.3f} ({percentage:.1f}%)"
             table_data.append([loss_name, formatted_value])
 
     # Save formatted table to text file

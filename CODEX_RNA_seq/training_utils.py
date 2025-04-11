@@ -181,7 +181,7 @@ def match_cells_and_calculate_distances(rna_latent, prot_latent):
     }
 
 
-def calculate_metrics(rna_adata, protein_adata, prot_matches_in_rna):
+def calculate_post_training_metrics(rna_adata, protein_adata, prot_matches_in_rna):
     """Calculate various metrics for model evaluation."""
     # Calculate NMI scores
     nmi_cell_types_cn_rna = adjusted_mutual_info_score(

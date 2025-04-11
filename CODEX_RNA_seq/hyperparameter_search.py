@@ -20,7 +20,7 @@ os.chdir(project_root)
 
 from CODEX_RNA_seq.training_utils import (
     Tee,
-    calculate_metrics,
+    calculate_post_training_metrics,
     clear_memory,
     generate_visualizations,
     handle_error,
@@ -82,23 +82,23 @@ sys.path.append(str(project_root))
 # Define hyperparameter search space
 param_grid = {
     "plot_x_times": [5],
-    "check_val_every_n_epoch": [4],
+    "check_val_every_n_epoch": [2],
     "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [0.001, 0.01, 0.1],
+    "contrastive_weight": [0],  # 0.001, 0.01, 0.1],
     "similarity_weight": [100, 1000.0, 10_000.0],
     "diversity_weight": [0.0],
     "matching_weight": [
         1,
         10,
     ],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [10, 100.0, 100000.0],  # Added cell type clustering weight
+    "cell_type_clustering_weight": [100, 1000.0, 10_000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [0.01, 0.1],
+    "kl_weight_rna": [1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -288,7 +288,7 @@ for i, params in enumerate(new_combinations):
             matching_results = match_cells_and_calculate_distances(rna_latent, prot_latent)
 
             # Calculate metrics
-            metrics = calculate_metrics(
+            metrics = calculate_post_training_metrics(
                 rna_adata, prot_adata, matching_results["prot_matches_in_rna"]
             )
 
