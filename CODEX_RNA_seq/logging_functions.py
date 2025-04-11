@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import timedelta
 
 import mlflow
 import torch
@@ -45,6 +46,57 @@ def log_epoch_end(current_epoch, train_losses, val_losses):
         {"epoch_avg_train_loss": epoch_avg_train_loss, "epoch_avg_val_loss": epoch_avg_val_loss},
         step=current_epoch,
     )
+
+
+def estimate_training_time(rna_cells, prot_cells, params, total_combinations):
+    """
+    Estimates training time based on dataset sizes and hyperparameters.
+
+    Args:
+        rna_cells: Number of RNA cells
+        prot_cells: Number of protein cells
+        params: Dictionary of hyperparameters
+        total_combinations: Total number of parameter combinations to try
+
+    Returns:
+        Tuple of (estimated_time_per_iter, total_estimated_time)
+    """
+    # Base time in seconds based on actual observed runs
+    # ~5 minutes per iteration with dataset sizes of ~13k RNA and ~40k protein cells
+    base_seconds = 295  # 4min 55sec observed for full dataset with 80 epochs
+
+    # Scale factors based on dataset size
+    # Using much gentler scaling based on actual observations
+    rna_scale = (rna_cells / 13000) ** 0.5  # Use square root scaling
+    prot_scale = (prot_cells / 40000) ** 0.5
+
+    # Hyperparameter scaling factors
+    # Actual timing shows epochs have less impact than we initially thought
+    epoch_scale = (params["max_epochs"] / 80) ** 0.7  # Reduced impact
+    plot_scale = 0.8 + (0.2 * params["plot_x_times"] / 5)  # Minimal impact from plotting
+    check_val_scale = 1.0 if params["check_val_every_n_epoch"] > 0 else 0.95  # Minimal impact
+
+    # Scale based on hardware (GPU vs CPU)
+    hardware_scale = 1.0 if torch.cuda.is_available() else 3.0
+
+    # Calculate total scale factor
+    # Cell scales have less impact than originally thought
+    total_scale = (
+        ((rna_scale * prot_scale) ** 0.5)
+        * epoch_scale
+        * plot_scale
+        * check_val_scale
+        * hardware_scale
+    )
+
+    # Estimated time per iteration in seconds
+    estimated_seconds_per_iter = base_seconds * total_scale
+
+    # Convert to timedelta
+    estimated_time_per_iter = timedelta(seconds=estimated_seconds_per_iter)
+    total_estimated_time = estimated_time_per_iter * total_combinations
+
+    return estimated_time_per_iter, total_estimated_time
 
 
 def save_tabulate_to_txt(losses, global_step, total_steps):
@@ -278,9 +330,9 @@ def log_step(
             for metric_name, value in extra_metrics_to_print.items():
                 if value is not None:
                     extra_metrics.append([metric_name, value])
-
-            print("\nExtra Metrics:")
-            print(tabulate(extra_metrics, headers="firstrow", tablefmt="fancy_grid"))
+            # skip for now
+            # print("\nExtra Metrics:")
+            # print(tabulate(extra_metrics, headers="firstrow", tablefmt="fancy_grid"))
 
         print("=" * 80 + "\n")
 

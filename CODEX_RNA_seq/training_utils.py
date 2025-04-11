@@ -255,7 +255,6 @@ def generate_visualizations(
         rna_latent,
         prot_latent,
         matching_results["matching_distances"],
-        use_subsample=True,
     )
 
     # Plot combined visualizations

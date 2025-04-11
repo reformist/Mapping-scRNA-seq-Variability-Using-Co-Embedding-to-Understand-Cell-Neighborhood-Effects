@@ -994,19 +994,31 @@ def plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True):
 # %%
 
 
-def plot_neighbor_means(adata_2_prot, neighbor_means):
+def plot_neighbor_means(adata_2_prot, neighbor_means, max_cells=2000):
     """Plot neighbor means and raw protein expression."""
+    # Apply subsampling if too many cells
+    if adata_2_prot.shape[0] > max_cells:
+        print(f"Subsampling to {max_cells} cells for neighbor means plot")
+        idx = np.random.choice(adata_2_prot.shape[0], max_cells, replace=False)
+        neighbor_means_plot = neighbor_means[idx]
+        x_plot = (
+            adata_2_prot.X[idx] if not issparse(adata_2_prot.X) else adata_2_prot.X[idx].toarray()
+        )
+    else:
+        neighbor_means_plot = neighbor_means
+        x_plot = adata_2_prot.X if not issparse(adata_2_prot.X) else adata_2_prot.X.toarray()
+
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.title("Mean Protein Expression of Cell Neighborhoods")
-    sns.heatmap(neighbor_means)
+    sns.heatmap(neighbor_means_plot)
     plt.subplot(1, 2, 2)
     plt.title("Raw Protein Expression per Cell")
-    sns.heatmap(adata_2_prot.X)
+    sns.heatmap(x_plot)
     plt.show()
 
 
-def plot_spatial_clusters(adata_2_prot, neighbor_means):
+def plot_spatial_clusters(adata_2_prot, neighbor_means, max_cells=2000):
     """Plot spatial clusters and related visualizations."""
 
     # if the color pallete does not match the number of categories, add more colors
@@ -1015,10 +1027,18 @@ def plot_spatial_clusters(adata_2_prot, neighbor_means):
             new_palette = sns.color_palette("tab10", len(adata_2_prot.obs["CN"].cat.categories))
             adata_2_prot.uns["CN_colors"] = new_palette.as_hex()
 
+    # Apply subsampling for spatial plot if too many cells
+    if adata_2_prot.shape[0] > max_cells:
+        print(f"Subsampling to {max_cells} cells for spatial cluster plot")
+        adata_plot = adata_2_prot.copy()
+        sc.pp.subsample(adata_plot, n_obs=max_cells)
+    else:
+        adata_plot = adata_2_prot
+
     fig, ax = plt.subplots()
 
     sc.pl.scatter(
-        adata_2_prot,
+        adata_plot,
         x="X",
         y="Y",
         color="CN",
@@ -1027,26 +1047,56 @@ def plot_spatial_clusters(adata_2_prot, neighbor_means):
         show=False,
     )
 
-    neighbor_adata = AnnData(neighbor_means)
+    # Apply subsampling for heatmaps if too many cells
+    if adata_2_prot.shape[0] > max_cells:
+        idx = np.random.choice(adata_2_prot.shape[0], max_cells, replace=False)
+        neighbor_means_plot = neighbor_means[idx]
+        x_plot = (
+            adata_2_prot.X[idx] if not issparse(adata_2_prot.X) else adata_2_prot.X[idx].toarray()
+        )
+    else:
+        neighbor_means_plot = neighbor_means
+        x_plot = adata_2_prot.X if not issparse(adata_2_prot.X) else adata_2_prot.X.toarray()
+
+    neighbor_adata = AnnData(neighbor_means_plot)
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     sns.heatmap(neighbor_adata.X)
     plt.title("convet sqrt")
     plt.subplot(1, 2, 2)
-    sns.heatmap(adata_2_prot.X.todense() if issparse(adata_2_prot.X) else adata_2_prot.X)
+    sns.heatmap(x_plot)
     plt.title("Proteins expressions of each cell")
     plt.show()
 
-    neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"])
+    # Use subsampled data for all downstream analyses
+    if adata_2_prot.shape[0] > max_cells:
+        sampled_indices = np.random.choice(adata_2_prot.shape[0], max_cells, replace=False)
+        neighbor_adata = AnnData(neighbor_means[sampled_indices])
+        neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"].values[sampled_indices])
+    else:
+        neighbor_adata = AnnData(neighbor_means)
+        neighbor_adata.obs["CN"] = pd.Categorical(adata_2_prot.obs["CN"])
+
     sc.pp.pca(neighbor_adata)
     sc.pp.neighbors(neighbor_adata)
     sc.tl.umap(neighbor_adata)
     sc.pl.umap(neighbor_adata, color="CN", title="UMAP of CN embedding")
 
-    # Combine protein and CN data
-    adata_prot_cn_concat = concat(
-        [adata_2_prot, neighbor_adata], join="outer", label="modality", keys=["Protein", "CN"]
-    )
+    # Combine protein and CN data with subsampling
+    if adata_2_prot.shape[0] > max_cells:
+        # Create subsampled versions
+        adata_prot_subset = adata_2_prot[sampled_indices].copy()
+        adata_prot_cn_concat = concat(
+            [adata_prot_subset, neighbor_adata],
+            join="outer",
+            label="modality",
+            keys=["Protein", "CN"],
+        )
+    else:
+        adata_prot_cn_concat = concat(
+            [adata_2_prot, neighbor_adata], join="outer", label="modality", keys=["Protein", "CN"]
+        )
+
     X = (
         adata_prot_cn_concat.X.toarray()
         if issparse(adata_prot_cn_concat.X)
@@ -1075,38 +1125,72 @@ def plot_spatial_clusters(adata_2_prot, neighbor_means):
     )
 
 
-def plot_modality_embeddings(adata_1_rna, adata_2_prot):
+def plot_modality_embeddings(adata_1_rna, adata_2_prot, max_cells=2000):
     """Plot PCA and UMAP embeddings for both modalities."""
-    sc.tl.umap(adata_2_prot, neighbors_key="original_neighbors")
+    # Subsample data if needed
+    if adata_1_rna.shape[0] > max_cells or adata_2_prot.shape[0] > max_cells:
+        print(f"Subsampling to at most {max_cells} cells for modality embeddings plot")
+        rna_plot = adata_1_rna.copy()
+        prot_plot = adata_2_prot.copy()
+
+        if rna_plot.shape[0] > max_cells:
+            sc.pp.subsample(rna_plot, n_obs=max_cells)
+            # Recalculate PCA and UMAP if needed
+            sc.pp.pca(rna_plot)
+            sc.pp.neighbors(rna_plot, key_added="original_neighbors", use_rep="X_pca")
+            sc.tl.umap(rna_plot, neighbors_key="original_neighbors")
+            rna_plot.obsm["X_original_umap"] = rna_plot.obsm["X_umap"]
+
+        if prot_plot.shape[0] > max_cells:
+            sc.pp.subsample(prot_plot, n_obs=max_cells)
+            # Recalculate PCA and UMAP if needed
+            sc.pp.pca(prot_plot)
+            sc.pp.neighbors(prot_plot, key_added="original_neighbors", use_rep="X_pca")
+            sc.tl.umap(prot_plot, neighbors_key="original_neighbors")
+            prot_plot.obsm["X_original_umap"] = prot_plot.obsm["X_umap"]
+    else:
+        rna_plot = adata_1_rna
+        prot_plot = adata_2_prot
+
+    sc.tl.umap(prot_plot, neighbors_key="original_neighbors")
     sc.pl.pca(
-        adata_1_rna,
+        rna_plot,
         color=["cell_types", "major_cell_types"],
         title=["RNA pca minor cell types", "RNA pca major cell types"],
     )
     sc.pl.pca(
-        adata_2_prot,
+        prot_plot,
         color=["cell_types", "major_cell_types"],
         title=["Protein pca minor cell types", "Protein pca major cell types"],
     )
     sc.pl.embedding(
-        adata_1_rna,
+        rna_plot,
         basis="X_umap",
         color=["major_cell_types", "cell_types"],
         title=["RNA UMAP major cell types", "RNA UMAP major cell types"],
     )
     sc.pl.embedding(
-        adata_2_prot,
+        prot_plot,
         basis="X_original_umap",
         color=["major_cell_types", "cell_types"],
         title=["Protein UMAp major cell types", "Protein UMAP major cell types"],
     )
 
 
-def plot_elbow_method(evs_protein, evs_rna):
+def plot_elbow_method(evs_protein, evs_rna, max_points=300):
     """Plot elbow method results."""
+    # Limit the number of points if too many
+    if len(evs_protein) > max_points or len(evs_rna) > max_points:
+        print(f"Limiting elbow plot to first {max_points} points")
+        plot_protein = evs_protein[:max_points]
+        plot_rna = evs_rna[:max_points]
+    else:
+        plot_protein = evs_protein
+        plot_rna = evs_rna
+
     plt.figure(figsize=(8, 6))
-    plt.plot(range(len(evs_protein)), evs_protein, marker="o", label="Protein")
-    plt.plot(range(len(evs_rna)), evs_rna, marker="s", label="RNA")
+    plt.plot(range(len(plot_protein)), plot_protein, marker="o", label="Protein")
+    plt.plot(range(len(plot_rna)), plot_rna, marker="s", label="RNA")
     plt.xlabel("Number of Archetypes (k)")
     plt.ylabel("Explained Variance")
     plt.title("Elbow Plot: Explained Variance vs Number of Archetypes")
@@ -1114,34 +1198,99 @@ def plot_elbow_method(evs_protein, evs_rna):
     plt.grid()
 
 
-def plot_archetype_proportions(archetype_proportion_list_rna, archetype_proportion_list_protein):
+def plot_archetype_proportions(
+    archetype_proportion_list_rna, archetype_proportion_list_protein, max_size=20
+):
     """Plot archetype proportions."""
+    # Ensure matrices aren't too large
+    rna_prop = archetype_proportion_list_rna[0]
+    prot_prop = archetype_proportion_list_protein[0]
+
+    # If either has too many rows/columns, print warning and subsample
+    if (
+        rna_prop.shape[0] > max_size
+        or rna_prop.shape[1] > max_size
+        or prot_prop.shape[0] > max_size
+        or prot_prop.shape[1] > max_size
+    ):
+        print(
+            f"Warning: Large archetype proportion matrices. Limiting to {max_size} rows/columns for visualization."
+        )
+
+        # Subsample if needed
+        if rna_prop.shape[0] > max_size:
+            rna_prop = rna_prop.iloc[:max_size, :]
+        if rna_prop.shape[1] > max_size:
+            rna_prop = rna_prop.iloc[:, :max_size]
+        if prot_prop.shape[0] > max_size:
+            prot_prop = prot_prop.iloc[:max_size, :]
+        if prot_prop.shape[1] > max_size:
+            prot_prop = prot_prop.iloc[:, :max_size]
+
     fig = plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    sns.heatmap((archetype_proportion_list_rna[0]), cbar=False)
+    sns.heatmap(rna_prop, cbar=False)
     plt.xticks()
     plt.title("RNA Archetypes")
     plt.subplot(1, 2, 2)
     plt.title("Protein Archetypes")
-    sns.heatmap((archetype_proportion_list_protein[0]), cbar=False)
+    sns.heatmap(prot_prop, cbar=False)
     plt.suptitle("Non-Aligned Archetypes Profiles")
     plt.yticks([])
     plt.show()
 
 
-def plot_archetype_weights(best_archetype_rna_prop, best_archetype_prot_prop, row_order):
+def plot_archetype_weights(
+    best_archetype_rna_prop, best_archetype_prot_prop, row_order, max_size=20
+):
     """Plot archetype weights."""
+    # Ensure matrices aren't too large
+    rna_prop = pd.DataFrame(best_archetype_rna_prop)
+    prot_prop = pd.DataFrame(best_archetype_prot_prop)
+
+    # If row_order is too large, limit it
+    if len(row_order) > max_size:
+        print(f"Warning: Limiting row_order to first {max_size} elements for visualization")
+        row_order = row_order[:max_size]
+
+    # If matrices are too large, subsample them
+    if (
+        rna_prop.shape[0] > max_size
+        or rna_prop.shape[1] > max_size
+        or prot_prop.shape[0] > max_size
+        or prot_prop.shape[1] > max_size
+    ):
+        print(f"Warning: Large archetype weight matrices. Limiting to {max_size} rows/columns.")
+
+        # Limit rows based on row_order if possible
+        if rna_prop.shape[0] > max_size:
+            # If row_order is already limited, use it directly
+            if len(row_order) <= max_size:
+                rna_prop = rna_prop.iloc[row_order, :]
+                prot_prop = prot_prop.iloc[row_order, :]
+            else:
+                # Otherwise use the first max_size rows
+                rna_prop = rna_prop.iloc[:max_size, :]
+                prot_prop = prot_prop.iloc[:max_size, :]
+                row_order = row_order[:max_size]
+
+        # Limit columns if needed
+        if rna_prop.shape[1] > max_size:
+            rna_prop = rna_prop.iloc[:, :max_size]
+        if prot_prop.shape[1] > max_size:
+            prot_prop = prot_prop.iloc[:, :max_size]
+
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.title("RNA Archetype Weights vs Cell Types")
     plt.ylabel("Archetypes")
-    sns.heatmap(pd.DataFrame(best_archetype_rna_prop).iloc[row_order], cbar=False)
+    sns.heatmap(rna_prop.iloc[row_order], cbar=False)
     plt.yticks([])
     plt.ylabel("Archetypes")
     plt.subplot(1, 2, 2)
     plt.ylabel("Archetypes")
     plt.title("Protein Archetype Weights vs Cell Types")
-    sns.heatmap(pd.DataFrame(best_archetype_prot_prop).iloc[row_order], cbar=False)
+    sns.heatmap(prot_prop.iloc[row_order], cbar=False)
     plt.ylabel("Archetypes")
     plt.suptitle(
         "Archetype Weight Distribution Across Cell Types (Higher Similarity = Better Alignment)"
@@ -1152,29 +1301,58 @@ def plot_archetype_weights(best_archetype_rna_prop, best_archetype_prot_prop, ro
 
 
 def plot_archetype_visualizations(
-    adata_archetype_rna, adata_archetype_prot, adata_1_rna, adata_2_prot
+    adata_archetype_rna, adata_archetype_prot, adata_1_rna, adata_2_prot, max_cells=2000
 ):
     """Plot archetype visualizations."""
-    sc.pp.pca(adata_archetype_rna)
-    sc.pp.pca(adata_archetype_prot)
-    sc.pl.pca(adata_archetype_rna, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pl.pca(adata_archetype_prot, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pp.neighbors(adata_archetype_rna)
-    sc.pp.neighbors(adata_archetype_prot)
-    sc.tl.umap(adata_archetype_rna)
-    sc.tl.umap(adata_archetype_prot)
-    sc.pl.umap(adata_archetype_rna, color=["major_cell_types", "archetype_label", "cell_types"])
-    sc.pl.umap(adata_archetype_prot, color=["major_cell_types", "archetype_label", "cell_types"])
+    # Apply subsampling if datasets are too large
+    if adata_archetype_rna.shape[0] > max_cells:
+        print(f"Subsampling RNA archetype data to {max_cells} cells for visualization")
+        rna_arch_plot = sc.pp.subsample(adata_archetype_rna, n_obs=max_cells, copy=True)
+    else:
+        rna_arch_plot = adata_archetype_rna.copy()
 
-    sc.pp.neighbors(adata_1_rna)
-    sc.pp.neighbors(adata_2_prot)
-    sc.tl.umap(adata_1_rna)
-    sc.tl.umap(adata_2_prot)
+    if adata_archetype_prot.shape[0] > max_cells:
+        print(f"Subsampling protein archetype data to {max_cells} cells for visualization")
+        prot_arch_plot = sc.pp.subsample(adata_archetype_prot, n_obs=max_cells, copy=True)
+    else:
+        prot_arch_plot = adata_archetype_prot.copy()
+
+    if adata_1_rna.shape[0] > max_cells:
+        print(f"Subsampling RNA data to {max_cells} cells for visualization")
+        rna_plot = sc.pp.subsample(adata_1_rna, n_obs=max_cells, copy=True)
+    else:
+        rna_plot = adata_1_rna.copy()
+
+    if adata_2_prot.shape[0] > max_cells:
+        print(f"Subsampling protein data to {max_cells} cells for visualization")
+        prot_plot = sc.pp.subsample(adata_2_prot, n_obs=max_cells, copy=True)
+    else:
+        prot_plot = adata_2_prot.copy()
+
+    # Calculate PCA and plot for archetype data
+    sc.pp.pca(rna_arch_plot)
+    sc.pp.pca(prot_arch_plot)
+    sc.pl.pca(rna_arch_plot, color=["major_cell_types", "archetype_label", "cell_types"])
+    sc.pl.pca(prot_arch_plot, color=["major_cell_types", "archetype_label", "cell_types"])
+
+    # Calculate neighbors and UMAP for archetype data
+    sc.pp.neighbors(rna_arch_plot)
+    sc.pp.neighbors(prot_arch_plot)
+    sc.tl.umap(rna_arch_plot)
+    sc.tl.umap(prot_arch_plot)
+    sc.pl.umap(rna_arch_plot, color=["major_cell_types", "archetype_label", "cell_types"])
+    sc.pl.umap(prot_arch_plot, color=["major_cell_types", "archetype_label", "cell_types"])
+
+    # Calculate neighbors and UMAP for original data
+    sc.pp.neighbors(rna_plot)
+    sc.pp.neighbors(prot_plot)
+    sc.tl.umap(rna_plot)
+    sc.tl.umap(prot_plot)
     sc.pl.umap(
-        adata_1_rna, color="archetype_label", title="RNA UMAP Embedding Colored by Archetype Labels"
+        rna_plot, color="archetype_label", title="RNA UMAP Embedding Colored by Archetype Labels"
     )
     sc.pl.umap(
-        adata_2_prot,
+        prot_plot,
         color="archetype_label",
         title="Protein UMAP Embedding Colored by Archetype Labels",
     )

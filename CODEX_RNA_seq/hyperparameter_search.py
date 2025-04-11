@@ -79,17 +79,18 @@ np.set_printoptions(threshold=100)
 project_root = Path(__file__).parent.parent.absolute()
 sys.path.append(str(project_root))
 
+
 # Define hyperparameter search space
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [2],
-    "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [80],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
     "contrastive_weight": [0, 0.001, 0.1, 1, 100, 1000],
-    "similarity_weight": [100, 1000.0],
+    "similarity_weight": [1000.0, 10000.0],
     "diversity_weight": [0.0],
-    "matching_weight": [1, 10, 100, 1000],  # Updated range to reflect typical values
+    "matching_weight": [0, 0.1, 10, 1000],  # Updated range to reflect typical values
     "cell_type_clustering_weight": [100, 1000.0, 10_000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
@@ -148,9 +149,10 @@ for combo in all_combinations:
     if combo_to_check not in existing_params:
         new_combinations.append(combo)
 
+total_combinations = len(new_combinations)
 print(f"Total combinations: {len(all_combinations)}")
 print(f"Already tried: {len(existing_params)}")
-print(f"New combinations to try: {len(new_combinations)}")
+print(f"New combinations to try: {total_combinations}")
 
 # Load data
 save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
@@ -166,6 +168,28 @@ adata_prot_subset = sc.read_h5ad(
 )
 log_memory_usage("After loading protein data: ")
 
+# Estimate training time before starting
+if total_combinations > 0 and len(new_combinations) > 0:
+    # Use first parameter combination for estimation
+    first_params = new_combinations[0]
+    rna_cells = adata_rna_subset.shape[0]
+    prot_cells = adata_prot_subset.shape[0]
+
+    print(f"\n--- Time Estimation for {rna_cells} RNA cells and {prot_cells} protein cells ---")
+    time_per_iter, total_time = CODEX_RNA_seq.logging_functions.estimate_training_time(
+        rna_cells, prot_cells, first_params, total_combinations
+    )
+
+    print(f"Estimated time per iteration: {time_per_iter}")
+    print(f"Estimated total time for {total_combinations} combinations: {total_time}")
+    print(
+        f"Estimated completion time: {(datetime.now() + total_time).strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    print("Note: This is a rough estimate based on dataset size and hyperparameters")
+    print("Actual times may vary based on system load and other factors")
+    print("More accurate estimates will be provided after the first iteration completes")
+    print("------------------------------------------------------------\n")
+
 # Subsample data if memory usage is high
 print("Memory usage high, subsampling data...")
 # rna_sample_size = min(len(adata_rna_subset), 1500)
@@ -179,7 +203,6 @@ print(f"Subsampled protein dataset shape: {adata_prot_subset.shape}")
 
 # Run hyperparameter search
 results = []
-total_combinations = len(new_combinations)
 print(f"Number of new combinations to try: {total_combinations}")
 
 # Initialize timing variables
@@ -220,6 +243,17 @@ for i, params in enumerate(new_combinations):
 
     run_name = f"vae_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    # Create run-specific log file
+    run_log_dir = os.path.join("logs", "mlflow_run_logs")
+    os.makedirs(run_log_dir, exist_ok=True)
+    run_log_file_path = os.path.join(run_log_dir, f"{run_name}.log")
+    run_log_file = open(run_log_file_path, "w")
+
+    # Save original stdout and set up run-specific Tee
+    run_original_stdout = sys.stdout
+    run_tee = Tee(run_original_stdout, run_log_file)
+    sys.stdout = run_tee
+
     with mlflow.start_run(run_name=run_name):
         try:
             # Create loss weights JSON
@@ -243,18 +277,15 @@ for i, params in enumerate(new_combinations):
             os.remove(loss_weights_path)
 
             # Setup and train model
-            log_memory_usage("Before training: ")
             rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
                 adata_rna_subset, adata_prot_subset, params
             )
-            log_memory_usage("After training: ")
 
             # Log successful run
             mlflow.log_param("run_failed", False)
 
             # Clear memory after training
             clear_memory()
-            log_memory_usage("After clearing memory: ")
 
             # Get training history
             history = rna_vae._training_plan.get_history()
@@ -276,9 +307,9 @@ for i, params in enumerate(new_combinations):
             # Process latent spaces
             # subsample the adata_rna_subset and adata_prot_subset to 1000 cells
             rna_adata = rna_vae.adata
-            rna_adata = sc.pp.subsample(rna_adata, n_obs=5000, copy=True)
+            rna_adata = sc.pp.subsample(rna_adata, n_obs=min(len(rna_adata), 5000), copy=True)
             prot_adata = protein_vae.adata
-            prot_adata = sc.pp.subsample(prot_adata, n_obs=5000, copy=True)
+            prot_adata = sc.pp.subsample(prot_adata, n_obs=min(len(prot_adata), 5000), copy=True)
             rna_latent, prot_latent, combined_latent = process_latent_spaces(rna_adata, prot_adata)
 
             # Match cells and calculate distances
@@ -293,7 +324,6 @@ for i, params in enumerate(new_combinations):
             mlflow.log_metrics({k: round(v, 3) for k, v in metrics.items()})
 
             # Generate visualizations
-
             generate_visualizations(
                 rna_adata,
                 prot_adata,
@@ -313,12 +343,35 @@ for i, params in enumerate(new_combinations):
             elapsed_times.append(iter_time)
             print(f"\nIteration completed in: {iter_time}")
 
+            # Close run log file and reset stdout before logging the artifact
+            sys.stdout = run_original_stdout
+            run_log_file.close()
+
+            # Log the run-specific log file as an artifact
+            mlflow.log_artifact(run_log_file_path, "logs")
+            print(f"Logged run log file: {run_log_file_path}")
+
         except Exception as e:
             # Log failed run
             mlflow.log_param("run_failed", True)
             handle_error(e, params, run_name)
+
+            # Close run log file and reset stdout
+            sys.stdout = run_original_stdout
+            run_log_file.close()
+
+            # Log the run-specific log file as an artifact even in case of error
+            mlflow.log_artifact(run_log_file_path, "logs")
+            print(f"Logged run log file for failed run: {run_log_file_path}")
+
             time.sleep(5)  # Sleep for 5 seconds after failure
             continue
+        finally:
+            # Ensure stdout is restored even if an unexpected error occurs
+            if sys.stdout != run_original_stdout:
+                sys.stdout = run_original_stdout
+                if not run_log_file.closed:
+                    run_log_file.close()
 
     # Clear memory after each iteration
     clear_memory()

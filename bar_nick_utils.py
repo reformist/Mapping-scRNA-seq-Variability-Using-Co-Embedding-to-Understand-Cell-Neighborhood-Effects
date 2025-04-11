@@ -103,25 +103,8 @@ def archetype_vs_latent_distances_plot(
     plt.show()
 
 
-def compare_distance_distributions(
-    rand_distances, rna_latent, prot_latent, distances, use_subsample=True
-):
-    # Subsample RNA and protein separately if requested
-
-    if use_subsample:
-        # Subsample RNA data
-        n_subsample_rna = min(300, len(rna_latent))
-        subsample_idx_rna = np.random.choice(len(rna_latent), n_subsample_rna, replace=False)
-        rna_latent = rna_latent[subsample_idx_rna].copy()
-
-        # Subsample protein data
-        n_subsample_prot = min(300, len(prot_latent))
-        subsample_idx_prot = np.random.choice(len(prot_latent), n_subsample_prot, replace=False)
-        prot_latent = prot_latent[subsample_idx_prot].copy()
-
-        # Subsample distances using RNA indices (since distances are computed from RNA to protein)
-        distances = distances[subsample_idx_rna]
-        rand_distances = rand_distances[subsample_idx_rna]
+def compare_distance_distributions(rand_distances, rna_latent, prot_latent, distances):
+    # cannot use subsample here, since we get distaces indexs that need to be matched
 
     # Randomize RNA cells within cell types
     rand_rna_latent = rna_latent.copy()
@@ -1359,7 +1342,27 @@ def plot_archetypes(
     data_point_archetype_indices: List[int],
     modality="",
     cell_type_colors: Dict[str, Any] = None,
+    max_points=2000,
 ):
+    """Plot archetypes with subsampling for large datasets.
+
+    Parameters:
+    -----------
+    data_points : array
+        Data points matrix
+    archetype : array
+        Archetype matrix
+    samples_cell_types : List[str]
+        Cell type for each data point
+    data_point_archetype_indices : List[int]
+        Archetype index for each data point
+    modality : str
+        Modality name for plotting
+    cell_type_colors : Dict[str, Any]
+        Cell type color mapping
+    max_points : int
+        Maximum number of points to plot
+    """
     if not isinstance(samples_cell_types, List):
         raise TypeError("samples_cell_types should be a list of strings.")
     if not isinstance(data_point_archetype_indices, List):
@@ -1386,18 +1389,62 @@ def plot_archetypes(
 
     print("Shape of archetype after adjustment:", archetype.shape)
 
+    # Apply subsampling if data_points is too large
+    if len(data_points) > max_points:
+        print(f"Subsampling data to {max_points} points for visualization")
+        # Create random indices for subsampling
+        subsample_indices = np.random.choice(len(data_points), max_points, replace=False)
+        data_points_subset = data_points[subsample_indices]
+        samples_cell_types_subset = [samples_cell_types[i] for i in subsample_indices]
+        data_point_archetype_indices_subset = [
+            data_point_archetype_indices[i] for i in subsample_indices
+        ]
+    else:
+        data_points_subset = data_points
+        samples_cell_types_subset = samples_cell_types
+        data_point_archetype_indices_subset = data_point_archetype_indices
+
     # Combine data points and archetypes
     num_archetypes = archetype.shape[0]
-    data = np.concatenate((data_points, archetype), axis=0)
-    labels = ["data"] * len(data_points) + ["archetype"] * num_archetypes
-    cell_types = samples_cell_types + ["archetype"] * num_archetypes
+    data = np.concatenate((data_points_subset, archetype), axis=0)
+    labels = ["data"] * len(data_points_subset) + ["archetype"] * num_archetypes
+    cell_types = samples_cell_types_subset + ["archetype"] * num_archetypes
 
-    # Perform PCA and t-SNE
-    data_pca = data[:, :50]
-    data_tsne = TSNE(n_components=2).fit_transform(data_pca)
+    # Perform PCA and t-SNE with limited dimensions for efficiency
+    data_pca = data[:, : min(50, data.shape[1])]
+
+    # Run t-SNE with subsampling if needed
+    tsne_max_points = min(1000, data.shape[0])  # t-SNE is computationally intensive
+    if data.shape[0] > tsne_max_points:
+        print(
+            f"Further subsampling to {tsne_max_points} points for t-SNE (computationally intensive)"
+        )
+        tsne_indices = np.random.choice(data.shape[0], tsne_max_points, replace=False)
+        tsne_data = data_pca[tsne_indices]
+        data_tsne = TSNE(n_components=2).fit_transform(tsne_data)
+        # Map back to original indices
+        tsne_labels = [labels[i] for i in tsne_indices]
+        tsne_cell_types = [cell_types[i] for i in tsne_indices]
+        tsne_data_point_arch_indices = []
+        for i in tsne_indices:
+            if i < len(data_point_archetype_indices_subset):
+                tsne_data_point_arch_indices.append(data_point_archetype_indices_subset[i])
+            else:
+                tsne_data_point_arch_indices.append(np.nan)
+        tsne_archetype_numbers = [np.nan] * (len(tsne_indices) - num_archetypes) + list(
+            range(num_archetypes)
+        )
+    else:
+        data_tsne = TSNE(n_components=2).fit_transform(data_pca)
+        tsne_labels = labels
+        tsne_cell_types = cell_types
+        tsne_data_point_arch_indices = (
+            data_point_archetype_indices_subset + [np.nan] * num_archetypes
+        )
+        tsne_archetype_numbers = [np.nan] * len(data_points_subset) + list(range(num_archetypes))
 
     # Create a numbering for archetypes
-    archetype_numbers = [np.nan] * len(data_points) + list(range(num_archetypes))
+    archetype_numbers = [np.nan] * len(data_points_subset) + list(range(num_archetypes))
 
     # Create DataFrames for plotting
     df_pca = pd.DataFrame(
@@ -1407,7 +1454,8 @@ def plot_archetypes(
             "type": labels,
             "cell_type": cell_types,
             "archetype_number": archetype_numbers,
-            "data_point_archetype_index": data_point_archetype_indices + [np.nan] * num_archetypes,
+            "data_point_archetype_index": data_point_archetype_indices_subset
+            + [np.nan] * num_archetypes,
         }
     )
 
@@ -1415,10 +1463,10 @@ def plot_archetypes(
         {
             "TSNE1": data_tsne[:, 0],
             "TSNE2": data_tsne[:, 1],
-            "type": labels,
-            "cell_type": cell_types,
-            "archetype_number": archetype_numbers,
-            "data_point_archetype_index": data_point_archetype_indices + [np.nan] * num_archetypes,
+            "type": tsne_labels,
+            "cell_type": tsne_cell_types,
+            "archetype_number": tsne_archetype_numbers,
+            "data_point_archetype_index": tsne_data_point_arch_indices,
         }
     )
 
@@ -1483,8 +1531,16 @@ def plot_archetypes(
     # Create a mapping from archetype_number to its PCA coordinates
     archetype_coords = df_pca_archetypes.set_index("archetype_number")[["PCA1", "PCA2"]]
 
-    # Now for each data point, draw a line to its corresponding archetype
-    for idx, row in df_pca_data.iterrows():
+    # Now for each data point, draw a line to its corresponding archetype, limiting to max_lines
+    max_lines = min(1000, len(df_pca_data))  # Limit number of lines to prevent clutter
+    if len(df_pca_data) > max_lines:
+        print(f"Limiting connection lines to {max_lines} for visualization clarity")
+        line_indices = np.random.choice(len(df_pca_data), max_lines, replace=False)
+        df_pca_data_subset = df_pca_data.iloc[line_indices]
+    else:
+        df_pca_data_subset = df_pca_data
+
+    for idx, row in df_pca_data_subset.iterrows():
         archetype_index = int(row["data_point_archetype_index"])
         data_point_coords = (row["PCA1"], row["PCA2"])
         try:
@@ -1552,8 +1608,16 @@ def plot_archetypes(
     # Create a mapping from archetype_number to its t-SNE coordinates
     archetype_coords_tsne = df_tsne_archetypes.set_index("archetype_number")[["TSNE1", "TSNE2"]]
 
-    # Now for each data point, draw a line to its corresponding archetype
-    for idx, row in df_tsne_data.iterrows():
+    # Now for each data point, draw a line to its corresponding archetype, limiting to max_lines
+    if len(df_tsne_data) > max_lines:
+        line_indices = np.random.choice(len(df_tsne_data), max_lines, replace=False)
+        df_tsne_data_subset = df_tsne_data.iloc[line_indices]
+    else:
+        df_tsne_data_subset = df_tsne_data
+
+    for idx, row in df_tsne_data_subset.iterrows():
+        if pd.isna(row["data_point_archetype_index"]):
+            continue
         archetype_index = int(row["data_point_archetype_index"])
         data_point_coords = (row["TSNE1"], row["TSNE2"])
         try:
@@ -1704,15 +1768,39 @@ def evaluate_distance_metrics(A: np.ndarray, B: np.ndarray, metrics: List[str]) 
     return results
 
 
-def plot_archetypes_matching(data1, data2, rows=5):
+def plot_archetypes_matching(data1, data2, rows=5, max_cols=20):
+    """Plot archetype matching between two modalities.
+
+    Parameters:
+    -----------
+    data1: DataFrame
+        First modality archetype data
+    data2: DataFrame
+        Second modality archetype data
+    rows: int
+        Number of rows to plot
+    max_cols: int
+        Maximum number of columns to plot
+    """
+    # Ensure matrices aren't too wide for visualization
+    if data1.shape[1] > max_cols or data2.shape[1] > max_cols:
+        print(
+            f"Warning: Large archetype matrices. Limiting to {max_cols} columns for visualization."
+        )
+        data1_plot = data1.iloc[:, :max_cols]
+        data2_plot = data2.iloc[:, :max_cols]
+    else:
+        data1_plot = data1
+        data2_plot = data2
+
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.title("RNA Archetype Weights\nAcross Cell Types")
     offset = 1
-    rows = min(rows, len(data1), len(data2))
+    rows = min(rows, len(data1_plot), len(data2_plot))
     for i in range(rows):
-        y1 = data1.iloc[i] + i * offset
-        y2 = data2.iloc[i] + i * offset
+        y1 = data1_plot.iloc[i] + i * offset
+        y2 = data2_plot.iloc[i] + i * offset
         plt.plot(y1, label=f"modality 1 archetype {i + 1}")
         plt.plot(y2, linestyle="--", label=f"modality 2 archetype {i + 1}")
     plt.xlabel("Columns")
@@ -1726,10 +1814,10 @@ def plot_archetypes_matching(data1, data2, rows=5):
     plt.title("Protein Archetype Weights\nAcross Cell Types")
     plt.suptitle("Cross-Modal Archetype Weight Distribution Analysis")
     offset = 1
-    rows = min(rows, len(data1), len(data2))
+    rows = min(rows, len(data1_plot), len(data2_plot))
     for i in range(rows):
-        y1 = data1.iloc[i] + i * offset
-        y2 = data2.iloc[i] + i * offset
+        y1 = data1_plot.iloc[i] + i * offset
+        y2 = data2_plot.iloc[i] + i * offset
         plt.plot(y1, label=f"modality 1 archetype {i + 1}")
         plt.plot(y2, linestyle="--", label=f"modality 2 archetype {i + 1}")
     plt.xlabel("Columns")

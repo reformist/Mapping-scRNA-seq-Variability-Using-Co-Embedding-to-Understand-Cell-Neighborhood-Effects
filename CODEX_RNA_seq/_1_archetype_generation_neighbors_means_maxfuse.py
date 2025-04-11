@@ -29,7 +29,7 @@ import seaborn as sns
 from anndata import AnnData
 from matplotlib import pyplot as plt
 from py_pcha import PCHA
-from scipy.sparse import issparse
+from scipy.sparse import find, issparse
 from scipy.stats import zscore
 from tqdm import tqdm
 
@@ -126,8 +126,33 @@ if plot_flag:
 # %%
 percentile_threshold = 95
 percentile_value = np.percentile(spatial_distances.data, percentile_threshold)
-connectivities[spatial_distances > percentile_value] = 0.0
-spatial_distances[spatial_distances > percentile_value] = 0.0
+# here we want to protect the 5 closest neighbors for each cell, since we can't have cells without neighbors
+# Get the mask for connections above the threshold
+above_threshold_mask = spatial_distances > percentile_value
+
+# For each cell, find 5 closest neighbors and protect them
+
+# Get non-zero values and their indices
+rows, cols, values = find(spatial_distances)
+df = pd.DataFrame({"row": rows, "col": cols, "distance": values})
+
+# Find 5 closest neighbors for each cell
+min_neighbors = 5
+closest_neighbors = (
+    df.groupby("row").apply(lambda x: x.nsmallest(min_neighbors, "distance")).reset_index(drop=True)
+)
+
+# Create pairs of (row, col) for protected connections
+
+# Remove protected pairs from the above_threshold_mask
+protected_rows = closest_neighbors["row"].values
+protected_cols = closest_neighbors["col"].values
+
+above_threshold_mask[protected_rows, protected_cols] = False
+
+# Apply the modified mask to zero out connections
+connectivities[above_threshold_mask] = 0.0
+spatial_distances[above_threshold_mask] = 0.0
 connectivities[connectivities > 0] = 1
 adata_2_prot.obsp["spatial_neighbors_connectivities"] = connectivities
 adata_2_prot.obsp["spatial_neighbors_distances"] = spatial_distances
@@ -210,53 +235,54 @@ if plot_flag:
     plt.close()
 
 # %% Add CN Features to Protein Data
-if False:
-    from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler
 
-    scaler = StandardScaler()
-    neighbor_means = scaler.fit_transform(neighbor_means)
-    print("Applied standard scaling to both feature types.")
-    new_feature_names = [
-        f"CN_{i}" for i in adata_2_prot.var.index
-    ]  # in case we run the cell multiple times
-    if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
-        norm_original_protein_data = scaler.fit_transform(adata_2_prot.X)
-        new_X = np.hstack([norm_original_protein_data, neighbor_means])
-        additional_var = pd.DataFrame(index=new_feature_names)
-        new_vars = pd.concat([adata_2_prot.var, additional_var])
-    else:
-        new_X = adata_2_prot.X
-        new_vars = adata_2_prot.var
-
-    adata_2_prot = AnnData(
-        X=new_X,
-        obs=adata_2_prot.obs.copy(),
-        var=new_vars,
-        uns=adata_2_prot.uns.copy(),
-        obsm=adata_2_prot.obsm.copy(),
-    )
-    adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
-        "CN"
-    ] * neighbor_means.shape[1]
-
+scaler = StandardScaler()
+neighbor_means = scaler.fit_transform(neighbor_means)
+print("Applied standard scaling to both feature types.")
+new_feature_names = [
+    f"CN_{i}" for i in adata_2_prot.var.index
+]  # in case we run the cell multiple times
+if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
+    norm_original_protein_data = scaler.fit_transform(adata_2_prot.X)
+    new_X = np.hstack([norm_original_protein_data, neighbor_means])
+    additional_var = pd.DataFrame(index=new_feature_names)
+    new_vars = pd.concat([adata_2_prot.var, additional_var])
 else:
-    # Import neighborhood_utils module
-    import tree_model
+    new_X = adata_2_prot.X
+    new_vars = adata_2_prot.var
 
-    importlib.reload(tree_model)
-    from tree_model import analyze_residual_variation
+adata_2_prot = AnnData(
+    X=new_X,
+    obs=adata_2_prot.obs.copy(),
+    var=new_vars,
+    uns=adata_2_prot.uns.copy(),
+    obsm=adata_2_prot.obsm.copy(),
+)
+adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
+    "CN"
+] * neighbor_means.shape[1]
 
-    # Extract protein data
-    if issparse(adata_2_prot.X):
-        protein_data = adata_2_prot.X.toarray()
-    else:
-        protein_data = adata_2_prot.X.copy()
+sc.pp.pca(adata_2_prot)
 
-    # Get neighborhood statistics
-    print("\nExtracting neighborhood feature statistics...")
-    adata_2_prot, neighborhood_stats = analyze_residual_variation(
-        adata_obj=adata_2_prot, plot=plot_flag, verbose=True
-    )
+# %%
+# Import neighborhood_utils module
+import tree_model
+
+importlib.reload(tree_model)
+from tree_model import analyze_residual_variation
+
+# Extract protein data
+if issparse(adata_2_prot.X):
+    protein_data = adata_2_prot.X.toarray()
+else:
+    protein_data = adata_2_prot.X.copy()
+
+# Get neighborhood statistics
+print("\nExtracting neighborhood feature statistics...")
+adata_2_prot, neighborhood_stats = analyze_residual_variation(
+    adata_obj=adata_2_prot, plot=plot_flag, verbose=True
+)
 
 
 # %%
