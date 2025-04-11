@@ -260,6 +260,14 @@ class DualVAETrainingPlan(TrainingPlan):
         self.steady_state_tolerance = 0.5
         self.similarity_active = True
         self.reactivation_threshold = 0.1
+
+        # Add parameters for improved similarity loss activation mechanism
+        self.similarity_loss_steady_counter = 0  # Counter for steps in steady state
+        self.similarity_loss_steady_threshold = (
+            10  # Deactivate after this many steps in steady state
+        )
+        self.similarity_weight = self.similarity_weight  # Store original weight
+
         self.active_similarity_loss_active_history = []
         self.train_losses = []
         self.val_losses = []
@@ -283,6 +291,12 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_similarity_losses_raw = []
         self.val_latent_distances = []
         self.early_stopping_callback = None  # Will be set by trainer
+
+        # iLISI tracking
+        self.last_ilisi_score = 0.0  # Initialize last iLISI score
+        self.ilisi_check_frequency = max(
+            1, int(self.total_steps / 20)
+        )  # Check ~20 times during training
 
         # Setup logging
 
@@ -369,6 +383,9 @@ class DualVAETrainingPlan(TrainingPlan):
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
+        # Determine if we should check iLISI this step
+        check_ilisi = self.global_step % self.ilisi_check_frequency == 0
+
         # Calculate all losses using the new function
         losses = calculate_losses(
             rna_batch,
@@ -387,12 +404,75 @@ class DualVAETrainingPlan(TrainingPlan):
             global_step=self.global_step,
             total_steps=self.total_steps,
             plot_x_times=self.plot_x_times,
+            check_ilisi=check_ilisi,
         )
+
+        # Update last_ilisi_score if we calculated a new one
+        if "ilisi_score" in losses:
+            self.last_ilisi_score = losses["ilisi_score"]
+
+            # Dynamically adjust similarity weight based on iLISI score
+            if self.last_ilisi_score < 1.9:
+                # If iLISI is too low, increase the similarity weight
+                self.similarity_weight = min(1e8, self.similarity_weight * 10)
+                print(
+                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (< 1.9), increasing similarity weight to {self.similarity_weight}"
+                )
+                # Also ensure similarity loss is active
+                self.similarity_active = True
+                self.similarity_loss_steady_counter = 0  # Reset steady state counter
+            elif self.similarity_weight > 100 and self.last_ilisi_score >= 1.9:
+                # If iLISI is good and weight is high, reduce it gradually
+                self.similarity_weight = self.similarity_weight / 10
+                print(
+                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (>= 1.9), reducing similarity weight to {self.similarity_weight}"
+                )
+        else:
+            # Always include the last iLISI score in the losses
+            losses["ilisi_score"] = self.last_ilisi_score
 
         # Update similarity loss history
         if len(self.similarity_loss_history) >= self.steady_state_window:
             self.similarity_loss_history.pop(0)
         self.similarity_loss_history.append(losses["similarity_loss_raw"])
+
+        # Check if we're in steady state and update counter/status
+        in_steady_state = False
+        if len(self.similarity_loss_history) == self.steady_state_window:
+            # Calculate mean and standard deviation over the window
+            mean_loss = sum(self.similarity_loss_history) / self.steady_state_window
+            std_loss = (
+                sum((x - mean_loss) ** 2 for x in self.similarity_loss_history)
+                / self.steady_state_window
+            ) ** 0.5
+
+            # Check if variation is small enough to be considered steady state
+            coeff_of_variation = std_loss / mean_loss if mean_loss > 0 else float("inf")
+            in_steady_state = coeff_of_variation < self.steady_state_tolerance
+
+        # Update steady state counter and status
+        if in_steady_state and self.similarity_active:
+            self.similarity_loss_steady_counter += 1
+            if self.similarity_loss_steady_counter >= self.similarity_loss_steady_threshold:
+                self.similarity_active = False
+                print(
+                    f"[Step {self.global_step}] DEACTIVATING similarity loss - In steady state for {self.similarity_loss_steady_counter} steps"
+                )
+        elif not in_steady_state and self.similarity_active:
+            self.similarity_loss_steady_counter = 0  # Reset counter if not in steady state
+
+        # Check for loss increase if similarity is currently inactive
+        if not self.similarity_active and len(self.similarity_loss_history) > 0:
+            recent_loss = losses["similarity_loss_raw"].item()
+            min_steady_loss = min(self.similarity_loss_history)
+
+            if recent_loss > min_steady_loss * (1 + self.reactivation_threshold):
+                # Loss has increased significantly, reactivate similarity loss
+                self.similarity_active = True
+                self.similarity_loss_steady_counter = 0
+                print(
+                    f"[Step {self.global_step}] REACTIVATING similarity loss - Loss increased from {min_steady_loss:.4f} to {recent_loss:.4f}"
+                )
 
         # Store losses in history
         self.similarity_losses.append(losses["similarity_loss"].item())
@@ -405,9 +485,9 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_matching_losses.append(losses["matching_loss"].item())
         self.train_contrastive_losses.append(losses["contrastive_loss"].item())
         self.train_cell_type_clustering_losses.append(losses["cell_type_clustering_loss"].item())
-
+        to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
         # Log metrics
-        if plot_flag and self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0:
+        if plot_flag and to_plot:
             plot_similarity_loss_history(
                 self.similarity_losses, self.active_similarity_loss_active_history, self.global_step
             )
@@ -419,7 +499,7 @@ class DualVAETrainingPlan(TrainingPlan):
             current_epoch=self.current_epoch,
             is_validation=False,
             total_steps=self.total_steps,
-            print_to_console=self.global_step % 50 == 0,
+            print_to_console=to_plot,
         )
 
         return losses["total_loss"]
@@ -490,7 +570,7 @@ class DualVAETrainingPlan(TrainingPlan):
             print(
                 f"Validation batch {batch_idx}, accumulated {len(self.current_val_losses.get('total_loss', []))} validation samples"
             )
-
+        to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
         # Log metrics
         metrics = {}
 
@@ -501,7 +581,7 @@ class DualVAETrainingPlan(TrainingPlan):
             current_epoch=self.current_epoch,
             is_validation=True,
             total_steps=self.total_steps,
-            print_to_console=self.validation_step_ % 10 == 0,
+            print_to_console=to_plot,
         )
 
         return losses["total_loss"]
@@ -525,37 +605,25 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Get latent representations
         with torch.no_grad():
-            rna_data = rna_adata.X
-            if issparse(rna_data):
-                rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
-            rna_batch = torch.tensor(rna_adata.obs["_scvi_batch"].values, dtype=torch.long).to(
-                self.device
-            )
+            # Use 1000 random indices for RNA
+            indices_rna = np.random.choice(rna_adata.shape[0], size=1000, replace=False)
+            rna_batch = self._get_rna_batch(None, indices_rna)
+            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
 
-            rna_inference = self.rna_vae.module.inference(
-                rna_tensor, batch_index=rna_batch, n_samples=1
-            )
-            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+            # Use 1000 random indices for protein
+            indices_prot = np.random.choice(prot_adata.shape[0], size=1000, replace=False)
+            prot_batch = self._get_protein_batch(None, indices_prot)
+            prot_inference_outputs, _, _ = self.protein_vae.module(prot_batch)
+            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
 
-            prot_data = prot_adata.X
-            if issparse(prot_data):
-                prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
-            prot_batch = torch.tensor(prot_adata.obs["_scvi_batch"].values, dtype=torch.long).to(
-                self.device
-            )
-
-            prot_inference = self.protein_vae.module.inference(
-                prot_tensor, batch_index=prot_batch, n_samples=1
-            )
-            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
-
-        # Create AnnData objects
+        # Create AnnData objects with ONLY the observations for the selected indices
         rna_latent_adata = AnnData(rna_latent)
         prot_latent_adata = AnnData(prot_latent)
-        rna_latent_adata.obs = rna_adata.obs.copy()
-        prot_latent_adata.obs = prot_adata.obs.copy()
+
+        # Use only the observations corresponding to the selected indices
+        rna_latent_adata.obs = rna_adata[indices_rna].obs.copy()
+        prot_latent_adata.obs = prot_adata[indices_prot].obs.copy()
 
         # Calculate matching accuracy
         accuracy = CODEX_RNA_seq.metrics.matching_accuracy(rna_latent_adata, prot_latent_adata)
@@ -574,9 +642,20 @@ class DualVAETrainingPlan(TrainingPlan):
             label="modality",
             keys=["RNA", "Protein"],
         )
-        sc.pp.neighbors(combined_latent)
 
-        pf.plot_end_of_val_epoch_umap_latent_space(
+        # Force recomputation of neighbors with cosine metric for better integration
+        # This helps with modality alignment in UMAP visualization
+        combined_latent.obsm.pop("X_pca", None) if "X_pca" in combined_latent.obsm else None
+        combined_latent.obsp.pop(
+            "connectivities", None
+        ) if "connectivities" in combined_latent.obsp else None
+        combined_latent.obsp.pop("distances", None) if "distances" in combined_latent.obsp else None
+        combined_latent.uns.pop("neighbors", None) if "neighbors" in combined_latent.uns else None
+
+        # Calculate with parameters optimized for integration
+        sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
+
+        pf.plot_end_of_val_epoch_pca_umap_latent_space(
             prefix, combined_latent, epoch=self.current_epoch
         )
 
@@ -678,33 +757,21 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Get final latent representations
         with torch.no_grad():
-            # Get RNA latent
-            rna_data = self.rna_vae.adata.X
-            if issparse(rna_data):
-                rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
-            rna_batch = torch.tensor(
-                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(self.device)
-
-            rna_inference = self.rna_vae.module.inference(
-                rna_tensor, batch_index=rna_batch, n_samples=1
+            # Use random 1000 indices for RNA
+            indices_rna = np.random.choice(
+                range(self.rna_vae.adata.shape[0]), size=1000, replace=False
             )
-            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+            rna_batch = self._get_rna_batch(None, indices_rna)
+            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
 
-            # Get protein latent
-            prot_data = self.protein_vae.adata.X
-            if issparse(prot_data):
-                prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
-            prot_batch = torch.tensor(
-                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(self.device)
-
-            prot_inference = self.protein_vae.module.inference(
-                prot_tensor, batch_index=prot_batch, n_samples=1
+            # Use random 1000 indices for protein
+            indices_prot = np.random.choice(
+                range(self.protein_vae.adata.shape[0]), size=1000, replace=False
             )
-            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+            protein_batch = self._get_protein_batch(None, indices_prot)
+            prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
+            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
 
         # Store in adata
         self.rna_vae.adata.obsm["X_scVI"] = rna_latent
@@ -776,39 +843,27 @@ class DualVAETrainingPlan(TrainingPlan):
             f"{checkpoint_path}/protein_adata_epoch_{self.current_epoch}.h5ad", protein_adata_save
         )
 
-    def save_checkpoint(self):
+    def save_checkpoint(self):  # needs an update
         """Save the model checkpoint including AnnData objects with latent representations."""
         print(f"\nSaving checkpoint at epoch {self.current_epoch}...")
 
         # Get latent representations with the current model state
         with torch.no_grad():
-            # Get RNA latent
-            rna_data = self.rna_vae.adata.X
-            if issparse(rna_data):
-                rna_data = rna_data.toarray()
-            rna_tensor = torch.tensor(rna_data, dtype=torch.float32).to(self.device)
-            rna_batch = torch.tensor(
-                self.rna_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(self.device)
-
-            rna_inference = self.rna_vae.module.inference(
-                rna_tensor, batch_index=rna_batch, n_samples=1
+            # Use random 1000 indices for RNA
+            indices_rna = np.random.choice(
+                range(self.rna_vae.adata.shape[0]), size=1000, replace=False
             )
-            rna_latent = rna_inference["qz"].mean.detach().cpu().numpy()
+            rna_batch = self._get_rna_batch(None, indices_rna)
+            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
 
-            # Get protein latent
-            prot_data = self.protein_vae.adata.X
-            if issparse(prot_data):
-                prot_data = prot_data.toarray()
-            prot_tensor = torch.tensor(prot_data, dtype=torch.float32).to(self.device)
-            prot_batch = torch.tensor(
-                self.protein_vae.adata.obs["_scvi_batch"].values, dtype=torch.long
-            ).to(self.device)
-
-            prot_inference = self.protein_vae.module.inference(
-                prot_tensor, batch_index=prot_batch, n_samples=1
+            # Use random 1000 indices for protein
+            indices_prot = np.random.choice(
+                range(self.protein_vae.adata.shape[0]), size=1000, replace=False
             )
-            prot_latent = prot_inference["qz"].mean.detach().cpu().numpy()
+            protein_batch = self._get_protein_batch(None, indices_prot)
+            prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
+            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
 
         # Store in adata
         self.rna_vae.adata.obsm["X_scVI"] = rna_latent
@@ -1071,7 +1126,7 @@ def train_vae(
     print("Plan parameters:")
     pprint(plan_kwargs)
     # Create training plan instance
-    print("Creating training plan...")
+    print("Creating training plan for initial latent computation...")
     training_plan = DualVAETrainingPlan(rna_vae.module, **plan_kwargs)
     rna_vae._training_plan = training_plan
     print("Training plan created")
@@ -1082,7 +1137,7 @@ def train_vae(
     protein_vae.is_trained_ = True
     rna_vae.module.cpu()
     protein_vae.module.cpu()
-    latent_rna_before = rna_vae.get_latent_representation()
+    latent_rna_before = rna_vae.get_latent_representation()  # bad should probaly repalace
     latent_prot_before = protein_vae.get_latent_representation()
     rna_vae.module.to(device)
     protein_vae.module.to(device)
@@ -1297,6 +1352,7 @@ def calculate_losses(
     global_step=None,
     total_steps=None,
     plot_x_times=None,
+    check_ilisi=False,
 ):
     """Calculate all losses for a batch of data.
 
@@ -1317,6 +1373,7 @@ def calculate_losses(
         global_step: Current global step
         total_steps: Total number of steps
         plot_x_times: Number of times to plot during training
+        check_ilisi: Whether to check iLISI score
 
     Returns:
         Dictionary containing all calculated losses and metrics
@@ -1350,19 +1407,34 @@ def calculate_losses(
         normalize(protein_batch["archetype_vec"], dim=1),
     )
     archetype_dis = torch.clamp(archetype_dis, max=torch.quantile(archetype_dis, 0.90))
+
     # Calculate matching loss
     archetype_dis_tensor = torch.tensor(archetype_dis, dtype=torch.float, device=device)
     threshold = 0.0005
+
+    # Normalize distances to [0,1] range
     archetype_dis_tensor = (archetype_dis_tensor - archetype_dis_tensor.min()) / (
-        archetype_dis_tensor.max() - archetype_dis_tensor.min()
+        archetype_dis_tensor.max() - archetype_dis_tensor.min() + 1e-8
     )
     latent_distances = (latent_distances - latent_distances.min()) / (
-        latent_distances.max() - latent_distances.min()
+        latent_distances.max() - latent_distances.min() + 1e-8
     )
 
+    # Create a mask for the closest 10% of archetype distances
+    percentile_10 = torch.quantile(archetype_dis_tensor.flatten(), 0.10)
+    closest_pairs_mask = archetype_dis_tensor <= percentile_10
+
+    # Apply the mask to latent distances for similarity calculation
     squared_diff = (latent_distances - archetype_dis_tensor) ** 2
+
+    # Only consider closest 10% for stress loss calculation
+    squared_diff_masked = squared_diff * closest_pairs_mask
+    stress_loss = squared_diff_masked.sum() / (
+        closest_pairs_mask.sum() + 1e-8
+    )  # Avoid division by zero
+
+    # For acceptable range, consider threshold-based approach
     acceptable_range_mask = (archetype_dis_tensor < threshold) & (latent_distances < threshold)
-    stress_loss = squared_diff.mean()
     num_cells = squared_diff.numel()
     num_acceptable = acceptable_range_mask.sum()
     exact_pairs = 10 * torch.diag(latent_distances).mean()
@@ -1523,5 +1595,36 @@ def calculate_losses(
         "num_cells": num_cells,
         "exact_pairs": exact_pairs,
     }
+
+    if check_ilisi:
+        # Calculate iLISI score using the latent representations we already have
+        # No need to recreate the combined latent AnnData, just use the existing representations
+        rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
+        protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
+
+        # Create combined latent AnnData
+        combined_latent = anndata.concat(
+            [
+                AnnData(rna_latent_mean_numpy),
+                AnnData(protein_latent_mean_numpy),
+            ],
+            join="outer",
+            label="modality",
+            keys=["RNA", "Protein"],
+        )
+
+        # Clear any existing neighbors data to ensure clean calculation
+        combined_latent.obsp.pop(
+            "connectivities", None
+        ) if "connectivities" in combined_latent.obsp else None
+        combined_latent.obsp.pop("distances", None) if "distances" in combined_latent.obsp else None
+        combined_latent.uns.pop("neighbors", None) if "neighbors" in combined_latent.uns else None
+
+        # Calculate neighbors with cosine metric for iLISI
+        sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
+
+        # Calculate iLISI score
+        ilisi_score = bar_nick_utils.calculate_iLISI(combined_latent, "modality", plot_flag=False)
+        losses["ilisi_score"] = ilisi_score
 
     return losses

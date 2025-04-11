@@ -950,7 +950,37 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
-def plot_end_of_val_epoch_umap_latent_space(prefix, combined_latent, epoch):
+def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch):
+    sc.pp.pca(combined_latent)
+    fig = plt.figure(figsize=(15, 5))
+    ax1 = fig.add_subplot(1, 3, 1)
+    sc.pl.pca(
+        combined_latent,
+        color="modality",
+        ax=ax1,
+        show=False,
+        title="Combined Latent PCA by Modality",
+    )
+    ax2 = fig.add_subplot(1, 3, 2)
+    sc.pl.pca(
+        combined_latent,
+        color="cell_types",
+        ax=ax2,
+        show=False,
+        title="Combined Latent PCA by Cell Type",
+    )
+    ax3 = fig.add_subplot(1, 3, 3)
+    sc.pl.pca(combined_latent, color="CN", ax=ax3, show=False, title="Combined Latent PCA by CN")
+    plt.tight_layout()
+    pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}.png"
+    plt.savefig(pca_file, dpi=200, bbox_inches="tight")
+    if hasattr(mlflow, "active_run") and mlflow.active_run():
+        mlflow.log_artifact(pca_file, artifact_path="train")
+    combined_latent.obsm.pop("X_pca", None)
+    plt.show()
+
+    # Use cosine metric and larger n_neighbors for better batch integration
+    sc.pp.neighbors(combined_latent, use_rep="X")
     sc.tl.umap(combined_latent)
 
     # Create a figure with the UMAP visualizations colored by different factors
@@ -1077,7 +1107,7 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
         combined_latent_plot = combined_latent.copy()
 
     # Plot UMAP
-    sc.tl.umap(combined_latent_plot, min_dist=0.1)
+    sc.tl.umap(combined_latent_plot)
     sc.pl.umap(
         combined_latent_plot,
         color=["CN", "modality", "cell_types"],

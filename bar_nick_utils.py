@@ -265,7 +265,7 @@ def mixing_score(
     )
     combined_latent.obs["major_cell_types"] = combined_major_cell_types.values
     sc.pp.pca(combined_latent)
-    sc.pp.neighbors(combined_latent, use_rep="X_pca")
+    sc.pp.neighbors(combined_latent, use_rep="X")
     iLISI = calculate_iLISI(combined_latent, "modality", plot_flag=plot_flag)
     cLISI = calculate_cLISI(combined_latent, "major_cell_types", plot_flag=plot_flag)
     return {"iLISI": iLISI, "cLISI": cLISI}

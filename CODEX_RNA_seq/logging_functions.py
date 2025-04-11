@@ -3,6 +3,7 @@ import sys
 from datetime import timedelta
 
 import mlflow
+import numpy as np
 import torch
 from tabulate import tabulate
 
@@ -148,6 +149,11 @@ def save_tabulate_to_txt(losses, global_step, total_steps):
             formatted_value = f"{value:.3f} ({percentage:.1f}%)"
             table_data.append([loss_name, formatted_value])
 
+    # Add iLISI score if available (without percentage)
+    if "ilisi_score" in losses_to_save:
+        ilisi_score = losses_to_save["ilisi_score"]
+        table_data.append(["ilisi_score", f"{ilisi_score:.4f}"])
+
     # Save formatted table to text file
     with open(losses_file, "w") as f:
         f.write(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
@@ -209,6 +215,9 @@ def log_step(
     diversity_loss = get_value(losses.get("diversity_loss", float("nan")))
     stress_loss = get_value(losses.get("stress_loss", float("nan")))
     reward = get_value(losses.get("reward", float("nan")))
+    ilisi_score = get_value(
+        losses.get("ilisi_score", float("nan"))
+    )  # Extract iLISI score from losses
 
     # Handle parameters that might be in losses dict or passed directly
     exact_pairs = get_value(metrics.get("exact_pairs", float("nan")))
@@ -314,25 +323,26 @@ def log_step(
             print(tabulate(distance_metrics, headers="firstrow", tablefmt="fancy_grid"))
 
         # Print extra metrics if available
-        if any(x != 0 for x in [stress_loss, reward, exact_pairs, ilisi, clisi, accuracy]):
-            extra_metrics = []
-            extra_metrics.append(["Metric", "Value"])
+        extra_metrics = []
+        extra_metrics.append(["Metric", "Value"])
 
-            extra_metrics_to_print = {
-                f"{prefix}Stress Loss": stress_loss,
-                f"{prefix}Reward": reward,
-                f"{prefix}Exact Pairs": exact_pairs,
-                f"{prefix}iLISI": ilisi,
-                f"{prefix}cLISI": clisi,
-                f"{prefix}Accuracy": accuracy,
-            }
+        extra_metrics_to_print = {
+            f"{prefix}Stress Loss": stress_loss,
+            f"{prefix}Reward": reward,
+            f"{prefix}Exact Pairs": exact_pairs,
+            f"{prefix}iLISI": ilisi_score,  # Use ilisi_score from losses
+            f"{prefix}cLISI": clisi,
+            f"{prefix}Accuracy": accuracy,
+        }
 
-            for metric_name, value in extra_metrics_to_print.items():
-                if value is not None:
-                    extra_metrics.append([metric_name, value])
-            # skip for now
-            # print("\nExtra Metrics:")
-            # print(tabulate(extra_metrics, headers="firstrow", tablefmt="fancy_grid"))
+        for metric_name, value in extra_metrics_to_print.items():
+            if value is not None and not np.isnan(value):
+                extra_metrics.append([metric_name, value])
+
+        # Always print extra metrics section to show iLISI
+        if len(extra_metrics) > 1:  # Only if we have at least one valid metric
+            print("\nExtra Metrics:")
+            print(tabulate(extra_metrics, headers="firstrow", tablefmt="fancy_grid"))
 
         print("=" * 80 + "\n")
 

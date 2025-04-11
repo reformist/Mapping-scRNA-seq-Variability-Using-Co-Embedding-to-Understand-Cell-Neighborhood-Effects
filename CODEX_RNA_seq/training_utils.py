@@ -85,7 +85,20 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
 
 
 def process_latent_spaces(rna_adata, protein_adata):
-    """Process and combine latent spaces from both modalities."""
+    """Process and combine latent spaces from both modalities.
+
+    This function assumes that the latent representations have been computed
+    using vae.module() and stored in the "X_scVI" field of the AnnData objects.
+
+    Args:
+        rna_adata: RNA AnnData object with latent representation in obsm["X_scVI"]
+        protein_adata: Protein AnnData object with latent representation in obsm["X_scVI"]
+
+    Returns:
+        rna_latent: RNA latent AnnData
+        prot_latent: Protein latent AnnData
+        combined_latent: Combined latent AnnData
+    """
 
     # Store latent representations
     SCVI_LATENT_KEY = "X_scVI"
@@ -95,11 +108,14 @@ def process_latent_spaces(rna_adata, protein_adata):
     rna_latent.obs = rna_adata.obs.copy()
     prot_latent.obs = protein_adata.obs.copy()
 
+    # Clear any existing embeddings
     rna_latent.obsm.pop("X_pca", None)
     prot_latent.obsm.pop("X_pca", None)
-    sc.pp.neighbors(rna_latent)
+
+    # Use standard parameters for individual modalities
+    sc.pp.neighbors(rna_latent, use_rep="X", n_neighbors=10)
     sc.tl.umap(rna_latent)
-    sc.pp.neighbors(prot_latent)
+    sc.pp.neighbors(prot_latent, use_rep="X", n_neighbors=10)
     sc.tl.umap(prot_latent)
 
     # Combine latent spaces
@@ -110,8 +126,17 @@ def process_latent_spaces(rna_adata, protein_adata):
         keys=["RNA", "Protein"],
     )
 
-    sc.pp.neighbors(combined_latent)
-    sc.tl.umap(combined_latent)
+    # Clear any existing neighbors data to ensure clean calculation
+    combined_latent.obsm.pop("X_pca", None) if "X_pca" in combined_latent.obsm else None
+    combined_latent.obsp.pop(
+        "connectivities", None
+    ) if "connectivities" in combined_latent.obsp else None
+    combined_latent.obsp.pop("distances", None) if "distances" in combined_latent.obsp else None
+    combined_latent.uns.pop("neighbors", None) if "neighbors" in combined_latent.uns else None
+
+    # Use cosine metric and larger n_neighbors for better batch integration
+    sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
+    sc.tl.umap(combined_latent, min_dist=0.3)
 
     return rna_latent, prot_latent, combined_latent
 
@@ -329,6 +354,17 @@ def handle_error(e, params, run_name):
 def run_cell_type_clustering_loss(
     adata, latent_mean, indices, device="cuda:0" if torch.cuda.is_available() else "cpu"
 ):
+    """Calculate cell type clustering loss to preserve cell type relationships.
+
+    Args:
+        adata: AnnData object with cell type information
+        latent_mean: Latent mean representation from the VAE (already computed from module() call)
+        indices: Indices of cells to use
+        device: Device to use for calculations
+
+    Returns:
+        Cell type clustering loss tensor
+    """
     cell_types = torch.tensor(adata[indices].obs["cell_types"].cat.codes.values).to(device)
 
     # Combine cell types and latent representations from both modalities
