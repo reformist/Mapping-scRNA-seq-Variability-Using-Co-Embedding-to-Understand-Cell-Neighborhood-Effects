@@ -86,13 +86,10 @@ param_grid = {
     "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [1000],
     "lr": [1e-4],
-    "contrastive_weight": [0],  # 0.001, 0.01, 0.1],
-    "similarity_weight": [100, 1000.0, 10_000.0],
+    "contrastive_weight": [0, 0.001, 0.1, 1, 100, 1000],
+    "similarity_weight": [100, 1000.0],
     "diversity_weight": [0.0],
-    "matching_weight": [
-        1,
-        10,
-    ],  # Updated range to reflect typical values
+    "matching_weight": [1, 10, 100, 1000],  # Updated range to reflect typical values
     "cell_type_clustering_weight": [100, 1000.0, 10_000.0],  # Added cell type clustering weight
     "n_hidden_rna": [64],
     "n_hidden_prot": [32],
@@ -110,7 +107,7 @@ param_grid = {
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_2"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
