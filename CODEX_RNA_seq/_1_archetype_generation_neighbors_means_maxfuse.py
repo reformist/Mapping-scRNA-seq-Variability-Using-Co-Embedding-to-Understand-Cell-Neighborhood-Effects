@@ -65,7 +65,6 @@ importlib.reload(pf)
 importlib.reload(bar_nick_utils)
 importlib.reload(covet_utils)
 
-from cell_lists import terminal_exhaustion
 from plotting_functions import (
     plot_archetype_proportions,
     plot_archetype_visualizations,
@@ -112,17 +111,35 @@ sc.pp.subsample(adata_2_prot, n_obs=subsample_n_obs_protein)
 original_protein_num = adata_2_prot.X.shape[1]
 print(f"data shape: {adata_1_rna.shape}, {adata_2_prot.shape}")
 # %% Compute Spatial Neighbors and Means
-# Compute spatial neighbors
-sc.pp.neighbors(adata_2_prot, use_rep="spatial_location")
-
-connectivities = adata_2_prot.obsp["connectivities"]
-connectivities[connectivities > 0] = 1
-
+# remove far away neighbors before setting up the neighbors means
+sc.pp.neighbors(
+    adata_2_prot, use_rep="spatial_location", key_added="spatial_neighbors", n_neighbors=15
+)
+connectivities = adata_2_prot.obsp["spatial_neighbors_connectivities"]
+spatial_distances = adata_2_prot.obsp["spatial_neighbors_distances"]
 if plot_flag:
-    assert np.array_equal(
-        np.array([0.0, 1.0], dtype=np.float32), np.unique(np.array(connectivities.todense()))
-    )
-    sns.heatmap(connectivities.todense()[:1000, :1000])
+    sns.histplot(spatial_distances.data)
+    plt.title("Distribution of spatial distances between protein neighbors before cutoff")
+    plt.show()
+    plt.close()
+# %% save adata_2_prot clean it first # todo temp
+clean_uns_for_h5ad(adata_2_prot)
+
+adata_2_prot.write_h5ad(
+    "CODEX_RNA_seq/data/processed_data/preprocessed_adata_prot_neighbors_means.h5ad"
+)
+# %%
+percentile_threshold = 95
+percentile_value = np.percentile(spatial_distances.data, percentile_threshold)
+connectivities[spatial_distances > percentile_value] = 0.0
+spatial_distances[spatial_distances > percentile_value] = 0.0
+connectivities[connectivities > 0] = 1
+adata_2_prot.obsp["spatial_neighbors_connectivities"] = connectivities
+adata_2_prot.obsp["spatial_neighbors_distances"] = spatial_distances
+if plot_flag:
+    sns.heatmap(connectivities[:1000, :1000].todense())
+    plt.show()
+    sns.heatmap(spatial_distances[:1000, :1000].todense())
     plt.show()
     plt.close()
 
@@ -131,39 +148,10 @@ neighbor_sums = connectivities.dot(adata_2_prot.X)  # get the sum of all neighbo
 if issparse(neighbor_sums):
     my_array = neighbor_sums.toarray()
 neighbor_means = np.asarray(neighbor_sums / connectivities.sum(1))
-if plot_flag:
-    plt.show()
-    plt.close()
 
-# %% Spatial Neighbors with Cutoff
-# Compute spatial neighbors with cutoff
-sc.pp.neighbors(
-    adata_2_prot, use_rep="spatial_location", key_added="spatial_neighbors", n_neighbors=15
-)
 
-distances = adata_2_prot.obsp["spatial_neighbors_distances"].data
-log_transformed_distances = distances + 1  # log-transform distances
+# %% save umap of original protein data, save the umap in adata_2_prot.obsm["X_original_umap"]
 
-if plot_flag:
-    sns.histplot(log_transformed_distances)
-    plt.title("Distribution of spatial distances between protein neighbors before cutoff")
-    plt.show()
-    plt.close()
-
-# Apply distance cutoff
-distances_mean = log_transformed_distances.mean()
-distances_std = log_transformed_distances.std()
-two_std_dev = distances_mean + 2 * distances_std
-
-indices_to_zero_out = np.where(adata_2_prot.obsp["spatial_neighbors_distances"].data > two_std_dev)[
-    0
-]
-indices_to_zero_out = indices_to_zero_out[
-    indices_to_zero_out < adata_2_prot.obsp["spatial_neighbors_connectivities"].data.shape[0]
-]
-
-adata_2_prot.obsp["spatial_neighbors_connectivities"].data[indices_to_zero_out] = 0
-adata_2_prot.obsp["spatial_neighbors_distances"].data[indices_to_zero_out] = 0
 
 if plot_flag:
     sns.histplot(adata_2_prot.obsp["spatial_neighbors_distances"].data)
@@ -171,13 +159,6 @@ if plot_flag:
     plt.show()
     plt.close()
 
-print(
-    indices_to_zero_out.max(), adata_2_prot.obsp["spatial_neighbors_connectivities"].data.shape[0]
-)
-print(
-    len(adata_2_prot.obsp["spatial_neighbors_distances"].data),
-    len(adata_2_prot.obsp["spatial_neighbors_connectivities"].data),
-)
 
 # %% Compute Cell Neighborhoods
 # Compute cell neighborhoods
@@ -198,6 +179,7 @@ while True:
     resolution = resolution / 2
 adata_2_prot.obs["CN"] = temp.obs["CN"]
 num_clusters = len(adata_2_prot.obs["CN"].unique())
+# Make sure to create a color palette with enough colors for all clusters
 palette = sns.color_palette("tab10", num_clusters)
 adata_2_prot.uns["spatial_clusters_colors"] = palette.as_hex()
 
@@ -206,6 +188,17 @@ adata_2_prot.obs["CN"] = pd.Categorical(
     [f"CN_{cn}" for cn in adata_2_prot.obs["CN"]],
     categories=sorted([f"CN_{i}" for i in range(num_clusters)]),
 )
+
+# Verify that the colors and categories match
+if "spatial_clusters_colors" in adata_2_prot.uns:
+    if len(adata_2_prot.uns["spatial_clusters_colors"]) < len(
+        adata_2_prot.obs["CN"].cat.categories
+    ):
+        # Add more colors if needed
+        new_palette = sns.color_palette("tab10", len(adata_2_prot.obs["CN"].cat.categories))
+        adata_2_prot.uns["spatial_clusters_colors"] = new_palette.as_hex()
+    print(f"Number of categories: {len(adata_2_prot.obs['CN'].cat.categories)}")
+    print(f"Number of colors: {len(adata_2_prot.uns['spatial_clusters_colors'])}")
 
 if issparse(adata_2_prot.X):
     adata_2_prot.X = adata_2_prot.X.toarray()
@@ -222,28 +215,147 @@ if plot_flag:
     plt.close()
 
 # %% Add CN Features to Protein Data
-# Add CN features to protein data
-new_feature_names = [f"CN_{i}" for i in adata_2_prot.var.index]
-if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
-    new_X = np.hstack([adata_2_prot.X, neighbor_means])
-    additional_var = pd.DataFrame(index=new_feature_names)
-    new_vars = pd.concat([adata_2_prot.var, additional_var])
-else:
-    new_X = adata_2_prot.X
-    new_vars = adata_2_prot.var
+if False:
+    from sklearn.preprocessing import StandardScaler
 
-adata_2_prot = AnnData(
-    X=new_X,
-    obs=adata_2_prot.obs.copy(),
-    var=new_vars,
-    uns=adata_2_prot.uns.copy(),
-    obsm=adata_2_prot.obsm.copy(),
-)
-adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
-    "CN"
-] * neighbor_means.shape[1]
+    scaler = StandardScaler()
+    neighbor_means = scaler.fit_transform(neighbor_means)
+    print("Applied standard scaling to both feature types.")
+    new_feature_names = [
+        f"CN_{i}" for i in adata_2_prot.var.index
+    ]  # in case we run the cell multiple times
+    if adata_2_prot.X.shape[1] == neighbor_means.shape[1]:
+        norm_original_protein_data = scaler.fit_transform(adata_2_prot.X)
+        new_X = np.hstack([norm_original_protein_data, neighbor_means])
+        additional_var = pd.DataFrame(index=new_feature_names)
+        new_vars = pd.concat([adata_2_prot.var, additional_var])
+    else:
+        new_X = adata_2_prot.X
+        new_vars = adata_2_prot.var
+
+    adata_2_prot = AnnData(
+        X=new_X,
+        obs=adata_2_prot.obs.copy(),
+        var=new_vars,
+        uns=adata_2_prot.uns.copy(),
+        obsm=adata_2_prot.obsm.copy(),
+    )
+    adata_2_prot.var["feature_type"] = ["protein"] * original_protein_num + [
+        "CN"
+    ] * neighbor_means.shape[1]
+
+else:
+    # Import neighborhood_utils module
+    import tree_model
+
+    importlib.reload(tree_model)
+    from tree_model import analyze_residual_variation
+
+    # Extract protein data
+    if issparse(adata_2_prot.X):
+        protein_data = adata_2_prot.X.toarray()
+    else:
+        protein_data = adata_2_prot.X.copy()
+
+    # Get neighborhood statistics
+    print("\nExtracting neighborhood feature statistics...")
+    adata_2_prot, neighborhood_stats = analyze_residual_variation(
+        adata_obj=adata_2_prot, plot=plot_flag, verbose=True
+    )
+
+
+# %%
 sc.pp.pca(adata_2_prot)
 print(f"New adata shape (protein features + cell neighborhood vector): {adata_2_prot.shape}")
+# %% make sure prot data and cn data features are similar same scale and variance
+# Compare statistical properties between protein features and cell neighborhood features
+protein_mask = adata_2_prot.var["feature_type"] == "protein"
+cn_mask = adata_2_prot.var["feature_type"] == "CN_projection"
+
+# Extract data for each feature type
+if issparse(adata_2_prot.X):
+    protein_data = adata_2_prot.X[:, protein_mask].toarray()
+    cn_data = adata_2_prot.X[:, cn_mask].toarray()
+else:
+    protein_data = adata_2_prot.X[:, protein_mask]
+    cn_data = adata_2_prot.X[:, cn_mask]
+
+# Calculate basic statistics
+protein_stats = {
+    "mean": np.mean(protein_data),
+    "std": np.std(protein_data),
+    "min": np.min(protein_data),
+    "max": np.max(protein_data),
+    "median": np.median(protein_data),
+}
+
+cn_stats = {
+    "mean": np.mean(cn_data),
+    "std": np.std(cn_data),
+    "min": np.min(cn_data),
+    "max": np.max(cn_data),
+    "median": np.median(cn_data),
+}
+
+print("\nComparing statistical properties of protein vs CN features:")
+print(f"{'Statistic':10} {'Protein':15} {'CN':15} {'Ratio (Protein/CN)':20}")
+print("-" * 60)
+for stat in protein_stats:
+    ratio = protein_stats[stat] / cn_stats[stat] if cn_stats[stat] != 0 else float("inf")
+    print(f"{stat:10} {protein_stats[stat]:<15.4f} {cn_stats[stat]:<15.4f} {ratio:<20.4f}")
+
+# Visual comparison of distributions
+if plot_flag:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Distribution of means per feature
+    protein_feature_means = np.mean(protein_data, axis=0)
+    cn_feature_means = np.mean(cn_data, axis=0)
+    axes[0].hist(protein_feature_means, alpha=0.5, bins=30, label="Protein Features")
+    axes[0].hist(cn_feature_means, alpha=0.5, bins=30, label="CN Features")
+    axes[0].set_title("Distribution of Feature Means")
+    axes[0].set_xlabel("Mean Value")
+    axes[0].set_ylabel("Count")
+    axes[0].legend()
+
+    # Distribution of variances per feature
+    protein_feature_vars = np.var(protein_data, axis=0)
+    cn_feature_vars = np.var(cn_data, axis=0)
+    axes[1].hist(protein_feature_vars, alpha=0.5, bins=30, label="Protein Features")
+    axes[1].hist(cn_feature_vars, alpha=0.5, bins=30, label="CN Features")
+    axes[1].set_title("Distribution of Feature Variances")
+    axes[1].set_xlabel("Variance")
+    axes[1].set_ylabel("Count")
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.show()
+    plt.close()
+
+    # Boxplot comparison
+    plt.figure(figsize=(10, 6))
+    data_to_plot = [protein_feature_means, cn_feature_means, protein_feature_vars, cn_feature_vars]
+    labels = ["Protein Means", "CN Means", "Protein Variances", "CN Variances"]
+    plt.boxplot(data_to_plot, labels=labels)
+    plt.title("Comparison of Feature Statistics")
+    plt.ylabel("Value")
+    plt.yscale("log")  # Log scale to better visualize differences
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+    plt.close()
+
+# If statistics are very different, consider scaling
+scale_threshold = 10  # Define threshold for when scaling is needed
+if (
+    protein_stats["std"] / cn_stats["std"] > scale_threshold
+    or cn_stats["std"] / protein_stats["std"] > scale_threshold
+):
+    print("\nWARNING: Large difference in variance between protein and CN features!")
+    print("Consider scaling features before PCA to prevent bias.")
+
+    # Optional: Perform scaling here if needed
+
 
 # %% Compute PCA and UMAP for Both Modalities
 
@@ -252,11 +364,10 @@ minor_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["cell_types"])))
 if "major_cell_types" not in adata_2_prot.obs.columns:
     adata_2_prot.obs["major_cell_types"] = adata_2_prot.obs["cell_types"]
 major_cell_types_list_prot = sorted(list(set(adata_2_prot.obs["major_cell_types"])))
-minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
-major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
 if "major_cell_types" not in adata_1_rna.obs.columns:
     adata_1_rna.obs["major_cell_types"] = adata_1_rna.obs["cell_types"]
     major_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["major_cell_types"])))
+minor_cell_types_list_rna = sorted(list(set(adata_1_rna.obs["cell_types"])))
 
 # Compute PCA and UMAP for both modalities
 sc.pp.pca(adata_1_rna)
@@ -293,11 +404,11 @@ max_possible_pca_dim_rna = min(adata_1_rna.X.shape[1], adata_1_rna.X.shape[0])
 max_possible_pca_dim_prot = min(adata_2_prot.X.shape[1], adata_2_prot.X.shape[0])
 sc.pp.pca(adata_1_rna, n_comps=max_possible_pca_dim_rna - 1)
 sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
-
+# %%
 # Select PCA components based on variance explained
 print("Selecting PCA components...")
 max_dim = 50
-variance_ratio_selected = 0.05 # was 0.75
+variance_ratio_selected = 0.90  # was 0.75
 
 cumulative_variance_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
@@ -310,17 +421,105 @@ real_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])[n_comps_thresh]
 sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of rna variance: {n_comps_thresh}\n")
 
-sc.pp.pca(adata_2_prot)
 cumulative_variance_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
 n_comps_thresh = min(n_comps_thresh, max_dim)
 real_ratio = np.cumsum(adata_2_prot.uns["pca"]["variance_ratio"])[n_comps_thresh]
-sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
+sc.pp.pca(adata_2_prot, n_comps=n_comps_thresh)
 print(f"\nNumber of components explaining {real_ratio} of protein variance: {n_comps_thresh}")
 if n_comps_thresh == 1:
     raise ValueError(
         "n_comps_thresh is 1, this is not good, try to lower the variance_ratio_selected"
     )
+# %% plot umap of original protein data and the umap to new protein data
+if plot_flag:
+    sc.pp.neighbors(adata_2_prot, n_neighbors=20)
+    sc.tl.umap(adata_2_prot)
+    sc.pl.embedding(
+        adata_2_prot, basis="X_original_umap", color="cell_types", title="Original Protein UMAP"
+    )
+    plt.close()
+    sc.pl.embedding(adata_2_prot, basis="X_umap", color="cell_types", title="New Protein UMAP")
+    plt.close()
+    print(
+        "if those two plots are similar, that means that the new CN features are not affecting the protein data"
+    )
+
+# %%
+# Plot heatmap of PCA feature contributions
+if plot_flag:
+    # RNA PCA feature contributions
+    rna_pca_components = adata_1_rna.varm["PCs"]
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        rna_pca_components,
+        cmap="viridis",
+        center=0,
+        xticklabels=range(1, rna_pca_components.shape[1] + 1),
+        yticklabels=False,
+    )
+    plt.title("RNA: Feature Contributions to PCA Dimensions")
+    plt.xlabel("PCA Dimensions")
+    plt.ylabel("Original Features")
+    plt.savefig(
+        "CODEX_RNA_seq/plots/rna_pca_feature_contributions.png", dpi=300, bbox_inches="tight"
+    )
+    plt.show()
+    plt.close()
+
+    # Check feature contribution balance
+    feature_total_contribution = np.abs(rna_pca_components).sum(axis=1)
+    half_point = len(feature_total_contribution) // 2
+    first_half_contrib = feature_total_contribution[:half_point].sum()
+    second_half_contrib = feature_total_contribution[half_point:].sum()
+    print(f"RNA PCA feature contribution balance:")
+    print(f"First half contribution: {first_half_contrib:.2f}")
+    print(f"Second half contribution: {second_half_contrib:.2f}")
+    print(f"Ratio (first:second): {first_half_contrib/second_half_contrib:.2f}")
+
+    # Protein PCA feature contributions
+    prot_pca_components = adata_2_prot.varm["PCs"]
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        prot_pca_components,
+        cmap="viridis",
+        center=0,
+        xticklabels=range(1, prot_pca_components.shape[1] + 1),
+        yticklabels=False,
+    )
+    plt.title("Protein: Feature Contributions to PCA Dimensions")
+    plt.xlabel("PCA Dimensions")
+    plt.ylabel("Original Features")
+    plt.savefig(
+        "CODEX_RNA_seq/plots/protein_pca_feature_contributions.png", dpi=300, bbox_inches="tight"
+    )
+    plt.show()
+    plt.close()
+
+    # Check feature contribution balance
+    feature_total_contribution = np.abs(prot_pca_components).sum(axis=1)
+    half_point = len(feature_total_contribution) // 2
+    first_half_contrib = feature_total_contribution[:half_point].sum()
+    second_half_contrib = feature_total_contribution[half_point:].sum()
+    print(f"Protein PCA feature contribution balance:")
+    print(f"First half contribution: {first_half_contrib:.2f}")
+    print(f"Second half contribution: {second_half_contrib:.2f}")
+    print(f"Ratio (first:second): {first_half_contrib/second_half_contrib:.2f}")
+
+    # Analyze contributions per feature type for protein data
+    if "feature_type" in adata_2_prot.var:
+        feature_types = adata_2_prot.var["feature_type"].unique()
+        for ft in feature_types:
+            mask = adata_2_prot.var["feature_type"] == ft
+            ft_contribution = np.abs(prot_pca_components[mask]).sum()
+            print(
+                f"Contribution from {ft} features: {ft_contribution:.2f} "
+                + f"({ft_contribution/np.abs(prot_pca_components).sum()*100:.2f}%)"
+            )
+
+# todo test larger protein pca dims
+# sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
+sc.pp.pca(adata_2_prot, n_comps=20)
 
 # %% Find Archetypes
 print("\nFinding archetypes...")

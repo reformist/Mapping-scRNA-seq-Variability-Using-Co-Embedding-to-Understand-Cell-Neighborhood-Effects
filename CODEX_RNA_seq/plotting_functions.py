@@ -100,6 +100,7 @@ def plot_cell_type_distribution(adata_1, adata_2, use_subsample=True):
     # RNA data
     if use_subsample:
         # subsample the data for plotting
+        subsample_n_obs = min(1000, len(adata_1))
         adata_1_sub = adata_1[np.random.choice(len(adata_1), 1000, replace=False)]
         sns.countplot(data=adata_1_sub.obs, x="cell_types", ax=axes[0])
     else:
@@ -110,7 +111,8 @@ def plot_cell_type_distribution(adata_1, adata_2, use_subsample=True):
     # Protein data
     if use_subsample:
         # subsample the data for plotting
-        adata_2_sub = adata_2[np.random.choice(len(adata_2), 1000, replace=False)]
+        subsample_n_obs = min(1000, len(adata_2))
+        adata_2_sub = adata_2[np.random.choice(len(adata_2), subsample_n_obs, replace=False)]
         sns.countplot(data=adata_2_sub.obs, x="cell_types", ax=axes[1])
     else:
         sns.countplot(data=adata_2.obs, x="cell_types", ax=axes[1])
@@ -836,8 +838,8 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
     """Plot combined latent space visualizations"""
     # Subsample if requested
     if use_subsample:
-        n_subsample = min(10000, combined_latent.shape[0])
-        subsample_idx = np.random.choice(combined_latent.shape[0], n_subsample, replace=False)
+        subsample_n_obs = min(1000, combined_latent.shape[0])
+        subsample_idx = np.random.choice(combined_latent.shape[0], subsample_n_obs, replace=False)
         combined_latent_plot = combined_latent[subsample_idx].copy()
     else:
         combined_latent_plot = combined_latent.copy()
@@ -1006,7 +1008,15 @@ def plot_neighbor_means(adata_2_prot, neighbor_means):
 
 def plot_spatial_clusters(adata_2_prot, neighbor_means):
     """Plot spatial clusters and related visualizations."""
+
+    # if the color pallete does not match the number of categories, add more colors
+    if "CN_colors" in adata_2_prot.uns:
+        if len(adata_2_prot.uns["CN_colors"]) < len(adata_2_prot.obs["CN"].cat.categories):
+            new_palette = sns.color_palette("tab10", len(adata_2_prot.obs["CN"].cat.categories))
+            adata_2_prot.uns["CN_colors"] = new_palette.as_hex()
+
     fig, ax = plt.subplots()
+
     sc.pl.scatter(
         adata_2_prot,
         x="X",
