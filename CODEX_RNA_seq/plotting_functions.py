@@ -33,6 +33,7 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # %%
 # Imports
 # %%
+
 import importlib
 
 import cell_lists
@@ -52,20 +53,20 @@ importlib.reload(cell_lists)
 importlib.reload(bar_nick_utils)
 
 
-def safe_mlflow_log_figure(fig, filename):
+def safe_mlflow_log_figure(fig, file_path):
     """Safely log a figure to MLflow if an experiment is active."""
     try:
-        # If filename starts with step_, save to train folder in MLflow artifacts
-        if filename.startswith("step_"):
+        # If file_path starts with step_, save to train folder in MLflow artifacts
+        if file_path.startswith("step_"):
             # Extract step number and pad with leading zeros
-            step_num = filename.split("_")[1].split(".")[0]
+            step_num = file_path.split("_")[1].split(".")[0]
             padded_step = f"{int(step_num):05d}"
-            new_filename = f"step_{padded_step}_{'_'.join(filename.split('_')[2:])}"
+            new_filename = f"step_{padded_step}_{'_'.join(file_path.split('_')[2:])}"
             # Log to MLflow in train folder with padded step number
             mlflow.log_figure(fig, f"train/{new_filename}")
         else:
             # Regular logging for non-step files
-            mlflow.log_figure(fig, filename)
+            mlflow.log_figure(fig, file_path)
     except Exception as e:
         print(f"Warning: Could not log figure to MLflow: {str(e)}")
         print("Continuing without MLflow logging...")
@@ -211,6 +212,206 @@ def plot_spatial_data_comparison(adata_rna, adata_prot):
 
 # %% VAE Plotting Functions
 # This module contains functions for plotting VAE-specific visualizations.
+def plot_train_val_normalized_losses(history):
+    """Plot training and validation losses normalized in the same figure.
+
+    Args:
+        history: Dictionary containing training and validation loss histories
+
+    This function:
+    1. Uses epoch-wise means of the losses
+    2. Normalizes the losses for better visualization (0-1 range)
+    3. Plots training and validation losses in separate subplots for easier comparison
+    4. Uses consistent colors for the same loss type across both plots
+    """
+    try:
+        # Debug print of the history keys we received
+        print("DEBUG: plot_train_val_normalized_losses received history with keys:")
+        for k, v in history.items():
+            if isinstance(v, list):
+                print(f"  {k}: {len(v)} items")
+                if k.startswith("val_") and len(v) > 0:
+                    print(f"    First few values: {v[:min(3, len(v))]}")
+
+        # Get all loss keys from history
+        loss_keys = [k for k in history.keys() if "loss" in k.lower() and len(history[k]) > 0]
+
+        # Split into train and validation losses
+        train_loss_keys = [k for k in loss_keys if k.startswith("train_")]
+        val_loss_keys = [k for k in loss_keys if k.startswith("val_") and k != "val_epochs"]
+
+        # Skip if we don't have both train and val losses
+        if not train_loss_keys:
+            print("Not enough data to plot train losses")
+            return
+
+        # Create figure with two vertically stacked subplots
+        fig, axes = plt.subplots(2, 1, figsize=(10, 11), sharex=True)
+
+        # Dictionary to hold normalized losses
+        train_normalized_losses = {}
+        val_normalized_losses = {}
+
+        # Get the validation epochs information
+        val_epochs = history.get("val_epochs", [])
+
+        # If val_epochs is not available or empty, create a simple range based on validation data
+        val_data_lengths = [len(history.get(k, [])) for k in val_loss_keys]
+        max_val_length = max(val_data_lengths) if val_data_lengths else 0
+
+        if not val_epochs and max_val_length > 0:
+            val_epochs = list(range(max_val_length))
+            print(f"Created {len(val_epochs)} validation epochs (one per validation point)")
+        else:
+            print(f"Using {len(val_epochs)} validation epochs from history")
+
+        # Create epochs array for training data
+        # Take the length of the longest train loss array
+        train_data_lengths = [len(history.get(k, [])) for k in train_loss_keys]
+        max_train_length = max(train_data_lengths) if train_data_lengths else 0
+        train_epochs = list(range(max_train_length))
+        print(f"Using {len(train_epochs)} training epochs")
+
+        # Format value helper function
+        def format_value(value):
+            """Format numeric values - round to integer if >= 10"""
+            if abs(value) >= 10:
+                return f"{int(round(value))}"
+            else:
+                return f"{value:.2f}"
+
+        # Get all unique loss types (without train/val prefix)
+        all_loss_types = set()
+        for key in train_loss_keys + val_loss_keys:
+            loss_type = key.replace("train_", "").replace("val_", "")
+            all_loss_types.add(loss_type)
+
+        # Create a fixed color mapping using the standard matplotlib color cycle
+        color_map = {}
+        prop_cycle = plt.rcParams["axes.prop_cycle"]
+        colors = prop_cycle.by_key()["color"]
+
+        # Ensure the same loss type gets the same color in both plots
+        for i, loss_type in enumerate(sorted(all_loss_types)):
+            color_idx = i % len(colors)
+            color_map[loss_type] = colors[color_idx]
+
+        # Process training losses
+        for train_key in train_loss_keys:
+            if train_key in history and len(history[train_key]) > 0:
+                train_values = np.array(history[train_key], dtype=np.float64)
+                # Remove inf and nan
+                train_values = train_values[~np.isinf(train_values) & ~np.isnan(train_values)]
+
+                if len(train_values) > 0:
+                    loss_type = train_key.replace("train_", "")
+                    # Normalize to 0-1 range
+                    min_val = np.min(train_values)
+                    max_val = np.max(train_values)
+                    if max_val > min_val:  # Avoid division by zero
+                        train_normalized_losses[loss_type] = {
+                            "values": (train_values - min_val) / (max_val - min_val),
+                            "min": min_val,
+                            "max": max_val,
+                        }
+
+        # Plot training losses
+        for loss_type, data in train_normalized_losses.items():
+            label = f"{loss_type.replace('_', ' ').title()} (min:{format_value(data['min'])}, max:{format_value(data['max'])})"
+            axes[0].plot(
+                train_epochs[: len(data["values"])],
+                data["values"],
+                label=label,
+                alpha=0.8,
+                color=color_map.get(loss_type),
+                linewidth=2,
+            )
+
+        # Process validation losses - only if we have validation data
+        has_val_data = False
+        for val_key in val_loss_keys:
+            if val_key in history and len(history[val_key]) > 0:
+                val_values = np.array(history[val_key], dtype=np.float64)
+                # Remove inf and nan
+                val_values = val_values[~np.isinf(val_values) & ~np.isnan(val_values)]
+
+                if len(val_values) > 0:
+                    has_val_data = True
+                    loss_type = val_key.replace("val_", "")
+                    # Normalize to 0-1 range
+                    min_val = np.min(val_values)
+                    max_val = np.max(val_values)
+                    if max_val > min_val:  # Avoid division by zero
+                        val_normalized_losses[loss_type] = {
+                            "values": (val_values - min_val) / (max_val - min_val),
+                            "min": min_val,
+                            "max": max_val,
+                        }
+
+        # Plot validation losses - only if we have data
+        if has_val_data:
+            for loss_type, data in val_normalized_losses.items():
+                val_epochs_plot = val_epochs[: len(data["values"])]
+
+                label = f"{loss_type.replace('_', ' ').title()} (min:{format_value(data['min'])}, max:{format_value(data['max'])})"
+                axes[1].plot(
+                    val_epochs_plot,
+                    data["values"],
+                    label=label,
+                    alpha=0.8,
+                    marker="o",
+                    markersize=5,
+                    color=color_map.get(loss_type),
+                    linewidth=2,
+                )
+        else:
+            # If we have no validation data, add a message
+            axes[1].text(
+                0.5,
+                0.5,
+                "No validation data available",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=axes[1].transAxes,
+                fontsize=14,
+            )
+
+        # Set titles and labels
+        axes[0].set_title("Normalized Training Losses (0-1 scale)")
+        axes[1].set_title("Normalized Validation Losses (0-1 scale)")
+        axes[1].set_xlabel("Epoch")
+        axes[0].set_ylabel("Normalized Loss")
+        axes[1].set_ylabel("Normalized Loss")
+
+        # Add legends outside the plots
+        axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        if has_val_data:
+            axes[1].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+
+        # Add grid
+        axes[0].grid(True)
+        axes[1].grid(True)
+
+        # Add a shared y-axis limit from 0 to 1
+        axes[0].set_ylim(0, 1.05)
+        axes[1].set_ylim(0, 1.05)
+
+        # Set a fixed x-axis limit to match training epochs
+        max_epoch = max(len(train_epochs) - 1, max(val_epochs) if val_epochs else 0)
+        axes[0].set_xlim(-0.1, max_epoch + 0.1)
+
+        # Adjust layout to fit the legend outside
+        plt.tight_layout()
+        plt.subplots_adjust(right=0.75)  # Make space for legend
+
+        safe_mlflow_log_figure(plt.gcf(), "train_val_normalized_losses.png")
+        plt.close()
+    except Exception as e:
+        print(f"Error plotting normalized losses: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        # Don't let plotting errors disrupt training
 
 
 def plot_latent_pca_both_modalities_cn(
@@ -762,6 +963,50 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
+def plot_end_of_epoch_umap_latent_space(prefix, combined_latent, epoch):
+    sc.tl.umap(combined_latent)
+
+    # Create a figure with the UMAP visualizations colored by different factors
+    fig = plt.figure(figsize=(15, 5))
+
+    # Plot UMAP colored by modality
+    ax1 = fig.add_subplot(1, 3, 1)
+    sc.pl.umap(
+        combined_latent,
+        color="modality",
+        ax=ax1,
+        show=False,
+        title=f"{prefix}Combined Latent UMAP by Modality",
+    )
+
+    # Plot UMAP colored by cell type
+    ax2 = fig.add_subplot(1, 3, 2)
+    sc.pl.umap(
+        combined_latent,
+        color="cell_types",
+        ax=ax2,
+        show=False,
+        title=f"{prefix}Combined Latent UMAP by Cell Type",
+    )
+
+    # Plot UMAP colored by neighborhood
+    ax3 = fig.add_subplot(1, 3, 3)
+    sc.pl.umap(
+        combined_latent, color="CN", ax=ax3, show=False, title=f"{prefix}Combined Latent UMAP by CN"
+    )
+
+    plt.tight_layout()
+
+    # Save figure for MLflow logging
+    umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}.png"
+    plt.savefig(umap_file, dpi=200, bbox_inches="tight")
+    if hasattr(mlflow, "active_run") and mlflow.active_run():
+        mlflow.log_artifact(umap_file, artifact_path="train")
+    plt.close(fig)
+
+    print(f"   ✓ {prefix}combined latent UMAP visualized and saved")
+
+
 def plot_cosine_distance(rna_batch, protein_batch):
     umap_model = UMAP(n_components=2, random_state=42).fit(rna_batch["archetype_vec"], min_dist=5)
     # Transform both modalities using the same UMAP model
@@ -896,7 +1141,9 @@ def plot_cell_type_distributions(combined_latent, top_n=3, use_subsample=True):
             alpha=0.5,
         )
         plt.tight_layout()
-        safe_mlflow_log_figure(plt.gcf(), f"cell_type_distribution_{cell_type}.png")
+        safe_mlflow_log_figure(
+            plt.gcf(), f"cell_type_distribution/cell_type_distribution_{cell_type}.png"
+        )
 
 
 def plot_rna_protein_latent_cn_cell_type_umap(rna_adata, protein_adata, use_subsample=True):

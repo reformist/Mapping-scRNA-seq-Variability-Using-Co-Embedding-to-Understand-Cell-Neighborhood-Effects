@@ -122,7 +122,6 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(project_root)
-
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -135,6 +134,12 @@ import scanpy as sc
 import scvi
 import torch
 from anndata import AnnData
+from plotting_functions import (
+    plot_latent_pca_both_modalities_by_celltype,
+    plot_latent_pca_both_modalities_cn,
+    plot_rna_protein_matching_means_and_scale,
+    plot_similarity_loss_history,
+)
 from scipy.sparse import issparse
 from scvi.model import SCVI
 from scvi.train import TrainingPlan
@@ -154,13 +159,6 @@ import CODEX_RNA_seq.logging_functions
 from CODEX_RNA_seq.logging_functions import log_epoch_end, log_step
 
 importlib.reload(CODEX_RNA_seq.logging_functions)
-
-from plotting_functions import (
-    plot_latent_pca_both_modalities_by_celltype,
-    plot_latent_pca_both_modalities_cn,
-    plot_rna_protein_matching_means_and_scale,
-    plot_similarity_loss_history,
-)
 
 from bar_nick_utils import (
     clean_uns_for_h5ad,
@@ -281,6 +279,10 @@ class DualVAETrainingPlan(TrainingPlan):
         self.val_contrastive_losses = []
         self.val_adv_losses = []
         self.val_cell_type_clustering_losses = []  # New list for cell type clustering losses
+        # Add new validation lists
+        self.val_similarity_losses = []
+        self.val_similarity_losses_raw = []
+        self.val_latent_distances = []
         self.early_stopping_callback = None  # Will be set by trainer
 
         # Setup logging
@@ -468,21 +470,29 @@ class DualVAETrainingPlan(TrainingPlan):
             self.kl_weight_prot,
         )
 
-        # Store validation losses
-        self.val_losses.append(losses["total_loss"].item())
-        self.val_rna_losses.append(losses["rna_loss"].item())
-        self.val_protein_losses.append(losses["protein_loss"].item())
-        self.val_matching_losses.append(losses["matching_loss"].item())
-        self.val_contrastive_losses.append(losses["contrastive_loss"].item())
-        self.val_cell_type_clustering_losses.append(losses["cell_type_clustering_loss"].item())
+        # We'll accumulate losses in self.current_val_losses rather than self.val_losses directly
+        # This accumulation will be handled in on_validation_epoch_end
+        if not hasattr(self, "current_val_losses"):
+            # Initialize dictionary
+            self.current_val_losses = {}
 
-        # Log validation metrics
-        # self.log("val_total_loss", losses["total_loss"], on_step=False, on_epoch=True, prog_bar=True)
-        # self.log("val_rna_loss", losses["rna_loss"], on_step=False, on_epoch=True)
-        # self.log("val_protein_loss", losses["protein_loss"], on_step=False, on_epoch=True)
-        # self.log("val_matching_loss", losses["matching_loss"], on_step=False, on_epoch=True)
-        # self.log("val_contrastive_loss", losses["contrastive_loss"], on_step=False, on_epoch=True)
-        # self.log("val_cell_type_clustering_loss", losses["cell_type_clustering_loss"], on_step=False, on_epoch=True)
+        # Process each loss value
+        for k, v in losses.items():
+            value = v.item() if hasattr(v, "item") else float(v)
+
+            # Add to current_val_losses
+            if k not in self.current_val_losses:
+                self.current_val_losses[k] = [value]
+            else:
+                self.current_val_losses[k].append(value)
+
+        # Debug log every 20th batch
+        if batch_idx % 20 == 0:
+            print(
+                f"Validation batch {batch_idx}, accumulated {len(self.current_val_losses.get('total_loss', []))} validation samples"
+            )
+
+        # Log metrics
         metrics = {}
 
         log_step(
@@ -567,6 +577,9 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         sc.pp.pca(combined_latent)
         sc.pp.neighbors(combined_latent, n_neighbors=10)
+
+        pf.plot_end_of_epoch_umap_latent_space(prefix, combined_latent, epoch=self.current_epoch)
+
         ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(combined_latent)
         print(f"   ✓ {prefix}ARI F1 calculated")
 
@@ -579,7 +592,13 @@ class DualVAETrainingPlan(TrainingPlan):
     def on_validation_epoch_end(self):
         """Calculate and store metrics at the end of each validation epoch."""
         print(f"\nProcessing validation epoch {self.current_epoch}...")
-        self.validation_step_ = 0
+
+        # Debug print validation losses before processing
+        print(f"DEBUG: Before processing - Validation loss array lengths:")
+        print(f"  val_losses: {len(self.val_losses)}")
+        print(f"  val_rna_losses: {len(self.val_rna_losses)}")
+        print(f"  val_similarity_losses: {len(self.val_similarity_losses)}")
+
         # Calculate validation metrics
         val_metrics = self.calculate_metrics_for_data(
             self.rna_vae.adata[self.val_indices_rna],
@@ -602,6 +621,51 @@ class DualVAETrainingPlan(TrainingPlan):
         # Store in history
         self.metrics_history.append(epoch_metrics)
         print("   ✓ Metrics stored")
+
+        # Now process accumulated validation losses from validation_step
+        # These are the epoch-level means of the batch-level losses
+        if hasattr(self, "current_val_losses") and self.current_val_losses:
+            # Calculate mean for each loss type
+            for loss_type, values in self.current_val_losses.items():
+                if values:
+                    mean_value = sum(values) / len(values)
+
+                    # Append to the appropriate list
+                    if loss_type == "total_loss":
+                        self.val_losses.append(mean_value)
+                    elif loss_type == "rna_loss":
+                        self.val_rna_losses.append(mean_value)
+                    elif loss_type == "protein_loss":
+                        self.val_protein_losses.append(mean_value)
+                    elif loss_type == "matching_loss":
+                        self.val_matching_losses.append(mean_value)
+                    elif loss_type == "contrastive_loss":
+                        self.val_contrastive_losses.append(mean_value)
+                    elif loss_type == "cell_type_clustering_loss":
+                        self.val_cell_type_clustering_losses.append(mean_value)
+                    elif loss_type == "similarity_loss":
+                        self.val_similarity_losses.append(mean_value)
+                    elif loss_type == "similarity_loss_raw":
+                        self.val_similarity_losses_raw.append(mean_value)
+                    elif loss_type == "latent_distances":
+                        self.val_latent_distances.append(mean_value)
+
+            # Reset current_val_losses for next epoch
+            self.current_val_losses = {}
+
+            print(f"   ✓ Validation losses stored (epoch {self.current_epoch})")
+            print(f"   ✓ Current validation history length: {len(self.val_losses)}")
+        else:
+            print("WARNING: No validation losses to process for this epoch!")
+
+        # Debug print validation losses after processing
+        print(f"DEBUG: After processing - Validation loss array lengths:")
+        print(f"  val_losses: {len(self.val_losses)}")
+        print(f"  val_rna_losses: {len(self.val_rna_losses)}")
+        print(f"  val_similarity_losses: {len(self.val_similarity_losses)}")
+
+        # Reset validation step counter
+        self.validation_step_ = 0
 
         # Log metrics to MLflow
         mlflow.log_metrics(epoch_metrics, step=self.current_epoch)
@@ -651,6 +715,35 @@ class DualVAETrainingPlan(TrainingPlan):
             pf.plot_training_metrics_history(
                 self.metrics_history,
             )
+
+        # Plot train and validation normalized losses
+        history = self.get_history()
+
+        # Save the training history to a JSON file for reference
+        history_path = f"{self.checkpoint_dir}/training_history.json"
+        try:
+            # Convert numpy arrays to lists for JSON serialization
+            json_history = {}
+            for key, value in history.items():
+                if isinstance(value, np.ndarray):
+                    json_history[key] = value.tolist()
+                elif isinstance(value, list) and value and isinstance(value[0], np.ndarray):
+                    json_history[key] = [v.tolist() for v in value]
+                else:
+                    json_history[key] = value
+
+            with open(history_path, "w") as f:
+                json.dump(json_history, f, indent=2)
+            print(f"✓ Training history saved to {history_path}")
+
+            # Log history JSON as artifact
+            mlflow.log_artifact(history_path)
+        except Exception as e:
+            print(f"Warning: Failed to save training history: {str(e)}")
+
+        # Plot the losses
+        pf.plot_train_val_normalized_losses(history)
+        print("   ✓ Train/validation normalized losses plotted")
 
         # Find best metrics
         if hasattr(self, "metrics_history"):
@@ -791,20 +884,86 @@ class DualVAETrainingPlan(TrainingPlan):
         return rna_batch
 
     def get_history(self):
-        """Return the training history including similarity losses"""
-        return {
-            "train_similarity_loss": self.similarity_losses,
-            "train_similarity_loss_raw": self.similarity_losses_raw,
-            "train_total_loss": self.train_losses,
-            "train_rna_loss": self.train_rna_losses,
-            "train_protein_loss": self.train_protein_losses,
-            "train_matching_loss": self.train_matching_losses,
-            "train_contrastive_loss": self.train_contrastive_losses,
-            "train_adv_loss": self.train_adv_losses,
-            "train_cell_type_clustering_loss": self.train_cell_type_clustering_losses,
-            "val_total_loss": self.val_losses,
+        """Return the training history including similarity losses with proper epoch alignment"""
+        # Calculate steps per epoch
+        steps_per_epoch = int(np.ceil(len(self.train_indices_rna) / self.batch_size))
+
+        # Calculate actual number of epochs run
+        num_epochs = len(self.val_losses)  # Each validation loss corresponds to one epoch
+
+        # Debug print raw loss history arrays
+        print(f"DEBUG: Raw loss history arrays")
+        print(f"  train_losses: {len(self.train_losses)} items")
+        print(f"  val_losses: {len(self.val_losses)} items")
+        if len(self.val_losses) > 0:
+            print(f"  val_losses values: {self.val_losses}")
+
+        # Group losses by epoch to get mean values
+        def get_epoch_means(loss_list):
+            """Calculate epoch means from a list of loss values"""
+            # Skip if no data
+            if not loss_list:
+                return []
+
+            # Convert to numpy array
+            loss_array = np.array(loss_list)
+            # Filter out invalid values
+            loss_array = loss_array[~np.isinf(loss_array) & ~np.isnan(loss_array)]
+
+            # Return empty list if no valid values
+            if len(loss_array) == 0:
+                return []
+
+            # Split by epoch and take mean
+            num_epochs = max(1, len(loss_array) // steps_per_epoch)
+            epoch_means = []
+
+            for i in range(num_epochs):
+                start_idx = i * steps_per_epoch
+                end_idx = min((i + 1) * steps_per_epoch, len(loss_array))
+                if start_idx < end_idx:  # Only compute if we have data
+                    epoch_mean = np.mean(loss_array[start_idx:end_idx])
+                    epoch_means.append(epoch_mean)
+
+            return epoch_means
+
+        # Directly use validation epoch indices based on the actual number of epochs
+        # In DualVAETrainingPlan, validation runs at the end of each epoch
+        val_epochs = list(range(num_epochs))
+
+        # Create history dictionary with epoch means
+        history = {
+            "train_similarity_loss": get_epoch_means(self.similarity_losses),
+            "train_similarity_loss_raw": get_epoch_means(self.similarity_losses_raw),
+            "train_total_loss": get_epoch_means(self.train_losses),
+            "train_rna_loss": get_epoch_means(self.train_rna_losses),
+            "train_protein_loss": get_epoch_means(self.train_protein_losses),
+            "train_matching_loss": get_epoch_means(self.train_matching_losses),
+            "train_contrastive_loss": get_epoch_means(self.train_contrastive_losses),
+            "train_cell_type_clustering_loss": get_epoch_means(
+                self.train_cell_type_clustering_losses
+            ),
+            "val_total_loss": self.val_losses,  # Validation losses are already per-epoch
             "val_rna_loss": self.val_rna_losses,
+            "val_protein_loss": self.val_protein_losses,
+            "val_matching_loss": self.val_matching_losses,
+            "val_contrastive_loss": self.val_contrastive_losses,
+            "val_similarity_loss": self.val_similarity_losses,
+            "val_similarity_loss_raw": self.val_similarity_losses_raw,
+            "val_cell_type_clustering_loss": self.val_cell_type_clustering_losses,
+            # Also include the validation epoch indices
+            "val_epochs": val_epochs,
         }
+
+        # Debug print processed history
+        print(f"DEBUG: Processed history")
+        for k, v in history.items():
+            if isinstance(v, list):
+                print(f"  {k}: {len(v)} items")
+                if k.startswith("val_") and len(v) > 0:
+                    print(f"    values: {v}")
+
+        return history
 
     def on_early_stopping(self):
         """Called when early stopping is triggered."""
