@@ -64,6 +64,8 @@ importlib.reload(CODEX_RNA_seq.logging_functions)
 importlib.reload(CODEX_RNA_seq.metrics)
 importlib.reload(CODEX_RNA_seq.training_utils)
 
+from CODEX_RNA_seq.logging_functions import log_epoch_end, log_step
+
 # Import training utilities
 from CODEX_RNA_seq.training_utils import (
     Tee,
@@ -154,10 +156,6 @@ import CODEX_RNA_seq.logging_functions
 
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
-# Force reimport logging functions
-import CODEX_RNA_seq.logging_functions
-from CODEX_RNA_seq.logging_functions import log_epoch_end, log_step
-
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
 from bar_nick_utils import (
@@ -219,6 +217,7 @@ class DualVAETrainingPlan(TrainingPlan):
         device = kwargs.pop("device", "cuda:0" if torch.cuda.is_available() else "cpu")
         # Verify train and validation sizes sum to 1
         self.metrics_history = []
+        self.gradient_clip_val = kwargs.pop("gradient_clip_val", 0.8)
 
         if abs(train_size + validation_size - 1.0) > 1e-6:
             raise ValueError("train_size + validation_size must sum to 1.0")
@@ -347,7 +346,7 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         d = {
             "optimizer": optimizer,
-            "gradient_clip_val": 1.0,  # Critical for stability
+            "gradient_clip_val": self.gradient_clip_val,
             "gradient_clip_algorithm": "value",
         }
         return d
@@ -575,10 +574,11 @@ class DualVAETrainingPlan(TrainingPlan):
             label="modality",
             keys=["RNA", "Protein"],
         )
-        sc.pp.pca(combined_latent)
-        sc.pp.neighbors(combined_latent, n_neighbors=10)
+        sc.pp.neighbors(combined_latent)
 
-        pf.plot_end_of_epoch_umap_latent_space(prefix, combined_latent, epoch=self.current_epoch)
+        pf.plot_end_of_val_epoch_umap_latent_space(
+            prefix, combined_latent, epoch=self.current_epoch
+        )
 
         ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(combined_latent)
         print(f"   ✓ {prefix}ARI F1 calculated")
@@ -927,9 +927,9 @@ class DualVAETrainingPlan(TrainingPlan):
 
             return epoch_means
 
-        # Directly use validation epoch indices based on the actual number of epochs
-        # In DualVAETrainingPlan, validation runs at the end of each epoch
-        val_epochs = list(range(num_epochs))
+        # Calculate validation epochs based on check_val_every_n_epoch
+        check_val_every_n_epoch = self.trainer.check_val_every_n_epoch
+        val_epochs = [i * check_val_every_n_epoch for i in range(num_epochs)]
 
         # Create history dictionary with epoch means
         history = {
@@ -954,14 +954,6 @@ class DualVAETrainingPlan(TrainingPlan):
             # Also include the validation epoch indices
             "val_epochs": val_epochs,
         }
-
-        # Debug print processed history
-        print(f"DEBUG: Processed history")
-        for k, v in history.items():
-            if isinstance(v, list):
-                print(f"  {k}: {len(v)} items")
-                if k.startswith("val_") and len(v) > 0:
-                    print(f"    values: {v}")
 
         return history
 
@@ -1066,6 +1058,7 @@ def train_vae(
         "lr": lr,
         "kl_weight_rna": kl_weight_rna,
         "kl_weight_prot": kl_weight_prot,
+        "gradient_clip_val": gradient_clip_val,
     }
     train_kwargs = {
         "max_epochs": max_epochs,
@@ -1073,7 +1066,6 @@ def train_vae(
         "train_size": train_size,
         "validation_size": validation_size,
         "check_val_every_n_epoch": check_val_every_n_epoch,
-        "gradient_clip_val": gradient_clip_val,
         "accumulate_grad_batches": accumulate_grad_batches,
     }
     print("Plan parameters:")
@@ -1193,7 +1185,7 @@ if __name__ == "__main__":
         "adv_weight": 0.0,
         "train_size": 0.9,
         "validation_size": 0.1,
-        "check_val_every_n_epoch": 100000,
+        "check_val_every_n_epoch": 2,
         "gradient_clip_val": 1.0,
     }
 

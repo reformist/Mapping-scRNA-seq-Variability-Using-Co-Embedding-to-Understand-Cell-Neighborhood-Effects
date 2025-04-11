@@ -223,16 +223,9 @@ def plot_train_val_normalized_losses(history):
     2. Normalizes the losses for better visualization (0-1 range)
     3. Plots training and validation losses in separate subplots for easier comparison
     4. Uses consistent colors for the same loss type across both plots
+    5. Properly handles validation data collected at intervals (check_val_every_n_epoch)
     """
     try:
-        # Debug print of the history keys we received
-        print("DEBUG: plot_train_val_normalized_losses received history with keys:")
-        for k, v in history.items():
-            if isinstance(v, list):
-                print(f"  {k}: {len(v)} items")
-                if k.startswith("val_") and len(v) > 0:
-                    print(f"    First few values: {v[:min(3, len(v))]}")
-
         # Get all loss keys from history
         loss_keys = [k for k in history.keys() if "loss" in k.lower() and len(history[k]) > 0]
 
@@ -240,13 +233,13 @@ def plot_train_val_normalized_losses(history):
         train_loss_keys = [k for k in loss_keys if k.startswith("train_")]
         val_loss_keys = [k for k in loss_keys if k.startswith("val_") and k != "val_epochs"]
 
-        # Skip if we don't have both train and val losses
+        # Skip if we don't have training losses
         if not train_loss_keys:
-            print("Not enough data to plot train losses")
+            print("No training loss data available")
             return
 
         # Create figure with two vertically stacked subplots
-        fig, axes = plt.subplots(2, 1, figsize=(10, 11), sharex=True)
+        fig, axes = plt.subplots(2, 1, figsize=(14, 11), sharex=True)
 
         # Dictionary to hold normalized losses
         train_normalized_losses = {}
@@ -254,19 +247,15 @@ def plot_train_val_normalized_losses(history):
 
         # Get the validation epochs information
         val_epochs = history.get("val_epochs", [])
-
-        # If val_epochs is not available or empty, create a simple range based on validation data
-        val_data_lengths = [len(history.get(k, [])) for k in val_loss_keys]
-        max_val_length = max(val_data_lengths) if val_data_lengths else 0
-
-        if not val_epochs and max_val_length > 0:
-            val_epochs = list(range(max_val_length))
+        if not val_epochs and any(val_loss_keys):
+            # If val_epochs not provided but we have validation data,
+            # create epochs based on first validation loss array length
+            val_epochs = list(range(len(history[val_loss_keys[0]])))
             print(f"Created {len(val_epochs)} validation epochs (one per validation point)")
         else:
             print(f"Using {len(val_epochs)} validation epochs from history")
 
         # Create epochs array for training data
-        # Take the length of the longest train loss array
         train_data_lengths = [len(history.get(k, [])) for k in train_loss_keys]
         max_train_length = max(train_data_lengths) if train_data_lengths else 0
         train_epochs = list(range(max_train_length))
@@ -286,12 +275,10 @@ def plot_train_val_normalized_losses(history):
             loss_type = key.replace("train_", "").replace("val_", "")
             all_loss_types.add(loss_type)
 
-        # Create a fixed color mapping using the standard matplotlib color cycle
+        # Create a fixed color mapping
         color_map = {}
         prop_cycle = plt.rcParams["axes.prop_cycle"]
         colors = prop_cycle.by_key()["color"]
-
-        # Ensure the same loss type gets the same color in both plots
         for i, loss_type in enumerate(sorted(all_loss_types)):
             color_idx = i % len(colors)
             color_map[loss_type] = colors[color_idx]
@@ -351,6 +338,7 @@ def plot_train_val_normalized_losses(history):
         # Plot validation losses - only if we have data
         if has_val_data:
             for loss_type, data in val_normalized_losses.items():
+                # Use the actual validation epochs from history
                 val_epochs_plot = val_epochs[: len(data["values"])]
 
                 label = f"{loss_type.replace('_', ' ').title()} (min:{format_value(data['min'])}, max:{format_value(data['max'])})"
@@ -365,7 +353,6 @@ def plot_train_val_normalized_losses(history):
                     linewidth=2,
                 )
         else:
-            # If we have no validation data, add a message
             axes[1].text(
                 0.5,
                 0.5,
@@ -963,7 +950,7 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
-def plot_end_of_epoch_umap_latent_space(prefix, combined_latent, epoch):
+def plot_end_of_val_epoch_umap_latent_space(prefix, combined_latent, epoch):
     sc.tl.umap(combined_latent)
 
     # Create a figure with the UMAP visualizations colored by different factors

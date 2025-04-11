@@ -9,7 +9,6 @@ from pprint import pprint
 import anndata as ad
 import mlflow
 import numpy as np
-import pandas as pd
 import psutil
 import scanpy as sc
 import torch
@@ -87,27 +86,19 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
 
 def process_latent_spaces(rna_adata, protein_adata):
     """Process and combine latent spaces from both modalities."""
-    # Get latent representations
-    latent_rna = rna_adata.obsm["X_scVI"]
-    latent_prot = protein_adata.obsm["X_scVI"]
 
     # Store latent representations
     SCVI_LATENT_KEY = "X_scVI"
-    rna_adata.obs["CN"] = rna_adata.obs["CN"].values
-    rna_adata.obsm[SCVI_LATENT_KEY] = latent_rna
-    protein_adata.obsm[SCVI_LATENT_KEY] = latent_prot
-
     # Prepare AnnData objects
     rna_latent = AnnData(rna_adata.obsm[SCVI_LATENT_KEY].copy())
     prot_latent = AnnData(protein_adata.obsm[SCVI_LATENT_KEY].copy())
     rna_latent.obs = rna_adata.obs.copy()
     prot_latent.obs = protein_adata.obs.copy()
 
-    # Run dimensionality reduction
-    sc.pp.pca(rna_latent)
+    rna_latent.obsm.pop("X_pca", None)
+    prot_latent.obsm.pop("X_pca", None)
     sc.pp.neighbors(rna_latent)
     sc.tl.umap(rna_latent)
-    sc.pp.pca(prot_latent)
     sc.pp.neighbors(prot_latent)
     sc.tl.umap(prot_latent)
 
@@ -118,20 +109,9 @@ def process_latent_spaces(rna_adata, protein_adata):
         label="modality",
         keys=["RNA", "Protein"],
     )
-    combined_major_cell_types = pd.concat(
-        (rna_adata.obs["major_cell_types"], protein_adata.obs["major_cell_types"]),
-        join="outer",
-    )
-    combined_latent.obs["major_cell_types"] = combined_major_cell_types
-    combined_latent.obs["cell_types"] = pd.concat(
-        (rna_adata.obs["cell_types"], protein_adata.obs["cell_types"]), join="outer"
-    )
-    combined_latent.obs["CN"] = pd.concat(
-        (rna_adata.obs["CN"], protein_adata.obs["CN"]), join="outer"
-    )
-    sc.pp.pca(combined_latent)
-    sc.pp.neighbors(combined_latent, n_neighbors=15)
-    sc.tl.umap(combined_latent, min_dist=0.1)
+
+    sc.pp.neighbors(combined_latent)
+    sc.tl.umap(combined_latent)
 
     return rna_latent, prot_latent, combined_latent
 
