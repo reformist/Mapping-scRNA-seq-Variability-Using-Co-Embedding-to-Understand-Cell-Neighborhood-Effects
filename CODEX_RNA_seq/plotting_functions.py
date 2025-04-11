@@ -1092,12 +1092,16 @@ def plot_combined_latent_space(combined_latent, use_subsample=True):
     safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_umap.png")
 
     # Plot PCA
+    if "X_pca" not in combined_latent_plot.obsm:
+        sc.pp.pca(combined_latent_plot)
     sc.pl.pca(
         combined_latent_plot,
         color=["CN", "modality"],
         title=["PCA Combined Latent space CN", "PCA Combined Latent space modality"],
         alpha=0.5,
     )
+    # remove the pca from the obsm to allow for neighbor to run on the latent space directly
+    combined_latent_plot.obsm.pop("X_pca", None)
     plt.tight_layout()
     safe_mlflow_log_figure(plt.gcf(), "combined_latent_space_pca.png")
 
@@ -1179,6 +1183,9 @@ def plot_archetype_embedding(rna_adata, protein_adata, use_subsample=True):
 
     prot_archtype = AnnData(protein_adata.obsm["archetype_vec"])
     prot_archtype.obs = protein_adata.obs.copy()
+    # remove the pca from the obsm to allow for neighbor to run on the latent space directly
+    rna_archtype.obsm.pop("X_pca", None)
+    prot_archtype.obsm.pop("X_pca", None)
 
     # Apply subsampling if requested
     if use_subsample:
