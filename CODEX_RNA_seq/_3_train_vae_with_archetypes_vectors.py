@@ -297,7 +297,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.ilisi_check_frequency = max(
             1, int(self.total_steps / 20)
         )  # Check ~20 times during training
-
+        self.ilisi_check_frequency = 1  # todo remove
         # Setup logging
 
         # Create run directory for checkpoint saves
@@ -366,6 +366,8 @@ class DualVAETrainingPlan(TrainingPlan):
         return d
 
     def training_step(self, batch, batch_idx):
+        self.rna_vae.module.train()
+        self.protein_vae.module.train()
         indices = range(self.batch_size)
         indices_rna = np.random.choice(
             self.train_indices_rna,
@@ -380,14 +382,40 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         indices_prot = np.sort(indices_prot)
 
+        # Debug print - model identity verification
+        if batch_idx == 0:
+            print(f"\nTraining models memory address:")
+            print(f"RNA VAE: {id(self.rna_vae.module)}")
+            print(f"Protein VAE: {id(self.protein_vae.module)}")
+
+            # Calculate parameter hash for verification
+            rna_params_hash = sum(p.sum().item() for p in self.rna_vae.module.parameters())
+            prot_params_hash = sum(p.sum().item() for p in self.protein_vae.module.parameters())
+            print(f"RNA param hash (train): {rna_params_hash:.4f}")
+            print(f"Protein param hash (train): {prot_params_hash:.4f}")
+
+            # Ensure models are in training mode
+            if not self.rna_vae.module.training:
+                print(
+                    "WARNING: RNA VAE was in eval mode during training step! Setting to train mode."
+                )
+                self.rna_vae.module.train()
+
+            if not self.protein_vae.module.training:
+                print(
+                    "WARNING: Protein VAE was in eval mode during training step! Setting to train mode."
+                )
+                self.protein_vae.module.train()
+
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
         # Determine if we should check iLISI this step
         check_ilisi = self.global_step % self.ilisi_check_frequency == 0
-
+        to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
         # Calculate all losses using the new function
         losses = calculate_losses(
+            self,
             rna_batch,
             protein_batch,
             self.rna_vae,
@@ -403,29 +431,29 @@ class DualVAETrainingPlan(TrainingPlan):
             plot_flag=plot_flag,
             global_step=self.global_step,
             total_steps=self.total_steps,
-            plot_x_times=self.plot_x_times,
+            to_plot=to_plot,
             check_ilisi=check_ilisi,
+            debug_step=0,
         )
 
         # Update last_ilisi_score if we calculated a new one
         if "ilisi_score" in losses:
             self.last_ilisi_score = losses["ilisi_score"]
-
-            # Dynamically adjust similarity weight based on iLISI score
-            if self.last_ilisi_score < 1.9:
+            ilisi_threshold = 1.8
+            if self.last_ilisi_score < ilisi_threshold:
                 # If iLISI is too low, increase the similarity weight
-                self.similarity_weight = min(1e8, self.similarity_weight * 10)
+                self.similarity_weight = min(1e7, self.similarity_weight * 10)
                 print(
-                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (< 1.9), increasing similarity weight to {self.similarity_weight}"
+                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (< {ilisi_threshold}), increasing similarity weight to {self.similarity_weight}"
                 )
                 # Also ensure similarity loss is active
                 self.similarity_active = True
                 self.similarity_loss_steady_counter = 0  # Reset steady state counter
-            elif self.similarity_weight > 100 and self.last_ilisi_score >= 1.9:
+            elif self.similarity_weight > 100 and self.last_ilisi_score >= ilisi_threshold:
                 # If iLISI is good and weight is high, reduce it gradually
                 self.similarity_weight = self.similarity_weight / 10
                 print(
-                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (>= 1.9), reducing similarity weight to {self.similarity_weight}"
+                    f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (>= {ilisi_threshold}), reducing similarity weight to {self.similarity_weight}"
                 )
         else:
             # Always include the last iLISI score in the losses
@@ -515,6 +543,8 @@ class DualVAETrainingPlan(TrainingPlan):
             The total validation loss
         """
         # Get validation batches
+        self.rna_vae.module.eval()
+        self.protein_vae.module.eval()
         indices = range(self.batch_size)
         self.validation_step_ += 1
         indices_prot = np.random.choice(
@@ -530,11 +560,40 @@ class DualVAETrainingPlan(TrainingPlan):
         )
         indices_rna = np.sort(indices_rna)
 
+        # Debug print - model identity verification
+        if batch_idx == 0:
+            print(f"\nValidation models memory address:")
+            print(f"RNA VAE: {id(self.rna_vae.module)}")
+            print(f"Protein VAE: {id(self.protein_vae.module)}")
+
+            # Calculate parameter hash for verification
+            rna_params_hash = sum(p.sum().item() for p in self.rna_vae.module.parameters())
+            prot_params_hash = sum(p.sum().item() for p in self.protein_vae.module.parameters())
+            print(f"RNA param hash (val): {rna_params_hash:.4f}")
+            print(f"Protein param hash (val): {prot_params_hash:.4f}")
+
+            # Set models to eval mode temporarily for validation
+            was_training_rna = self.rna_vae.module.training
+            was_training_prot = self.protein_vae.module.training
+
+            if was_training_rna:
+                print("RNA VAE switching from train mode to eval mode for validation")
+                self.rna_vae.module.eval()
+
+            if was_training_prot:
+                print("Protein VAE switching from train mode to eval mode for validation")
+                self.protein_vae.module.eval()
+
+            # Store training state to restore after validation
+            self._rna_was_training = was_training_rna
+            self._prot_was_training = was_training_prot
+
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
         # Calculate all losses using the same function as training
         losses = calculate_losses(
+            self,
             rna_batch,
             protein_batch,
             self.rna_vae,
@@ -547,6 +606,7 @@ class DualVAETrainingPlan(TrainingPlan):
             self.cell_type_clustering_weight,
             self.kl_weight_rna,
             self.kl_weight_prot,
+            debug_step=1,
         )
 
         # We'll accumulate losses in self.current_val_losses rather than self.val_losses directly
@@ -655,9 +715,9 @@ class DualVAETrainingPlan(TrainingPlan):
         # Calculate with parameters optimized for integration
         sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
 
-        pf.plot_end_of_val_epoch_pca_umap_latent_space(
-            prefix, combined_latent, epoch=self.current_epoch
-        )
+        # pf.plot_end_of_val_epoch_pca_umap_latent_space(
+        #     prefix, combined_latent, epoch=self.current_epoch
+        # )
 
         ari_f1 = CODEX_RNA_seq.metrics.compute_ari_f1(combined_latent)
         print(f"   ✓ {prefix}ARI F1 calculated")
@@ -668,15 +728,9 @@ class DualVAETrainingPlan(TrainingPlan):
             f"{prefix}ari_f1_score": ari_f1,
         }
 
-    def on_validation_epoch_end(self):
+    def on_validation_epoch_end_custom(self):
         """Calculate and store metrics at the end of each validation epoch."""
         print(f"\nProcessing validation epoch {self.current_epoch}...")
-
-        # Debug print validation losses before processing
-        print(f"DEBUG: Before processing - Validation loss array lengths:")
-        print(f"  val_losses: {len(self.val_losses)}")
-        print(f"  val_rna_losses: {len(self.val_rna_losses)}")
-        print(f"  val_similarity_losses: {len(self.val_similarity_losses)}")
 
         # Calculate validation metrics
         val_metrics = self.calculate_metrics_for_data(
@@ -751,7 +805,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         print(f"✓ Validation epoch {self.current_epoch} completed successfully!")
 
-    def on_train_end(self, plot_flag=True):
+    def on_train_end_custom(self, plot_flag=True):
         """Called when training ends."""
         print("\nTraining completed!")
 
@@ -759,7 +813,7 @@ class DualVAETrainingPlan(TrainingPlan):
         with torch.no_grad():
             # Use random 1000 indices for RNA
             indices_rna = np.random.choice(
-                range(self.rna_vae.adata.shape[0]), size=1000, replace=False
+                range(self.rna_vae.adata.shape[0]), size=self.rna_vae.adata.shape[0], replace=False
             )
             rna_batch = self._get_rna_batch(None, indices_rna)
             rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
@@ -767,7 +821,9 @@ class DualVAETrainingPlan(TrainingPlan):
 
             # Use random 1000 indices for protein
             indices_prot = np.random.choice(
-                range(self.protein_vae.adata.shape[0]), size=1000, replace=False
+                range(self.protein_vae.adata.shape[0]),
+                size=self.protein_vae.adata.shape[0],
+                replace=False,
             )
             protein_batch = self._get_protein_batch(None, indices_prot)
             prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
@@ -1223,8 +1279,8 @@ if __name__ == "__main__":
     # Define training parameters
     training_params = {
         "plot_x_times": 3,
-        "max_epochs": 20,
-        "batch_size": 1000,
+        "max_epochs": 1,
+        "batch_size": 128,
         "lr": 1e-4,
         "contrastive_weight": 0,
         "similarity_weight": 10.0,
@@ -1336,6 +1392,7 @@ if __name__ == "__main__":
 
 
 def calculate_losses(
+    self,
     rna_batch,
     protein_batch,
     rna_vae,
@@ -1351,8 +1408,9 @@ def calculate_losses(
     plot_flag=False,
     global_step=None,
     total_steps=None,
-    plot_x_times=None,
+    to_plot=False,
     check_ilisi=False,
+    debug_step=0,
 ):
     """Calculate all losses for a batch of data.
 
@@ -1374,6 +1432,7 @@ def calculate_losses(
         total_steps: Total number of steps
         plot_x_times: Number of times to plot during training
         check_ilisi: Whether to check iLISI score
+        debug_step: Step counter for debug printing (0 = train, 1 = validation)
 
     Returns:
         Dictionary containing all calculated losses and metrics
@@ -1392,6 +1451,35 @@ def calculate_losses(
     protein_latent_mean = protein_inference_outputs["qz"].mean
     protein_latent_std = protein_inference_outputs["qz"].scale
 
+    # Debug print for latent representations
+    if (
+        global_step is not None
+        and global_step % 50 == 0
+        or (global_step is None and debug_step == 1)
+    ):
+        phase = "Training" if debug_step == 0 else "Validation"
+        print(f"\n{phase} latent representation stats:")
+        print(
+            f"RNA latent mean: min={rna_latent_mean.min().item():.4f}, max={rna_latent_mean.max().item():.4f}, mean={rna_latent_mean.mean().item():.4f}, std={rna_latent_mean.std().item():.4f}"
+        )
+        print(
+            f"RNA latent std: min={rna_latent_std.min().item():.4f}, max={rna_latent_std.max().item():.4f}, mean={rna_latent_std.mean().item():.4f}"
+        )
+        print(
+            f"Protein latent mean: min={protein_latent_mean.min().item():.4f}, max={protein_latent_mean.max().item():.4f}, mean={protein_latent_mean.mean().item():.4f}, std={protein_latent_mean.std().item():.4f}"
+        )
+        print(
+            f"Protein latent std: min={protein_latent_std.min().item():.4f}, max={protein_latent_std.max().item():.4f}, mean={protein_latent_std.mean().item():.4f}"
+        )
+
+        # Check for NaN values
+        if torch.isnan(rna_latent_mean).any() or torch.isnan(protein_latent_mean).any():
+            print("WARNING: NaN values detected in latent representations!")
+
+        # Print model gradient status
+        print(f"RNA model training mode: {rna_vae.module.training}")
+        print(f"Protein model training mode: {protein_vae.module.training}")
+
     # Calculate latent distances
     latent_distances = compute_pairwise_kl_two_items(
         rna_latent_mean,
@@ -1402,7 +1490,7 @@ def calculate_losses(
     latent_distances = torch.clamp(latent_distances, max=torch.quantile(latent_distances, 0.90))
 
     # Calculate archetype distances
-    archetype_dis = torch.cdist(
+    archetype_dis = torch.cdist(  # normalize for cosine distance
         normalize(rna_batch["archetype_vec"], dim=1),
         normalize(protein_batch["archetype_vec"], dim=1),
     )
@@ -1413,12 +1501,12 @@ def calculate_losses(
     threshold = 0.0005
 
     # Normalize distances to [0,1] range
-    archetype_dis_tensor = (archetype_dis_tensor - archetype_dis_tensor.min()) / (
-        archetype_dis_tensor.max() - archetype_dis_tensor.min() + 1e-8
-    )
-    latent_distances = (latent_distances - latent_distances.min()) / (
-        latent_distances.max() - latent_distances.min() + 1e-8
-    )
+    # archetype_dis_tensor = (archetype_dis_tensor - archetype_dis_tensor.min()) / (
+    #     archetype_dis_tensor.max() - archetype_dis_tensor.min() + 1e-8
+    # )
+    # latent_distances = (latent_distances - latent_distances.min()) / (
+    #     latent_distances.max() - latent_distances.min() + 1e-8
+    # )
 
     # Create a mask for the closest 10% of archetype distances
     percentile_10 = torch.quantile(archetype_dis_tensor.flatten(), 0.10)
@@ -1540,45 +1628,6 @@ def calculate_losses(
     )
 
     # Prepare metrics for plotting if needed
-    if (
-        plot_flag
-        and global_step is not None
-        and total_steps is not None
-        and plot_x_times is not None
-    ):
-        should_plot = global_step > -1 and global_step % (1 + int(total_steps / plot_x_times)) == 0
-        if should_plot:
-            rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
-            rna_latent_std_numpy = rna_latent_std.detach().cpu().numpy()
-            protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
-            protein_latent_std_numpy = protein_latent_std.detach().cpu().numpy()
-
-            plot_latent_pca_both_modalities_cn(
-                rna_latent_mean_numpy,
-                protein_latent_mean_numpy,
-                rna_vae.adata,
-                protein_vae.adata,
-                index_rna=rna_batch["labels"],
-                index_prot=protein_batch["labels"],
-                global_step=global_step,
-            )
-            plot_latent_pca_both_modalities_by_celltype(
-                rna_vae.adata,
-                protein_vae.adata,
-                rna_latent_mean_numpy,
-                protein_latent_mean_numpy,
-                index_rna=rna_batch["labels"],
-                index_prot=protein_batch["labels"],
-                global_step=global_step,
-            )
-            plot_rna_protein_matching_means_and_scale(
-                rna_latent_mean_numpy,
-                protein_latent_mean_numpy,
-                rna_latent_std_numpy,
-                protein_latent_std_numpy,
-                archetype_dis,
-                global_step=global_step,
-            )
 
     # Create losses dictionary
     losses = {
@@ -1595,24 +1644,21 @@ def calculate_losses(
         "num_cells": num_cells,
         "exact_pairs": exact_pairs,
     }
-
-    if check_ilisi:
-        # Calculate iLISI score using the latent representations we already have
-        # No need to recreate the combined latent AnnData, just use the existing representations
+    if to_plot or check_ilisi:
         rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
         protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
-
         # Create combined latent AnnData
         combined_latent = anndata.concat(
             [
-                AnnData(rna_latent_mean_numpy),
-                AnnData(protein_latent_mean_numpy),
+                AnnData(rna_latent_mean_numpy, obs=rna_vae.adata[rna_batch["labels"]].obs),
+                AnnData(
+                    protein_latent_mean_numpy, obs=protein_vae.adata[protein_batch["labels"]].obs
+                ),
             ],
             join="outer",
             label="modality",
             keys=["RNA", "Protein"],
         )
-
         # Clear any existing neighbors data to ensure clean calculation
         combined_latent.obsp.pop(
             "connectivities", None
@@ -1621,10 +1667,67 @@ def calculate_losses(
         combined_latent.uns.pop("neighbors", None) if "neighbors" in combined_latent.uns else None
 
         # Calculate neighbors with cosine metric for iLISI
-        sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
+        sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=15)
+
+    if to_plot:
+        rna_latent_mean_numpy = rna_latent_mean.detach().cpu().numpy()
+        rna_latent_std_numpy = rna_latent_std.detach().cpu().numpy()
+        protein_latent_mean_numpy = protein_latent_mean.detach().cpu().numpy()
+        protein_latent_std_numpy = protein_latent_std.detach().cpu().numpy()
+
+        plot_latent_pca_both_modalities_cn(
+            rna_latent_mean_numpy,
+            protein_latent_mean_numpy,
+            rna_vae.adata,
+            protein_vae.adata,
+            index_rna=rna_batch["labels"],
+            index_prot=protein_batch["labels"],
+            global_step=self.global_step,
+        )
+        plot_latent_pca_both_modalities_by_celltype(
+            rna_vae.adata,
+            protein_vae.adata,
+            rna_latent_mean_numpy,
+            protein_latent_mean_numpy,
+            index_rna=rna_batch["labels"],
+            index_prot=protein_batch["labels"],
+            global_step=global_step,
+        )
+        plot_rna_protein_matching_means_and_scale(
+            rna_latent_mean_numpy,
+            protein_latent_mean_numpy,
+            rna_latent_std_numpy,
+            protein_latent_std_numpy,
+            archetype_dis,
+            global_step=global_step,
+        )
+        pf.plot_end_of_val_epoch_pca_umap_latent_space(
+            "train_", combined_latent, epoch=int(global_step / total_steps), global_step=global_step
+        )
+        # Calculate validation metrics
+        val_metrics = self.calculate_metrics_for_data(
+            self.rna_vae.adata[self.val_indices_rna],
+            self.protein_vae.adata[self.val_indices_prot],
+            prefix="val_",
+        )
+        # Calculate training metrics with subsampling
+        print("Calculating training metrics...")
+        train_metrics = self.calculate_metrics_for_data(
+            self.rna_vae.adata[self.train_indices_rna],
+            self.protein_vae.adata[self.train_indices_prot],
+            prefix="train_",
+            subsample_size=len(self.val_indices_rna),  # Use validation set size for subsampling
+        )
+        print("val metrics", val_metrics)
+        print("train metrics", train_metrics)
+    if check_ilisi:
+        # Calculate iLISI score using the latent representations we already have
+        # No need to recreate the combined latent AnnData, just use the existing representations
 
         # Calculate iLISI score
         ilisi_score = bar_nick_utils.calculate_iLISI(combined_latent, "modality", plot_flag=False)
         losses["ilisi_score"] = ilisi_score
+        print(f"iLISI score: {ilisi_score}")
+        # if to_plot:
 
     return losses

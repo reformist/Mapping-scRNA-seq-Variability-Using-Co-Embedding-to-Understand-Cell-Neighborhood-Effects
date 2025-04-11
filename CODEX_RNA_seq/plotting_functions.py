@@ -950,7 +950,7 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
-def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch):
+def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch, global_step=""):
     sc.pp.pca(combined_latent)
     fig = plt.figure(figsize=(15, 5))
     ax1 = fig.add_subplot(1, 3, 1)
@@ -972,21 +972,19 @@ def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch):
     ax3 = fig.add_subplot(1, 3, 3)
     sc.pl.pca(combined_latent, color="CN", ax=ax3, show=False, title="Combined Latent PCA by CN")
     plt.tight_layout()
-    pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}.png"
+    if global_step:
+        pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}_step_{global_step:03d}.png"
+    else:
+        pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}.png"
     plt.savefig(pca_file, dpi=200, bbox_inches="tight")
     if hasattr(mlflow, "active_run") and mlflow.active_run():
         mlflow.log_artifact(pca_file, artifact_path="train")
     combined_latent.obsm.pop("X_pca", None)
     plt.show()
 
-    # Use cosine metric and larger n_neighbors for better batch integration
     sc.pp.neighbors(combined_latent, use_rep="X")
     sc.tl.umap(combined_latent)
-
-    # Create a figure with the UMAP visualizations colored by different factors
     fig = plt.figure(figsize=(15, 5))
-
-    # Plot UMAP colored by modality
     ax1 = fig.add_subplot(1, 3, 1)
     sc.pl.umap(
         combined_latent,
@@ -995,8 +993,6 @@ def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch):
         show=False,
         title=f"{prefix}Combined Latent UMAP by Modality",
     )
-
-    # Plot UMAP colored by cell type
     ax2 = fig.add_subplot(1, 3, 2)
     sc.pl.umap(
         combined_latent,
@@ -1005,22 +1001,19 @@ def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch):
         show=False,
         title=f"{prefix}Combined Latent UMAP by Cell Type",
     )
-
-    # Plot UMAP colored by neighborhood
     ax3 = fig.add_subplot(1, 3, 3)
     sc.pl.umap(
         combined_latent, color="CN", ax=ax3, show=False, title=f"{prefix}Combined Latent UMAP by CN"
     )
-
     plt.tight_layout()
-
-    # Save figure for MLflow logging
-    umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}.png"
+    if global_step:
+        umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}_step_{global_step:03d}.png"
+    else:
+        umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}.png"
     plt.savefig(umap_file, dpi=200, bbox_inches="tight")
     if hasattr(mlflow, "active_run") and mlflow.active_run():
         mlflow.log_artifact(umap_file, artifact_path="train")
     plt.close(fig)
-
     print(f"   ✓ {prefix}combined latent UMAP visualized and saved")
 
 

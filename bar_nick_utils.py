@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Union
 import anndata as ad
 import cvxpy as cp
 import matplotlib.pyplot as plt
+import mlflow
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -266,13 +267,20 @@ def mixing_score(
     combined_latent.obs["major_cell_types"] = combined_major_cell_types.values
     sc.pp.pca(combined_latent)
     sc.pp.neighbors(combined_latent, use_rep="X")
-    iLISI = calculate_iLISI(combined_latent, "modality", plot_flag=plot_flag)
+    iLISI = calculate_iLISI(
+        combined_latent, "modality", plot_flag=plot_flag, global_step=global_step
+    )
     cLISI = calculate_cLISI(combined_latent, "major_cell_types", plot_flag=plot_flag)
     return {"iLISI": iLISI, "cLISI": cLISI}
 
 
 def calculate_iLISI(
-    adata, batch_key="batch", neighbors_key="neighbors", plot_flag=False, use_subsample=True
+    adata,
+    batch_key="batch",
+    neighbors_key="neighbors",
+    plot_flag=False,
+    use_subsample=True,
+    global_step=None,
 ):
     """
     Calculate integration Local Inverse Simpson's Index (LISI) using precomputed neighbors.
@@ -312,7 +320,7 @@ def calculate_iLISI(
             subset_connectivities = connectivities[subset_indices][:, subset_indices]
         else:
             subset_connectivities = connectivities
-        plt.figure()
+        plt.figure(figsize=(10, 8))
         plt.title(
             "neighbors, first half are RNA cells \nthe second half, protein cells (subset of 300)"
         )
@@ -320,6 +328,10 @@ def calculate_iLISI(
         mid_point = subset_connectivities.shape[1] // 2
         plt.axvline(x=mid_point, color="red", linestyle="--", linewidth=2)
         plt.axhline(y=mid_point, color="red", linestyle="--", linewidth=2)
+        if global_step is not None:
+            mlflow.log_figure(plt.gcf(), f"step_{global_step}_neighbor_heatmap.png")
+        else:
+            mlflow.log_figure(plt.gcf(), "neighbor_heatmap.png")
         plt.show()
     lisi_scores = []
     for i in range(n_cells):

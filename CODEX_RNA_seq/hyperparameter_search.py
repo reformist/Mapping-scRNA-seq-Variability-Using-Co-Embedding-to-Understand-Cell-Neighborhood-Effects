@@ -84,10 +84,10 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [5],
     "check_val_every_n_epoch": [2],
-    "max_epochs": [80],  # Changed from n_epochs to max_epochs to match train_vae
-    "batch_size": [1000],
+    "max_epochs": [60],  # Changed from n_epochs to max_epochs to match train_vae
+    "batch_size": [3000],
     "lr": [1e-4],
-    "contrastive_weight": [0, 0.001, 0.1, 1, 100, 1000],
+    "contrastive_weight": [0, 0.001, 0.1, 1],
     "similarity_weight": [1000.0, 10000.0],
     "diversity_weight": [0.0],
     "matching_weight": [0, 0.1, 10, 1000],  # Updated range to reflect typical values
@@ -168,6 +168,9 @@ adata_prot_subset = sc.read_h5ad(
 )
 log_memory_usage("After loading protein data: ")
 
+print(f"RNA dataset shape: {adata_rna_subset.shape}")
+print(f"Protein dataset shape: {adata_prot_subset.shape}")
+
 # Estimate training time before starting
 if total_combinations > 0 and len(new_combinations) > 0:
     # Use first parameter combination for estimation
@@ -191,7 +194,6 @@ if total_combinations > 0 and len(new_combinations) > 0:
     print("------------------------------------------------------------\n")
 
 # Subsample data if memory usage is high
-print("Memory usage high, subsampling data...")
 # rna_sample_size = min(len(adata_rna_subset), 1500)
 # prot_sample_size = min(len(adata_prot_subset), 1500)
 # adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
@@ -282,7 +284,6 @@ for i, params in enumerate(new_combinations):
             )
 
             # Log successful run
-            mlflow.log_param("run_failed", False)
 
             # Clear memory after training
             clear_memory()
@@ -350,6 +351,7 @@ for i, params in enumerate(new_combinations):
             # Log the run-specific log file as an artifact
             mlflow.log_artifact(run_log_file_path, "logs")
             print(f"Logged run log file: {run_log_file_path}")
+            mlflow.log_param("run_failed", False)
 
         except Exception as e:
             # Log failed run
