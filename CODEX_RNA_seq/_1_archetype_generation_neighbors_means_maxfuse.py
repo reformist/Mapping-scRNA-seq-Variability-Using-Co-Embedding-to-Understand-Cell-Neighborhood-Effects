@@ -122,12 +122,7 @@ if plot_flag:
     plt.title("Distribution of spatial distances between protein neighbors before cutoff")
     plt.show()
     plt.close()
-# %% save adata_2_prot clean it first # todo temp
-clean_uns_for_h5ad(adata_2_prot)
 
-adata_2_prot.write_h5ad(
-    "CODEX_RNA_seq/data/processed_data/preprocessed_adata_prot_neighbors_means.h5ad"
-)
 # %%
 percentile_threshold = 95
 percentile_value = np.percentile(spatial_distances.data, percentile_threshold)
@@ -176,7 +171,7 @@ while True:
     num_clusters = len(temp.obs["CN"].unique())
     if num_clusters < 12:
         break
-    resolution = resolution / 2
+    resolution = resolution / 1.5
 adata_2_prot.obs["CN"] = temp.obs["CN"]
 num_clusters = len(adata_2_prot.obs["CN"].unique())
 # Make sure to create a color palette with enough colors for all clusters
@@ -408,7 +403,7 @@ sc.pp.pca(adata_2_prot, n_comps=max_possible_pca_dim_prot - 1)
 # Select PCA components based on variance explained
 print("Selecting PCA components...")
 max_dim = 50
-variance_ratio_selected = 0.90  # was 0.75
+variance_ratio_selected = 0.80  # was 0.75
 
 cumulative_variance_ratio = np.cumsum(adata_1_rna.uns["pca"]["variance_ratio"])
 n_comps_thresh = np.argmax(cumulative_variance_ratio >= variance_ratio_selected) + 1
@@ -432,8 +427,9 @@ if n_comps_thresh == 1:
         "n_comps_thresh is 1, this is not good, try to lower the variance_ratio_selected"
     )
 # %% plot umap of original protein data and the umap to new protein data
+sc.pp.neighbors(adata_2_prot, n_neighbors=15, use_rep="X_pca")
+
 if plot_flag:
-    sc.pp.neighbors(adata_2_prot, n_neighbors=20)
     sc.tl.umap(adata_2_prot)
     sc.pl.embedding(
         adata_2_prot, basis="X_original_umap", color="cell_types", title="Original Protein UMAP"
@@ -517,9 +513,6 @@ if plot_flag:
                 + f"({ft_contribution/np.abs(prot_pca_components).sum()*100:.2f}%)"
             )
 
-# todo test larger protein pca dims
-# sc.pp.pca(adata_1_rna, n_comps=n_comps_thresh)
-sc.pp.pca(adata_2_prot, n_comps=20)
 
 # %% Find Archetypes
 print("\nFinding archetypes...")
@@ -644,10 +637,14 @@ if plot_flag:
     plot_archetype_proportions(archetype_proportion_list_rna, archetype_proportion_list_protein)
     plt.close()
 
-    new_order_1 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_rna[0])[1]
-    new_order_2 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[1]
-    data1 = archetype_proportion_list_rna[0].iloc[new_order_1, :]
-    data2 = archetype_proportion_list_protein[0].iloc[new_order_2, :]
+# Calculate diagonal maximization for archetype matching
+new_order_1 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_rna[0])[1]
+new_order_2 = reorder_rows_to_maximize_diagonal(archetype_proportion_list_protein[0])[1]
+data1 = archetype_proportion_list_rna[0].iloc[new_order_1, :]
+data2 = archetype_proportion_list_protein[0].iloc[new_order_2, :]
+
+# Plot archetype matching if plot_flag is enabled
+if plot_flag:
     plot_archetypes_matching(data1, data2)
     plt.close()
 
