@@ -140,6 +140,7 @@ def save_tabulate_to_txt(losses, global_step, total_steps, is_validation=False):
         "matching_loss",
         "similarity_loss",
         "cell_type_clustering_loss",
+        "cross_modal_cell_type_loss",
     ]
     # Format main losses with percentages
     for loss_name in main_losses:
@@ -215,6 +216,7 @@ def log_step(
     similarity_loss = get_value(losses.get("similarity_loss", float("nan")))
     similarity_loss_raw = get_value(losses.get("similarity_loss_raw", float("nan")))
     cell_type_clustering_loss = get_value(losses.get("cell_type_clustering_loss", float("nan")))
+    cross_modal_cell_type_loss = get_value(losses.get("cross_modal_cell_type_loss", float("nan")))
     adv_loss = get_value(losses.get("adversarial_loss", float("nan")))
     diversity_loss = get_value(losses.get("diversity_loss", float("nan")))
     stress_loss = get_value(losses.get("stress_loss", float("nan")))
@@ -280,6 +282,9 @@ def log_step(
             f"{prefix}Similarity Loss": format_loss(similarity_loss, total_loss),
             f"{prefix}Cell Type Clustering Loss": format_loss(
                 cell_type_clustering_loss, total_loss
+            ),
+            f"{prefix}Cross-Modal Cell Type Loss": format_loss(
+                cross_modal_cell_type_loss, total_loss
             ),
             f"{prefix}Total Loss": total_loss,
         }
@@ -363,6 +368,7 @@ def log_step(
         f"{prefix}matching_loss": matching_loss,
         f"{prefix}similarity_loss": similarity_loss,
         f"{prefix}cell_type_clustering_loss": cell_type_clustering_loss,
+        f"{prefix}cross_modal_cell_type_loss": cross_modal_cell_type_loss,
         f"{prefix}adversarial_loss": adv_loss,
         f"{prefix}diversity_loss": diversity_loss,
     }
@@ -374,9 +380,11 @@ def log_step(
     if not is_validation and all(
         x is not None for x in [num_acceptable, num_cells, exact_pairs, latent_distances]
     ):
-        items_to_log["acceptable_ratio"] = num_acceptable / num_cells if num_cells > 0 else 0
-        items_to_log["exact_pairs"] = exact_pairs
-        items_to_log["latent_distances"] = get_value(latent_distances)
+        items_to_log[f"{prefix}acceptable_ratio"] = (
+            num_acceptable / num_cells if num_cells > 0 else 0
+        )
+        items_to_log[f"{prefix}exact_pairs"] = exact_pairs
+        items_to_log[f"{prefix}latent_distances"] = get_value(latent_distances)
 
     # Add extra metrics if available
     items_to_log[f"{prefix}iLISI"] = ilisi
@@ -385,6 +393,6 @@ def log_step(
     items_to_log[f"{prefix}stress_loss"] = stress_loss
     items_to_log[f"{prefix}reward"] = reward
 
-    mlflow.log_metrics(format_loss_mlflow(losses), step=step)
+    mlflow.log_metrics(format_loss_mlflow(items_to_log), step=step)
 
     return items_to_log

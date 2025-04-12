@@ -84,17 +84,26 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [6],
     "check_val_every_n_epoch": [3],
-    "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [80],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
     "lr": [1e-4],
     "contrastive_weight": [0, 0.001, 0.1, 1],
-    "similarity_weight": [1000.0, 10000.0],
+    "similarity_weight": [0, 100, 1000.0, 10000.0],
     "diversity_weight": [0.0],
-    "matching_weight": [0, 0.1, 10, 1000],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [100, 1000.0, 10_000.0],  # Added cell type clustering weight
-    "n_hidden_rna": [64],
+    "matching_weight": [
+        0,
+        0.1,
+        1000,
+    ],  # Updated range to reflect typical values
+    "cell_type_clustering_weight": [10000, 10_000, 100_000],  # Within-modality cell type clustering
+    "cross_modal_cell_type_weight": [
+        1000,
+        1000,
+        100_000,
+    ],  # Added cross-modal cell type alignment weight
+    "n_hidden_rna": [256],
     "n_hidden_prot": [32],
-    "n_layers": [3],
+    "n_layers": [4],
     "latent_dim": [10],
     "kl_weight_rna": [0.1, 1],
     "kl_weight_prot": [1],
@@ -108,7 +117,7 @@ param_grid = {
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search_3"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_5"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -272,7 +281,12 @@ for i, params in enumerate(new_combinations):
                 "contrastive_weight": params["contrastive_weight"],
                 "similarity_weight": params["similarity_weight"],
                 "matching_weight": params["matching_weight"],
-                "cell_type_clustering_weight": params["cell_type_clustering_weight"],
+                "cell_type_clustering_weight": params[
+                    "cell_type_clustering_weight"
+                ],  # Controls within-modality clustering
+                "cross_modal_cell_type_weight": params[
+                    "cross_modal_cell_type_weight"
+                ],  # Controls cross-modal cell type alignment
             }
 
             # Save loss weights to a temporary JSON file
@@ -308,14 +322,7 @@ for i, params in enumerate(new_combinations):
                         "final_train_total_loss": "train_total_loss",
                         "final_val_total_loss": "val_total_loss",
                         "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
-                        # Add all validation loss metrics
-                        "final_val_rna_loss": "val_rna_loss",
-                        "final_val_protein_loss": "val_protein_loss",
-                        "final_val_contrastive_loss": "val_contrastive_loss",
-                        "final_val_matching_loss": "val_matching_loss",
-                        "final_val_similarity_loss": "val_similarity_loss",
-                        "final_val_similarity_loss_raw": "val_similarity_loss_raw",
-                        "final_val_cell_type_clustering_loss": "val_cell_type_clustering_loss",
+                        "final_train_cross_modal_cell_type_loss": "train_cross_modal_cell_type_loss",
                     }.items()
                 }
             )

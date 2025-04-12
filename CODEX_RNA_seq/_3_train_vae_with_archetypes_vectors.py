@@ -207,6 +207,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.max_epochs = kwargs.pop("max_epochs", 1)
         self.similarity_weight = kwargs.pop("similarity_weight")
         self.cell_type_clustering_weight = kwargs.pop("cell_type_clustering_weight", 1000.0)
+        self.cross_modal_cell_type_weight = kwargs.pop("cross_modal_cell_type_weight", 1000.0)
         self.lr = kwargs.pop("lr", 0.001)
         self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
@@ -285,12 +286,14 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_contrastive_losses = []
         self.train_adv_losses = []
         self.train_cell_type_clustering_losses = []  # New list for cell type clustering losses
+        self.train_cross_modal_cell_type_losses = []  # New list for cross-modal cell type alignment
         self.val_rna_losses = []
         self.val_protein_losses = []
         self.val_matching_losses = []
         self.val_contrastive_losses = []
         self.val_adv_losses = []
         self.val_cell_type_clustering_losses = []  # New list for cell type clustering losses
+        self.val_cross_modal_cell_type_losses = []  # New list for cross-modal cell type alignment
         # Add new validation lists
         self.val_similarity_losses = []
         self.val_similarity_losses_raw = []
@@ -324,6 +327,7 @@ class DualVAETrainingPlan(TrainingPlan):
             // int(np.ceil(len(self.rna_vae.adata) / self.batch_size)),
             "similarity_weight": self.similarity_weight,
             "cell_type_clustering_weight": self.cell_type_clustering_weight,
+            "cross_modal_cell_type_weight": self.cross_modal_cell_type_weight,
             "lr": self.lr,
             "kl_weight_rna": self.kl_weight_rna,
             "kl_weight_prot": self.kl_weight_prot,
@@ -422,6 +426,7 @@ class DualVAETrainingPlan(TrainingPlan):
             contrastive_weight=self.contrastive_weight,
             matching_weight=self.matching_weight,
             cell_type_clustering_weight=self.cell_type_clustering_weight,
+            cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
             kl_weight_rna=self.kl_weight_rna,
             kl_weight_prot=self.kl_weight_prot,
             global_step=self.global_step,
@@ -506,7 +511,9 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_protein_losses.append(losses["protein_loss"].item())
         self.train_matching_losses.append(losses["matching_loss"].item())
         self.train_contrastive_losses.append(losses["contrastive_loss"].item())
+        self.train_adv_losses.append(losses["adv_loss"].item() if "adv_loss" in losses else 0.0)
         self.train_cell_type_clustering_losses.append(losses["cell_type_clustering_loss"].item())
+        self.train_cross_modal_cell_type_losses.append(losses["cross_modal_cell_type_loss"].item())
         to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
         # Log metrics
         print(f"train step to_plot before: {to_plot}")
@@ -616,6 +623,7 @@ class DualVAETrainingPlan(TrainingPlan):
             contrastive_weight=self.contrastive_weight,
             matching_weight=self.matching_weight,
             cell_type_clustering_weight=self.cell_type_clustering_weight,
+            cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
             kl_weight_rna=self.kl_weight_rna,
             kl_weight_prot=self.kl_weight_prot,
             check_ilisi=check_ilisi,
@@ -843,6 +851,8 @@ class DualVAETrainingPlan(TrainingPlan):
                         self.val_ilisi_scores.append(mean_value)
                         # Also log to MLflow
                         mlflow.log_metric("val_ilisi_score", mean_value, step=self.current_epoch)
+                    elif loss_type == "cross_modal_cell_type_loss":
+                        self.val_cross_modal_cell_type_losses.append(mean_value)
 
             # Reset current_val_losses for next epoch
             self.current_val_losses = {}
@@ -1110,6 +1120,9 @@ class DualVAETrainingPlan(TrainingPlan):
             "train_cell_type_clustering_loss": get_epoch_means(
                 self.train_cell_type_clustering_losses
             ),
+            "train_cross_modal_cell_type_loss": get_epoch_means(
+                self.train_cross_modal_cell_type_losses
+            ),
             "val_total_loss": self.val_losses,  # Validation losses are already per-epoch
             "val_rna_loss": self.val_rna_losses,
             "val_protein_loss": self.val_protein_losses,
@@ -1118,6 +1131,7 @@ class DualVAETrainingPlan(TrainingPlan):
             "val_similarity_loss": self.val_similarity_losses,
             "val_similarity_loss_raw": self.val_similarity_losses_raw,
             "val_cell_type_clustering_loss": self.val_cell_type_clustering_losses,
+            "val_cross_modal_cell_type_loss": self.val_cross_modal_cell_type_losses,
             # Also include the validation epoch indices
             "val_epochs": val_epochs,
         }
@@ -1166,6 +1180,7 @@ def train_vae(
     diversity_weight=0.1,
     matching_weight=100.0,
     cell_type_clustering_weight=1.0,
+    cross_modal_cell_type_weight=1.0,
     train_size=0.9,
     check_val_every_n_epoch=1,
     adv_weight=0.1,
@@ -1229,6 +1244,7 @@ def train_vae(
         "similarity_weight": similarity_weight,
         "diversity_weight": diversity_weight,
         "cell_type_clustering_weight": cell_type_clustering_weight,
+        "cross_modal_cell_type_weight": cross_modal_cell_type_weight,
         "matching_weight": matching_weight,
         "adv_weight": adv_weight,
         "plot_x_times": kwargs.pop("plot_x_times", 5),
@@ -1425,6 +1441,7 @@ if __name__ == "__main__":
                     "final_val_similarity_loss": "val_similarity_loss",
                     "final_val_similarity_loss_raw": "val_similarity_loss_raw",
                     "final_val_cell_type_clustering_loss": "val_cell_type_clustering_loss",
+                    "final_val_cross_modal_cell_type_loss": "val_cross_modal_cell_type_loss",
                 }.items()
             }
         )
@@ -1480,6 +1497,7 @@ def calculate_losses(
     contrastive_weight,
     matching_weight,
     cell_type_clustering_weight,
+    cross_modal_cell_type_weight,
     kl_weight_rna,
     kl_weight_prot,
     global_step=None,
@@ -1499,7 +1517,8 @@ def calculate_losses(
         similarity_active: Whether similarity loss is active
         contrastive_weight: Weight for contrastive loss
         matching_weight: Weight for matching loss
-        cell_type_clustering_weight: Weight for cell type clustering loss
+        cell_type_clustering_weight: Weight for within-modality cell type clustering
+        cross_modal_cell_type_weight: Weight for cross-modal cell type alignment
         kl_weight_rna: Weight for RNA KL loss
         kl_weight_prot: Weight for protein KL loss
         global_step: Current global step
@@ -1649,11 +1668,28 @@ def calculate_losses(
     margin = 0.1  # Acceptable difference margin
     loss_diff = torch.abs(rna_raw_cell_type_clustering_loss - prot_raw_cell_type_clustering_loss)
     balance_term = torch.nn.functional.relu(loss_diff - margin)  # Zero if within margin
+
+    # Calculate cross-modal cell type clustering loss as a completely separate loss
+    cross_modal_cell_type_loss_raw = calculate_cross_modal_cell_type_loss(
+        rna_vae.adata,
+        protein_vae.adata,
+        rna_latent_mean,
+        protein_latent_mean,
+        rna_batch["labels"],
+        protein_batch["labels"],
+        device,
+    )
+    cross_modal_cell_type_loss = cross_modal_cell_type_loss_raw * cross_modal_cell_type_weight
+
+    # Combined cell type clustering loss (without cross-modal component)
     cell_type_clustering_loss = (
         rna_raw_cell_type_clustering_loss + prot_raw_cell_type_clustering_loss + balance_term
     ) * cell_type_clustering_weight
+
     print(f"rna_raw_cell_type_clustering_loss: {rna_raw_cell_type_clustering_loss}")
     print(f"prot_raw_cell_type_clustering_loss: {prot_raw_cell_type_clustering_loss}")
+    print(f"cross_modal_cell_type_loss_raw: {cross_modal_cell_type_loss_raw}")
+    print(f"cross_modal_cell_type_loss: {cross_modal_cell_type_loss}")
     print(f"loss_diff: {loss_diff}, margin: {margin}")
     print(f"balance_term: {balance_term}")
     print(f"cell_type_clustering_loss: {cell_type_clustering_loss}")
@@ -1678,6 +1714,7 @@ def calculate_losses(
         + matching_loss
         + similarity_loss
         + cell_type_clustering_loss
+        + cross_modal_cell_type_loss
     )
 
     # Prepare metrics for plotting if needed
@@ -1692,6 +1729,8 @@ def calculate_losses(
         "similarity_loss": similarity_loss,
         "similarity_loss_raw": similarity_loss_raw,
         "cell_type_clustering_loss": cell_type_clustering_loss,
+        "cross_modal_cell_type_loss": cross_modal_cell_type_loss,
+        "cross_modal_cell_type_loss_raw": cross_modal_cell_type_loss_raw,
         "latent_distances": latent_distances.mean(),
         "num_acceptable": num_acceptable,
         "num_cells": num_cells,
@@ -1787,3 +1826,132 @@ def calculate_losses(
         # if to_plot:
 
     return losses
+
+
+def calculate_cross_modal_cell_type_loss(
+    rna_adata,
+    prot_adata,
+    rna_latent_mean,
+    protein_latent_mean,
+    rna_indices,
+    prot_indices,
+    device="cuda:0" if torch.cuda.is_available() else "cpu",
+):
+    """Calculate cross-modal cell type clustering loss to push cell types from different modalities
+    to be close to each other in the latent space.
+
+    Args:
+        rna_adata: RNA AnnData object with cell type information
+        prot_adata: Protein AnnData object with cell type information
+        rna_latent_mean: RNA latent mean representation from the VAE
+        protein_latent_mean: Protein latent mean representation from the VAE
+        rna_indices: Indices of RNA cells to use
+        prot_indices: Indices of protein cells to use
+        device: Device to use for calculations
+
+    Returns:
+        Cross-modal cell type clustering loss tensor
+    """
+    # Get cell types for each modality
+    rna_cell_types = torch.tensor(
+        rna_adata[rna_indices].obs["major_cell_types"].cat.codes.values
+    ).to(device)
+    prot_cell_types = torch.tensor(
+        prot_adata[prot_indices].obs["major_cell_types"].cat.codes.values
+    ).to(device)
+
+    # Get unique cell types from both modalities
+    unique_rna_types = torch.unique(rna_cell_types)
+    unique_prot_types = torch.unique(prot_cell_types)
+
+    # Skip if either modality has only one cell type
+    if len(unique_rna_types) <= 1 or len(unique_prot_types) <= 1:
+        return torch.tensor(0.0).to(device)
+
+    # Calculate centroids for each cell type in each modality
+    rna_centroids = []
+    prot_centroids = []
+    rna_type_to_idx = {}
+    prot_type_to_idx = {}
+
+    # Create mapping from cell type to index
+    for i, ct in enumerate(unique_rna_types):
+        rna_type_to_idx[ct.item()] = i
+
+    for i, ct in enumerate(unique_prot_types):
+        prot_type_to_idx[ct.item()] = i
+
+    # Calculate centroids for RNA modality
+    for ct in unique_rna_types:
+        mask = rna_cell_types == ct
+        if mask.sum() > 0:
+            cells = rna_latent_mean[mask]
+            rna_centroids.append(cells.mean(dim=0))
+
+    # Calculate centroids for protein modality
+    for ct in unique_prot_types:
+        mask = prot_cell_types == ct
+        if mask.sum() > 0:
+            cells = protein_latent_mean[mask]
+            prot_centroids.append(cells.mean(dim=0))
+
+    if len(rna_centroids) <= 1 or len(prot_centroids) <= 1:
+        return torch.tensor(0.0).to(device)
+
+    rna_centroids = torch.stack(rna_centroids)
+    prot_centroids = torch.stack(prot_centroids)
+
+    # Cross-modal loss components
+
+    # 1. KL divergence between corresponding cell type distributions
+    cross_modal_loss = 0.0
+    common_cell_types = set(rna_type_to_idx.keys()).intersection(set(prot_type_to_idx.keys()))
+
+    if len(common_cell_types) <= 1:
+        return torch.tensor(0.0).to(device)
+
+    # Calculate centroid distances between matching cell types
+    centroid_distance = 0.0
+    for ct in common_cell_types:
+        rna_idx = rna_type_to_idx[ct]
+        prot_idx = prot_type_to_idx[ct]
+
+        # Euclidean distance between centroids
+        dist = torch.norm(rna_centroids[rna_idx] - prot_centroids[prot_idx])
+        centroid_distance += dist
+
+    centroid_distance = centroid_distance / len(common_cell_types)
+
+    # 2. Structure preservation between modalities
+    # Calculate pairwise distances between all centroids within each modality
+    rna_centroid_dists = torch.cdist(rna_centroids, rna_centroids)
+    prot_centroid_dists = torch.cdist(prot_centroids, prot_centroids)
+
+    # For common cell types, calculate structure preservation loss
+    structure_loss = 0.0
+    count = 0
+
+    for ct1 in common_cell_types:
+        for ct2 in common_cell_types:
+            if ct1 != ct2:
+                rna_idx1 = rna_type_to_idx[ct1]
+                rna_idx2 = rna_type_to_idx[ct2]
+                prot_idx1 = prot_type_to_idx[ct1]
+                prot_idx2 = prot_type_to_idx[ct2]
+
+                # Compare the distance between these cell types in RNA vs protein space
+                rna_dist = rna_centroid_dists[rna_idx1, rna_idx2]
+                prot_dist = prot_centroid_dists[prot_idx1, prot_idx2]
+
+                # Square difference in normalized distances
+                diff = (rna_dist - prot_dist) ** 2
+                structure_loss += diff
+                count += 1
+
+    if count > 0:
+        structure_loss = structure_loss / count
+
+    # Combine losses: centroid alignment and structure preservation
+    cross_modal_loss = centroid_distance + 0.5 * structure_loss
+
+    return cross_modal_loss

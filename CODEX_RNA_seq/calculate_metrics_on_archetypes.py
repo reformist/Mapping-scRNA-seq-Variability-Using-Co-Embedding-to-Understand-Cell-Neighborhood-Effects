@@ -364,9 +364,9 @@ def process_archetype_spaces(rna_adata, prot_adata):
     """Process archetype spaces from RNA and protein data."""
     print("Processing archetype spaces...")
 
-    # Since we already have archetype vectors as X, we can just copy the objects
-    rna_archetype = rna_adata.obsm["archetype_vec"].copy()
-    prot_archetype = prot_adata.obsm["archetype_vec"].copy()
+    # Since we now have archetype vectors as X, we can use the objects directly
+    rna_archetype = rna_adata.copy()
+    prot_archetype = prot_adata.copy()
 
     # Combine for visualization
     combined_archetype = anndata.concat(
@@ -455,13 +455,12 @@ if __name__ == "__main__":
 
     # %%
     # Load data
-    save_dir = Path("CODEX_RNA_seq/data/trained_data").absolute()
+    save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
     log_memory_usage("Before loading data: ")
 
     # Find latest RNA and protein files
-    rna_file = bar_nick_utils.get_latest_file(save_dir, "rna_vae_trained")
-    prot_file = bar_nick_utils.get_latest_file(save_dir, "protein_vae_trained")
-
+    rna_file = bar_nick_utils.get_latest_file(save_dir, "adata_rna_subset_prepared_for_training")
+    prot_file = bar_nick_utils.get_latest_file(save_dir, "adata_prot_subset_prepared_for_training")
     if not rna_file or not prot_file:
         print("Error: Could not find trained data files.")
         sys.exit(1)
@@ -495,13 +494,15 @@ if __name__ == "__main__":
     # Copy observations and other attributes
     adata_rna_arch.obs = adata_rna.obs.copy()
     adata_prot_arch.obs = adata_prot.obs.copy()
+
     # Normalize RNA archetype vectors
     rna_scaler = MinMaxScaler()
-    adata_rna.X = rna_scaler.fit_transform(adata_rna.X)
+    adata_rna_arch.X = rna_scaler.fit_transform(adata_rna_arch.X)
 
     # Normalize protein archetype vectors
     prot_scaler = MinMaxScaler()
-    adata_prot.X = prot_scaler.fit_transform(adata_prot.X)
+    adata_prot_arch.X = prot_scaler.fit_transform(adata_prot_arch.X)
+
     # Copy uns, obsm (except archetype_vec), and obsp if they exist
     if hasattr(adata_rna, "uns"):
         adata_rna_arch.uns = adata_rna.uns.copy()
