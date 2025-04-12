@@ -519,8 +519,6 @@ class DualVAETrainingPlan(TrainingPlan):
         if self.global_step == 0 or self.global_step == self.total_steps - 1:
             to_plot = True
         print(f"global_step: {self.global_step}")
-        print(f"total_steps: {self.total_steps}")
-        print(f"train step to_plot after: {to_plot}")
 
         # Always save on last step of epoch - use train_step_ to detect epoch boundary
         steps_in_epoch = int(np.ceil(len(self.train_indices_rna) / self.batch_size))
@@ -531,9 +529,6 @@ class DualVAETrainingPlan(TrainingPlan):
             # Reset train_step_ counter for next epoch
             self.train_step_ = 0
 
-        print(
-            f"train_step_: {self.train_step_}, steps_in_epoch: {steps_in_epoch}, is_last_step_of_epoch: {is_last_step_of_epoch}"
-        )
         print(f"train step to_plot end: {to_plot}")
         log_step(
             losses,
@@ -1422,6 +1417,14 @@ if __name__ == "__main__":
                     "final_train_total_loss": "train_total_loss",
                     "final_val_total_loss": "val_total_loss",
                     "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
+                    # Add all validation loss metrics
+                    "final_val_rna_loss": "val_rna_loss",
+                    "final_val_protein_loss": "val_protein_loss",
+                    "final_val_contrastive_loss": "val_contrastive_loss",
+                    "final_val_matching_loss": "val_matching_loss",
+                    "final_val_similarity_loss": "val_similarity_loss",
+                    "final_val_similarity_loss_raw": "val_similarity_loss_raw",
+                    "final_val_cell_type_clustering_loss": "val_cell_type_clustering_loss",
                 }.items()
             }
         )
@@ -1641,10 +1644,19 @@ def calculate_losses(
     prot_raw_cell_type_clustering_loss = run_cell_type_clustering_loss(
         protein_vae.adata, protein_latent_mean, protein_batch["labels"]
     )
+    # Add a balance term with margin to ensure both RNA and protein losses are similar
+    # Only penalize differences larger than the margin
+    margin = 0.1  # Acceptable difference margin
+    loss_diff = torch.abs(rna_raw_cell_type_clustering_loss - prot_raw_cell_type_clustering_loss)
+    balance_term = torch.nn.functional.relu(loss_diff - margin)  # Zero if within margin
     cell_type_clustering_loss = (
-        rna_raw_cell_type_clustering_loss + prot_raw_cell_type_clustering_loss
+        rna_raw_cell_type_clustering_loss + prot_raw_cell_type_clustering_loss + balance_term
     ) * cell_type_clustering_weight
-
+    print(f"rna_raw_cell_type_clustering_loss: {rna_raw_cell_type_clustering_loss}")
+    print(f"prot_raw_cell_type_clustering_loss: {prot_raw_cell_type_clustering_loss}")
+    print(f"loss_diff: {loss_diff}, margin: {margin}")
+    print(f"balance_term: {balance_term}")
+    print(f"cell_type_clustering_loss: {cell_type_clustering_loss}")
     # Calculate similarity loss
     rna_dis = torch.cdist(rna_latent_mean, rna_latent_mean)
     prot_dis = torch.cdist(protein_latent_mean, protein_latent_mean)

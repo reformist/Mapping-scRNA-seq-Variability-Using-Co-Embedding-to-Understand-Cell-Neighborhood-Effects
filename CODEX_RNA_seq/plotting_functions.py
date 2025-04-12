@@ -239,7 +239,7 @@ def plot_train_val_normalized_losses(history):
             return
 
         # Create figure with two vertically stacked subplots
-        fig, axes = plt.subplots(2, 1, figsize=(14, 11), sharex=True)
+        fig, axes = plt.subplots(2, 1, figsize=(15, 11), sharex=True)
 
         # Dictionary to hold normalized losses
         train_normalized_losses = {}

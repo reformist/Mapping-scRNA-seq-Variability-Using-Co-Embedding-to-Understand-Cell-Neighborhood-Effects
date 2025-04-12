@@ -82,9 +82,9 @@ sys.path.append(str(project_root))
 
 # Define hyperparameter search space
 param_grid = {
-    "plot_x_times": [5],
-    "check_val_every_n_epoch": [2],
-    "max_epochs": [60],  # Changed from n_epochs to max_epochs to match train_vae
+    "plot_x_times": [6],
+    "check_val_every_n_epoch": [3],
+    "max_epochs": [50],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
     "lr": [1e-4],
     "contrastive_weight": [0, 0.001, 0.1, 1],
@@ -96,7 +96,7 @@ param_grid = {
     "n_hidden_prot": [32],
     "n_layers": [3],
     "latent_dim": [10],
-    "kl_weight_rna": [1],
+    "kl_weight_rna": [0.1, 1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -108,7 +108,7 @@ param_grid = {
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search_2"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_3"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -170,6 +170,13 @@ log_memory_usage("After loading protein data: ")
 
 print(f"RNA dataset shape: {adata_rna_subset.shape}")
 print(f"Protein dataset shape: {adata_prot_subset.shape}")
+
+# # Subsample for debugging # todo remove!!!!
+# rna_sample_size = min(len(adata_rna_subset), 1500)
+# prot_sample_size = min(len(adata_prot_subset), 1500)
+# adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
+# adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
+log_memory_usage("After subsampling: ")
 
 # Estimate training time before starting
 if total_combinations > 0 and len(new_combinations) > 0:
@@ -274,7 +281,7 @@ for i, params in enumerate(new_combinations):
                 json.dump(loss_weights, f, indent=4)
 
             # Log loss weights JSON as artifact
-            mlflow.log_artifact(loss_weights_path, "losses")
+            mlflow.log_artifact(loss_weights_path)
             # Clean up temporary file
             os.remove(loss_weights_path)
 
@@ -301,6 +308,14 @@ for i, params in enumerate(new_combinations):
                         "final_train_total_loss": "train_total_loss",
                         "final_val_total_loss": "val_total_loss",
                         "final_train_cell_type_clustering_loss": "train_cell_type_clustering_loss",
+                        # Add all validation loss metrics
+                        "final_val_rna_loss": "val_rna_loss",
+                        "final_val_protein_loss": "val_protein_loss",
+                        "final_val_contrastive_loss": "val_contrastive_loss",
+                        "final_val_matching_loss": "val_matching_loss",
+                        "final_val_similarity_loss": "val_similarity_loss",
+                        "final_val_similarity_loss_raw": "val_similarity_loss_raw",
+                        "final_val_cell_type_clustering_loss": "val_cell_type_clustering_loss",
                     }.items()
                 }
             )
