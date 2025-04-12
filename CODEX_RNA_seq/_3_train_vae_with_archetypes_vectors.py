@@ -30,6 +30,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from pprint import pprint
+from time import time
 
 import anndata
 import mlflow
@@ -159,7 +160,6 @@ importlib.reload(CODEX_RNA_seq.logging_functions)
 importlib.reload(CODEX_RNA_seq.logging_functions)
 
 from bar_nick_utils import (
-    clean_uns_for_h5ad,
     compute_pairwise_kl,
     compute_pairwise_kl_two_items,
     get_latest_file,
@@ -362,16 +362,37 @@ class DualVAETrainingPlan(TrainingPlan):
                 f.write(f"{key}: {value}\n")
 
     def configure_optimizers(self):
+        """Configure optimizers for the model.
+
+        Returns:
+            dict: Dictionary with optimizer and lr scheduler.
+        """
+        # Use separate learning rates for RNA (higher) and protein (standard)
+        rna_params = self.rna_vae.module.parameters()
+        protein_params = self.protein_vae.module.parameters()
+
+        # Use a higher learning rate for RNA to help unstick it
+        rna_lr = self.lr * 10.0  # can even be higher 12 or 15
+        protein_lr = self.lr
+
+        # Combined parameters with different parameter groups
+        all_params = [
+            {"params": rna_params, "lr": rna_lr},
+            {"params": protein_params, "lr": protein_lr},
+        ]
+
         optimizer = torch.optim.AdamW(
-            list(self.rna_vae.module.parameters()) + list(self.protein_vae.module.parameters()),
+            list(all_params),
             lr=self.lr,
-            weight_decay=1e-5,
+            weight_decay=1e-6,
         )
+
         d = {
             "optimizer": optimizer,
             "gradient_clip_val": self.gradient_clip_val,
             "gradient_clip_algorithm": "value",
         }
+
         return d
 
     def training_step(self, batch, batch_idx):
@@ -439,7 +460,7 @@ class DualVAETrainingPlan(TrainingPlan):
         # Update last_ilisi_score if we calculated a new one
         if "ilisi_score" in losses:
             self.last_ilisi_score = losses["ilisi_score"]
-            ilisi_threshold = 1.8
+            ilisi_threshold = 1.7
             if self.last_ilisi_score < ilisi_threshold:
                 # If iLISI is too low, increase the similarity weight
                 self.similarity_weight = min(1e6, self.similarity_weight * 10)
@@ -580,10 +601,11 @@ class DualVAETrainingPlan(TrainingPlan):
             The total validation loss
         """
         # Get validation batches
-        self.rna_vae.module.eval()  # todo bring it back
+        self.rna_vae.module.eval()  # Keep models in eval mode for validation
         self.protein_vae.module.eval()
-        # self.rna_vae.module.train()
-        # self.protein_vae.module.train()
+        self.rna_vae.module.train()
+        self.protein_vae.module.train()
+        # Remove the lines that set models back to train mode
         indices = range(self.batch_size)
         self.validation_step_ += 1
         indices_prot = np.random.choice(
@@ -612,26 +634,27 @@ class DualVAETrainingPlan(TrainingPlan):
         to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
 
         # Calculate all losses using the same function as training
-        losses = calculate_losses(
-            self,
-            rna_batch=rna_batch,
-            protein_batch=protein_batch,
-            rna_vae=self.rna_vae,
-            protein_vae=self.protein_vae,
-            device=self.device,
-            similarity_weight=self.similarity_weight,
-            similarity_active=self.similarity_active,
-            contrastive_weight=self.contrastive_weight,
-            matching_weight=self.matching_weight,
-            cell_type_clustering_weight=self.cell_type_clustering_weight,
-            cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
-            kl_weight_rna=self.kl_weight_rna,
-            kl_weight_prot=self.kl_weight_prot,
-            check_ilisi=check_ilisi,
-            to_plot=to_plot,
-            global_step=self.global_step,
-            total_steps=self.total_steps,
-        )
+        with torch.no_grad():
+            losses = calculate_losses(
+                self,
+                rna_batch=rna_batch,
+                protein_batch=protein_batch,
+                rna_vae=self.rna_vae,
+                protein_vae=self.protein_vae,
+                device=self.device,
+                similarity_weight=self.similarity_weight,
+                similarity_active=self.similarity_active,
+                contrastive_weight=self.contrastive_weight,
+                matching_weight=self.matching_weight,
+                cell_type_clustering_weight=self.cell_type_clustering_weight,
+                cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
+                kl_weight_rna=self.kl_weight_rna,
+                kl_weight_prot=self.kl_weight_prot,
+                check_ilisi=check_ilisi,
+                to_plot=to_plot,
+                global_step=self.global_step,
+                total_steps=self.total_steps,
+            )
 
         # We'll accumulate losses in self.current_val_losses rather than self.val_losses directly
         # This accumulation will be handled in on_validation_epoch_end
@@ -917,6 +940,13 @@ class DualVAETrainingPlan(TrainingPlan):
         self.rna_vae.adata.obsm["X_scVI"] = rna_latent
         self.protein_vae.adata.obsm["X_scVI"] = prot_latent
 
+        # Save final checkpoint with 'final' tag
+        final_checkpoint_path = f"{self.checkpoint_dir}/final"
+        os.makedirs(final_checkpoint_path, exist_ok=True)
+
+        # Save the final checkpoint
+        self.save_checkpoint()
+
         # Plot metrics over time
         if plot_flag and hasattr(self, "metrics_history"):
             pf.plot_training_metrics_history(
@@ -964,49 +994,88 @@ class DualVAETrainingPlan(TrainingPlan):
             mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
             print("✓ Best metrics logged to MLflow")
 
-        # Save model checkpoints
-        rna_adata_save = self.rna_vae.adata.copy()
-        protein_adata_save = self.protein_vae.adata.copy()
-
-        # Clean for h5ad saving
-        clean_uns_for_h5ad(rna_adata_save)
-        clean_uns_for_h5ad(protein_adata_save)
-
-        # Save the AnnData objects
-        checkpoint_path = f"{self.checkpoint_dir}/epoch_{self.current_epoch}"
-        os.makedirs(checkpoint_path, exist_ok=True)
-
-        sc.write(f"{checkpoint_path}/rna_adata_epoch_{self.current_epoch}.h5ad", rna_adata_save)
-        sc.write(
-            f"{checkpoint_path}/protein_adata_epoch_{self.current_epoch}.h5ad", protein_adata_save
-        )
-
-    def save_checkpoint(self):  # needs an update
+    def save_checkpoint(self):
         """Save the model checkpoint including AnnData objects with latent representations."""
         print(f"\nSaving checkpoint at epoch {self.current_epoch}...")
 
-        # Make copies to avoid modifying the originals during saving
-        rna_adata_save = self.rna_vae.adata.copy()
-        protein_adata_save = self.protein_vae.adata.copy()
-
-        # Clean for h5ad saving
-        clean_uns_for_h5ad(rna_adata_save)
-        clean_uns_for_h5ad(protein_adata_save)
-
-        # Save the AnnData objects
+        # Create checkpoint directory if it doesn't exist
         checkpoint_path = f"{self.checkpoint_dir}/epoch_{self.current_epoch}"
         os.makedirs(checkpoint_path, exist_ok=True)
 
-        sc.write(f"{checkpoint_path}/rna_adata_epoch_{self.current_epoch}.h5ad", rna_adata_save)
-        sc.write(
-            f"{checkpoint_path}/protein_adata_epoch_{self.current_epoch}.h5ad", protein_adata_save
-        )
+        # Get latent representations for all cells
+        # with torch.no_grad():
+        #     # RNA model
+        #     rna_indices = np.arange(len(self.rna_vae.adata))
+        #     rna_batch = self._get_rna_batch(None, rna_indices)
+        #     rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+        #     rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
+
+        #     # Protein model
+        #     prot_indices = np.arange(len(self.protein_vae.adata))
+        #     protein_batch = self._get_protein_batch(None, prot_indices)
+        #     prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
+        #     prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
+
+        # Store latent representations in AnnData
+        # rna_adata_save = self.rna_vae.adata.copy()
+        # protein_adata_save = self.protein_vae.adata.copy()
+
+        # rna_adata_save.obsm["X_scVI"] = rna_latent
+        # protein_adata_save.obsm["X_scVI"] = prot_latent
+
+        # # Clean for h5ad saving
+        # clean_uns_for_h5ad(rna_adata_save)
+        # clean_uns_for_h5ad(protein_adata_save)
+
+        # # Save AnnData objects with latent representations
+        # sc.write(f"{checkpoint_path}/rna_adata.h5ad", rna_adata_save)
+        # sc.write(f"{checkpoint_path}/protein_adata.h5ad", protein_adata_save)
+
+        # Save model state dictionaries
+        torch.save(self.rna_vae.module.state_dict(), f"{checkpoint_path}/rna_vae_model.pt")
+        torch.save(self.protein_vae.module.state_dict(), f"{checkpoint_path}/protein_vae_model.pt")
+
+        # Save training plan state
+        training_state = {
+            "epoch": self.current_epoch,
+            "global_step": self.global_step,
+            "optimizer_state": self.configure_optimizers()["optimizer"].state_dict(),
+            "similarity_weight": self.similarity_weight,
+            "similarity_active": self.similarity_active,
+            "similarity_loss_history": self.similarity_loss_history,
+            "similarity_loss_steady_counter": self.similarity_loss_steady_counter,
+            "last_ilisi_score": self.last_ilisi_score,
+        }
+
+        torch.save(training_state, f"{checkpoint_path}/training_state.pt")
+
+        # Save training parameters and configs
+        params = {
+            "batch_size": self.batch_size,
+            "max_epochs": self.max_epochs,
+            "similarity_weight": self.similarity_weight,
+            "cell_type_clustering_weight": self.cell_type_clustering_weight,
+            "cross_modal_cell_type_weight": self.cross_modal_cell_type_weight,
+            "contrastive_weight": self.contrastive_weight,
+            "matching_weight": self.matching_weight,
+            "kl_weight_rna": self.kl_weight_rna,
+            "kl_weight_prot": self.kl_weight_prot,
+            "lr": self.lr,
+            "latent_dim": self.rna_vae.module.n_latent,
+            "device": str(self.device),
+        }
+
+        with open(f"{checkpoint_path}/model_config.json", "w") as f:
+            json.dump(params, f, indent=4)
 
         print(f"✓ Checkpoint saved at {checkpoint_path}")
-        print(f"\nCheckpoint saved at epoch {self.current_epoch}\n")
-        print(f"Location: {checkpoint_path}\n")
-        print(f"RNA dataset shape: {rna_adata_save.shape}\n")
-        print(f"Protein dataset shape: {protein_adata_save.shape}\n")
+
+        # Log path as MLflow artifact if MLflow is active
+        try:
+            mlflow.log_artifact(checkpoint_path)
+            print("✓ Checkpoint logged to MLflow")
+        except:
+            print("Note: MLflow logging skipped")
 
     def _get_protein_batch(self, batch, indices):
         protein_data = self.protein_vae.adata[indices]
@@ -1160,6 +1229,12 @@ class DualVAETrainingPlan(TrainingPlan):
             f"Average validation loss: {sum(self.val_losses)/len(self.val_losses) if self.val_losses else 0:.4f}"
         )
 
+        # Save checkpoint every 5 epochs or on the first and last epochs
+        if self.current_epoch % 5 == 0 and self.current_epoch > 5:
+            start_time = time()
+            self.save_checkpoint()
+            print(f"Checkpoint saved in {time() - start_time:.2f} seconds")
+
         # Check if this is the last epoch
         if self.current_epoch + 1 >= self.max_epochs:
             print(f"Completed final epoch {self.current_epoch}")
@@ -1168,11 +1243,84 @@ class DualVAETrainingPlan(TrainingPlan):
                 print("Last epoch completed, calling on_train_end_custom")
                 self.on_train_end_custom(plot_flag=True)
 
+    @staticmethod
+    def load_from_checkpoint(
+        checkpoint_path,
+        rna_vae,
+        protein_vae,
+        device="cuda:0" if torch.cuda.is_available() else "cpu",
+    ):
+        """Load a checkpoint from disk.
+
+        Args:
+            checkpoint_path: Path to the checkpoint directory
+            device: Device to load the models to
+
+        Returns:
+            rna_vae: Loaded RNA VAE model
+            protein_vae: Loaded protein VAE model
+            training_state: Dictionary with training state
+        """
+        print(f"Loading checkpoint from {checkpoint_path}...")
+
+        # Load AnnData objects
+        # rna_adata = sc.read_h5ad(f"{checkpoint_path}/rna_adata.h5ad")
+        # protein_adata = sc.read_h5ad(f"{checkpoint_path}/protein_adata.h5ad")
+
+        # Load configuration
+        # with open(f"{checkpoint_path}/model_config.json", "r") as f:
+        #     config = json.load(f)
+
+        # # Setup anndata for scVI
+        # SCVI.setup_anndata(rna_adata, labels_key="index_col")
+        # SCVI.setup_anndata(protein_adata, labels_key="index_col")
+
+        # Create models
+        # rna_vae = SCVI(
+        #     rna_adata,
+        #     gene_likelihood=select_gene_likelihood(rna_adata),
+        #     n_hidden=config.get("n_hidden_rna", 128),
+        #     n_layers=config.get("n_layers", 3),
+        #     n_latent=config.get("latent_dim", 10),
+        # )
+
+        # protein_vae = SCVI(
+        #     protein_adata,
+        #     gene_likelihood="normal",
+        #     n_hidden=config.get("n_hidden_prot", 50),
+        #     n_layers=config.get("n_layers", 3),
+        #     n_latent=config.get("latent_dim", 10),
+        # )
+
+        # Load state dictionaries
+        rna_vae.module.load_state_dict(
+            torch.load(f"{checkpoint_path}/rna_vae_model.pt", map_location=device)
+        )
+        protein_vae.module.load_state_dict(
+            torch.load(f"{checkpoint_path}/protein_vae_model.pt", map_location=device)
+        )
+
+        # Load training state
+        training_state = torch.load(f"{checkpoint_path}/training_state.pt", map_location=device)
+
+        # Set models as trained
+        rna_vae.is_trained_ = False
+        protein_vae.is_trained_ = False
+
+        # Move models to device
+        rna_vae.module.to(device)
+        protein_vae.module.to(device)
+
+        print(f"✓ Models loaded successfully from {checkpoint_path}")
+
+        return rna_vae, protein_vae, training_state
+
 
 # %%
 def train_vae(
     adata_rna_subset,
     adata_prot_subset,
+    model_checkpoints_folder=None,
     max_epochs=1,
     batch_size=128,
     lr=1e-3,
@@ -1281,11 +1429,16 @@ def train_vae(
     protein_vae.module.cpu()
     latent_rna_before = rna_vae.get_latent_representation()  # bad should probaly repalace
     latent_prot_before = protein_vae.get_latent_representation()
-    rna_vae.module.to(device)
-    protein_vae.module.to(device)
-    rna_vae.is_trained_ = False
-    protein_vae.is_trained_ = False
 
+    if model_checkpoints_folder is not None:
+        rna_vae, protein_vae, training_state = DualVAETrainingPlan.load_from_checkpoint(
+            model_checkpoints_folder, rna_vae, protein_vae
+        )
+    else:
+        rna_vae.module.to(device)
+        protein_vae.module.to(device)
+        rna_vae.is_trained_ = False
+        protein_vae.is_trained_ = False
     rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
 
     # Manually set trained flag
@@ -1956,3 +2109,172 @@ def calculate_cross_modal_cell_type_loss(
     cross_modal_loss = centroid_distance + 0.5 * structure_loss
 
     return cross_modal_loss
+
+
+# %%
+def continue_training_from_checkpoint(
+    checkpoint_path,
+    additional_epochs=10,
+    batch_size=None,
+    lr=None,
+    device="cuda:0" if torch.cuda.is_available() else "cpu",
+    **kwargs,
+):
+    """Continue training from a checkpoint.
+
+    Args:
+        checkpoint_path: Path to the checkpoint directory
+        additional_epochs: Number of additional epochs to train
+        batch_size: New batch size (if None, use the one from checkpoint)
+        lr: New learning rate (if None, use the one from checkpoint)
+        device: Device to use for training
+        **kwargs: Additional training parameters to override
+
+    Returns:
+        rna_vae: Trained RNA VAE model
+        protein_vae: Trained protein VAE model
+    """
+    print(f"Continuing training from checkpoint: {checkpoint_path}")
+
+    # Load models and state
+    rna_vae, protein_vae, training_state = DualVAETrainingPlan.load_from_checkpoint(
+        checkpoint_path, device
+    )
+
+    # Load config
+    with open(f"{checkpoint_path}/model_config.json", "r") as f:
+        config = json.load(f)
+
+    # Use values from config if not provided
+    if batch_size is None:
+        batch_size = config["batch_size"]
+    if lr is None:
+        lr = config["lr"]
+
+    # Override config with kwargs
+    for key, value in kwargs.items():
+        config[key] = value
+
+    # Setup training parameters
+    plan_kwargs = {
+        "protein_vae": protein_vae,
+        "rna_vae": rna_vae,
+        "contrastive_weight": config.get("contrastive_weight", 1.0),
+        "similarity_weight": config.get("similarity_weight", 1000.0),
+        "diversity_weight": config.get("diversity_weight", 0.1),
+        "cell_type_clustering_weight": config.get("cell_type_clustering_weight", 1.0),
+        "cross_modal_cell_type_weight": config.get("cross_modal_cell_type_weight", 1.0),
+        "matching_weight": config.get("matching_weight", 100.0),
+        "adv_weight": config.get("adv_weight", 0.1),
+        "plot_x_times": config.get("plot_x_times", 5),
+        "batch_size": batch_size,
+        "max_epochs": additional_epochs,
+        "lr": lr,
+        "kl_weight_rna": config.get("kl_weight_rna", 1.0),
+        "kl_weight_prot": config.get("kl_weight_prot", 1.0),
+        "gradient_clip_val": config.get("gradient_clip_val", 1.0),
+        "check_val_every_n_epoch": config.get("check_val_every_n_epoch", 1),
+    }
+
+    train_kwargs = {
+        "max_epochs": additional_epochs,
+        "batch_size": batch_size,
+        "train_size": config.get("train_size", 0.9),
+        "validation_size": config.get("validation_size", 0.1),
+        "accumulate_grad_batches": config.get("accumulate_grad_batches", 1),
+        "check_val_every_n_epoch": config.get("check_val_every_n_epoch", 1),
+    }
+
+    # Initialize training plan - required for scVI
+    rna_vae._training_plan_cls = DualVAETrainingPlan
+
+    # Set training flag to False to trigger training
+    rna_vae.is_trained_ = False
+    protein_vae.is_trained_ = False
+
+    # Train for additional epochs
+    print(f"Starting training for {additional_epochs} additional epochs...")
+    rna_vae.train(**train_kwargs, plan_kwargs=plan_kwargs)
+
+    # Set trained flag again
+    rna_vae.is_trained_ = True
+    protein_vae.is_trained_ = True
+
+    return rna_vae, protein_vae
+
+
+# %%
+def get_latent_embedding(
+    model, adata, batch_size=128, device="cuda:0" if torch.cuda.is_available() else "cpu"
+):
+    """Get latent embedding for data using a trained model.
+
+    Args:
+        model: Trained SCVI model (RNA or protein)
+        adata: AnnData object with data to embed
+        batch_size: Batch size for processing
+        device: Device to use
+
+    Returns:
+        latent: NumPy array with latent embeddings
+    """
+    print(f"Getting latent embeddings for {adata.shape[0]} cells...")
+
+    # Make sure model is in eval mode
+    model.module.eval()
+
+    # Process in batches to avoid memory issues
+    latent_parts = []
+    total_cells = adata.shape[0]
+    for i in range(0, total_cells, batch_size):
+        end_idx = min(i + batch_size, total_cells)
+        indices = np.arange(i, end_idx)
+
+        # Get batch data
+        X = adata[indices].X
+        if issparse(X):
+            X = X.toarray()
+        X = torch.tensor(X, dtype=torch.float32).to(device)
+
+        # Get batch indices if they exist, otherwise use zeros
+        if "_scvi_batch" in adata.obs:
+            batch_indices = torch.tensor(
+                adata[indices].obs["_scvi_batch"].values, dtype=torch.long
+            ).to(device)
+        else:
+            batch_indices = torch.zeros(len(indices), dtype=torch.long).to(device)
+
+        # Get archetype vectors if they exist, otherwise use zeros
+        if "archetype_vec" in adata.obsm:
+            archetype_vec = torch.tensor(
+                adata[indices].obsm["archetype_vec"], dtype=torch.float32
+            ).to(device)
+        else:
+            latent_dim = model.module.n_latent  # Typically the dimensions match
+            archetype_vec = torch.zeros((len(indices), latent_dim), dtype=torch.float32).to(device)
+
+        # Create batch
+        batch = {
+            "X": X,
+            "batch": batch_indices,
+            "labels": indices,
+            "archetype_vec": archetype_vec,
+        }
+
+        # Get latent representation
+        with torch.no_grad():
+            inference_outputs, _, _ = model.module(batch)
+            latent_mean = inference_outputs["qz"].mean.detach().cpu().numpy()
+            latent_parts.append(latent_mean)
+
+        if (i + batch_size) % (10 * batch_size) == 0:
+            print(f"Processed {i + batch_size} / {total_cells} cells")
+
+    # Combine all batches
+    latent = np.vstack(latent_parts)
+    print(f"✓ Generated latent embeddings with shape {latent.shape}")
+
+    return latent
+
+
+# %%

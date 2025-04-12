@@ -84,7 +84,7 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [6],
     "check_val_every_n_epoch": [3],
-    "max_epochs": [75],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [30],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
     "lr": [1e-4],
     "contrastive_weight": [0, 0.001, 0.1, 1],
@@ -101,7 +101,7 @@ param_grid = {
         1000,
         100_000,
     ],  # Added cross-modal cell type alignment weight
-    "n_hidden_rna": [256],
+    "n_hidden_rna": [512],
     "n_hidden_prot": [32],
     "n_layers": [4],
     "latent_dim": [20],
@@ -113,11 +113,10 @@ param_grid = {
     "gradient_clip_val": [1.0],
 }
 
-# Setup MLflow
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search_8"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_8_tmp1"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -191,7 +190,7 @@ print(f"Protein dataset shape: {adata_prot_subset.shape}")
 # adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
 # adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
 log_memory_usage("After subsampling: ")
-
+model_checkpoints_folder = Path("CODEX_RNA_seq/pretrained_vae/epoch_74")
 # Estimate training time before starting
 if total_combinations > 0 and len(new_combinations) > 0:
     # Use first parameter combination for estimation
@@ -306,7 +305,7 @@ for i, params in enumerate(new_combinations):
 
             # Setup and train model
             rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
-                adata_rna_subset, adata_prot_subset, params
+                adata_rna_subset, adata_prot_subset, params, model_checkpoints_folder
             )
 
             # Log successful run

@@ -15,16 +15,13 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # %%
 
 
-def print_distance_metrics(
-    prot_distances, rna_distances, num_acceptable, num_cells, stress_loss, matching_loss
-):
+def print_distance_metrics(prot_distances, rna_distances, num_acceptable, num_cells, matching_loss):
     print("\n--- DISTANCE METRICS ---\n")
     table_data = [
         ["Metric", "Value"],
         ["Mean protein distances", f"{prot_distances.mean().item():.4f}"],
         ["Mean RNA distances", f"{rna_distances.mean().item():.4f}"],
         ["Acceptable ratio", f"{num_acceptable.float().item() / num_cells:.4f}"],
-        ["Stress loss", f"{stress_loss.item():.4f}"],
         ["Matching loss", f"{matching_loss.item():.4f}"],
     ]
     print(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
@@ -219,7 +216,6 @@ def log_step(
     cross_modal_cell_type_loss = get_value(losses.get("cross_modal_cell_type_loss", float("nan")))
     adv_loss = get_value(losses.get("adversarial_loss", float("nan")))
     diversity_loss = get_value(losses.get("diversity_loss", float("nan")))
-    stress_loss = get_value(losses.get("stress_loss", float("nan")))
     reward = get_value(losses.get("reward", float("nan")))
     ilisi_score = get_value(
         losses.get("ilisi_score", float("nan"))
@@ -338,7 +334,6 @@ def log_step(
         extra_metrics.append(["Metric", "Value"])
 
         extra_metrics_to_print = {
-            f"{prefix}Stress Loss": stress_loss,
             f"{prefix}Reward": reward,
             f"{prefix}Exact Pairs": exact_pairs,
             f"{prefix}iLISI": ilisi_score,  # Use ilisi_score from losses
@@ -390,7 +385,6 @@ def log_step(
     items_to_log[f"{prefix}iLISI"] = ilisi
     items_to_log[f"{prefix}cLISI"] = clisi
     items_to_log[f"{prefix}accuracy"] = accuracy
-    items_to_log[f"{prefix}stress_loss"] = stress_loss
     items_to_log[f"{prefix}reward"] = reward
 
     mlflow.log_metrics(format_loss_mlflow(items_to_log), step=step)
