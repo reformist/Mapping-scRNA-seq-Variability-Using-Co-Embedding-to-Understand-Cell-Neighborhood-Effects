@@ -748,15 +748,21 @@ def plot_rna_protein_matching_means_and_scale(
         global_step: the current training step, if None then not during training
     """
     if use_subsample:
-        subsample_indexes = np.random.choice(rna_latent_mean.shape[0], 700, replace=False)
+        rna_subsample_idx = np.random.choice(
+            rna_latent_mean.shape[0], min(700, rna_latent_mean.shape[0]), replace=False
+        )
+        protein_subsample_idx = np.random.choice(
+            protein_latent_mean.shape[0], min(700, protein_latent_mean.shape[0]), replace=False
+        )
     else:
-        subsample_indexes = np.arange(rna_latent_mean.shape[0])
+        rna_subsample_idx = np.arange(rna_latent_mean.shape[0])
+        protein_subsample_idx = np.arange(protein_latent_mean.shape[0])
     prot_new_order = archetype_dis_mat.argmin(axis=0).detach().cpu().numpy()
 
-    rna_means = rna_latent_mean[subsample_indexes]
-    rna_scales = rna_latent_std[subsample_indexes]
-    protein_means = protein_latent_mean[prot_new_order][subsample_indexes]
-    protein_scales = protein_latent_std[prot_new_order][subsample_indexes]
+    rna_means = rna_latent_mean[rna_subsample_idx]
+    rna_scales = rna_latent_std[rna_subsample_idx]
+    protein_means = protein_latent_mean[prot_new_order][protein_subsample_idx]
+    protein_scales = protein_latent_std[prot_new_order][protein_subsample_idx]
     # match the order of the means to the archetype_dis
     # Combine means for PCA
     combined_means = np.concatenate([rna_means, protein_means], axis=0)

@@ -215,6 +215,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.check_val_every_n_epoch = kwargs["check_val_every_n_epoch"]
 
         self.validation_step_ = 0
+        self.train_step_ = 0  # Initialize train_step_ counter
         validation_size = kwargs.pop("validation_size", 0.1)
         device = kwargs.pop("device", "cuda:0" if torch.cuda.is_available() else "cpu")
         # Verify train and validation sizes sum to 1
@@ -373,6 +374,10 @@ class DualVAETrainingPlan(TrainingPlan):
         self.rna_vae.module.train()
         self.protein_vae.module.train()
         indices = range(self.batch_size)
+
+        # Increment train_step_ counter
+        self.train_step_ += 1
+
         indices_rna = np.random.choice(
             self.train_indices_rna,
             size=len(indices),
@@ -504,6 +509,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.train_cell_type_clustering_losses.append(losses["cell_type_clustering_loss"].item())
         to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
         # Log metrics
+        print(f"train step to_plot before: {to_plot}")
         if to_plot:
             plot_similarity_loss_history(
                 self.similarity_losses, self.active_similarity_loss_active_history, self.global_step
@@ -512,14 +518,23 @@ class DualVAETrainingPlan(TrainingPlan):
         # Always save on first and last steps
         if self.global_step == 0 or self.global_step == self.total_steps - 1:
             to_plot = True
+        print(f"global_step: {self.global_step}")
+        print(f"total_steps: {self.total_steps}")
+        print(f"train step to_plot after: {to_plot}")
 
-        # Always save on last step of epoch
-        is_last_step_of_epoch = (
-            batch_idx + 1
-        ) % self.steps_per_epoch == 0 or batch_idx + 1 == self.steps_per_epoch
+        # Always save on last step of epoch - use train_step_ to detect epoch boundary
+        steps_in_epoch = int(np.ceil(len(self.train_indices_rna) / self.batch_size))
+        is_last_step_of_epoch = self.train_step_ >= steps_in_epoch
+
         if is_last_step_of_epoch:
             to_plot = True
+            # Reset train_step_ counter for next epoch
+            self.train_step_ = 0
 
+        print(
+            f"train_step_: {self.train_step_}, steps_in_epoch: {steps_in_epoch}, is_last_step_of_epoch: {is_last_step_of_epoch}"
+        )
+        print(f"train step to_plot end: {to_plot}")
         log_step(
             losses,
             metrics=None,
@@ -536,7 +551,9 @@ class DualVAETrainingPlan(TrainingPlan):
         ) and is_last_step_of_epoch
 
         if is_last_step_of_epoch:
-            print(f"Completed last step of epoch {self.current_epoch}")
+            print(
+                f"Completed last step of epoch {self.current_epoch} in global step {self.global_step}"
+            )
             # self.on_epoch_end_custom()
 
         if is_last_step_of_training:
@@ -583,10 +600,11 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Check if we should calculate iLISI for this validation step
         # Calculate iLISI every 5 validation steps or at the start and end of validation
+        val_steps_per_epoch = int(np.ceil(len(self.val_indices_rna) / self.batch_size))
         check_ilisi = (
             self.validation_step_ % 5 == 0
-            or batch_idx == 0
-            or batch_idx == len(self.val_indices_rna) // self.batch_size - 1
+            or self.validation_step_ == 1  # First step
+            or self.validation_step_ >= val_steps_per_epoch  # Last step
         )
         to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
 
@@ -627,10 +645,10 @@ class DualVAETrainingPlan(TrainingPlan):
             else:
                 self.current_val_losses[k].append(value)
 
-        # Debug log every 20th batch
-        if batch_idx % 20 == 0:
+        # Debug log periodically
+        if self.validation_step_ % 20 == 0:
             print(
-                f"Validation batch {batch_idx}, accumulated {len(self.current_val_losses.get('total_loss', []))} validation samples"
+                f"Validation step {self.validation_step_}, accumulated {len(self.current_val_losses.get('total_loss', []))} validation samples"
             )
             if "ilisi_score" in losses:
                 print(f"Validation iLISI score: {losses['ilisi_score']:.4f}")
@@ -638,22 +656,21 @@ class DualVAETrainingPlan(TrainingPlan):
         # Log metrics
         metrics = {}
 
-        # Use the same condition for plotting and saving files
+        # Use validation_step_ to determine the last batch
+        # Calculate total validation steps needed
+        val_steps_per_epoch = int(np.ceil(len(self.val_indices_rna) / self.batch_size))
+        is_last_batch = self.validation_step_ >= val_steps_per_epoch
 
-        # If it's the last batch in validation, always save
-        is_last_batch = batch_idx == len(self.val_indices_rna) // self.batch_size - 1
+        print(
+            f"validation_step_: {self.validation_step_}, val_steps_per_epoch: {val_steps_per_epoch}"
+        )
         print(f"is_last_batch: {is_last_batch}")
-        print(f"batch_idx: {batch_idx}")
-        print(f"len(self.val_indices_rna): {len(self.val_indices_rna)}")
-        print(f"self.batch_size: {self.batch_size}")
-        print(
-            f"len(self.val_indices_rna) // self.batch_size: {len(self.val_indices_rna) // self.batch_size}"
-        )
-        print(
-            f"len(self.val_indices_rna) // self.batch_size - 1: {len(self.val_indices_rna) // self.batch_size - 1}"
-        )
+
         if is_last_batch:
             to_plot = True
+            # Reset validation_step_ counter for the next validation phase
+            self.validation_step_ = 0
+
             # Just log a summary of validation at the end of validation
             mean_total_loss = sum(self.current_val_losses.get("total_loss", [0])) / max(
                 1, len(self.current_val_losses.get("total_loss", []))
