@@ -267,9 +267,7 @@ def mixing_score(
     combined_latent.obs["major_cell_types"] = combined_major_cell_types.values
     sc.pp.pca(combined_latent)
     sc.pp.neighbors(combined_latent, use_rep="X")
-    iLISI = calculate_iLISI(
-        combined_latent, "modality", plot_flag=plot_flag, global_step=global_step
-    )
+    iLISI = calculate_iLISI(combined_latent, "modality", plot_flag=plot_flag)
     cLISI = calculate_cLISI(combined_latent, "major_cell_types", plot_flag=plot_flag)
     return {"iLISI": iLISI, "cLISI": cLISI}
 
@@ -313,7 +311,7 @@ def calculate_iLISI(
 
     connectivities = adata.obsp[f"connectivities"]
     n_cells = adata.n_obs
-    if plot_flag:
+    if False:  # ignore for now
         if use_subsample:
             sample_size = min(300, n_cells)  # Use smaller of 300 or total cells
             subset_indices = np.random.choice(n_cells, sample_size, replace=False)

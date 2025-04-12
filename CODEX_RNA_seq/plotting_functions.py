@@ -247,13 +247,6 @@ def plot_train_val_normalized_losses(history):
 
         # Get the validation epochs information
         val_epochs = history.get("val_epochs", [])
-        if not val_epochs and any(val_loss_keys):
-            # If val_epochs not provided but we have validation data,
-            # create epochs based on first validation loss array length
-            val_epochs = list(range(len(history[val_loss_keys[0]])))
-            print(f"Created {len(val_epochs)} validation epochs (one per validation point)")
-        else:
-            print(f"Using {len(val_epochs)} validation epochs from history")
 
         # Create epochs array for training data
         train_data_lengths = [len(history.get(k, [])) for k in train_loss_keys]
@@ -334,24 +327,64 @@ def plot_train_val_normalized_losses(history):
                             "min": min_val,
                             "max": max_val,
                         }
+                    else:
+                        # If min == max, just plot a constant line at 0.5
+                        val_normalized_losses[loss_type] = {
+                            "values": np.ones_like(val_values) * 0.5,
+                            "min": min_val,
+                            "max": max_val,
+                        }
 
-        # Plot validation losses - only if we have data
+        # Plot validation losses - even if we have just one data point
         if has_val_data:
             for loss_type, data in val_normalized_losses.items():
+                # Make sure val_epochs has correct length, even if we have a single data point
+                if len(val_epochs) == 0 and len(data["values"]) > 0:
+                    # If we have no validation epochs but we have validation data,
+                    # create epochs based on validation data length
+                    val_epochs = list(range(len(data["values"])))
+
                 # Use the actual validation epochs from history
-                val_epochs_plot = val_epochs[: len(data["values"])]
+                val_epochs_plot = val_epochs
+                if len(val_epochs_plot) > len(data["values"]):
+                    val_epochs_plot = val_epochs_plot[: len(data["values"])]
+                elif len(val_epochs_plot) < len(data["values"]):
+                    # Extend val_epochs if necessary
+                    val_epochs_plot = list(range(len(data["values"])))
 
                 label = f"{loss_type.replace('_', ' ').title()} (min:{format_value(data['min'])}, max:{format_value(data['max'])})"
-                axes[1].plot(
-                    val_epochs_plot,
-                    data["values"],
-                    label=label,
-                    alpha=0.8,
-                    marker="o",
-                    markersize=5,
-                    color=color_map.get(loss_type),
-                    linewidth=2,
-                )
+
+                # For single validation point, use a larger marker
+                if len(data["values"]) == 1:
+                    axes[1].plot(
+                        val_epochs_plot,
+                        data["values"],
+                        label=label,
+                        alpha=0.8,
+                        marker="o",
+                        markersize=10,
+                        color=color_map.get(loss_type),
+                        linewidth=2,
+                    )
+                    # Add a text annotation showing the value
+                    axes[1].annotate(
+                        f"{data['min']:.4f}",
+                        (val_epochs_plot[0], data["values"][0]),
+                        xytext=(5, 5),
+                        textcoords="offset points",
+                        fontsize=10,
+                    )
+                else:
+                    axes[1].plot(
+                        val_epochs_plot,
+                        data["values"],
+                        label=label,
+                        alpha=0.8,
+                        marker="o",
+                        markersize=5,
+                        color=color_map.get(loss_type),
+                        linewidth=2,
+                    )
         else:
             axes[1].text(
                 0.5,
@@ -398,7 +431,6 @@ def plot_train_val_normalized_losses(history):
         import traceback
 
         traceback.print_exc()
-        # Don't let plotting errors disrupt training
 
 
 def plot_latent_pca_both_modalities_cn(
@@ -950,7 +982,7 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
-def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch, global_step=""):
+def plot_pca_umap_latent_space_during_train(prefix, combined_latent, epoch, global_step=""):
     sc.pp.pca(combined_latent)
     fig = plt.figure(figsize=(15, 5))
     ax1 = fig.add_subplot(1, 3, 1)
@@ -973,9 +1005,9 @@ def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch, 
     sc.pl.pca(combined_latent, color="CN", ax=ax3, show=False, title="Combined Latent PCA by CN")
     plt.tight_layout()
     if global_step:
-        pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}_step_{global_step:03d}.png"
+        pca_file = f"{prefix}_combined_latent_pca_epoch_{epoch:03d}_step_{global_step:03d}.png"
     else:
-        pca_file = f"{prefix}combined_latent_pca_epoch_{epoch:03d}.png"
+        pca_file = f"{prefix}_combined_latent_pca_epoch_{epoch:03d}.png"
     plt.savefig(pca_file, dpi=200, bbox_inches="tight")
     if hasattr(mlflow, "active_run") and mlflow.active_run():
         mlflow.log_artifact(pca_file, artifact_path="train")
@@ -1007,9 +1039,9 @@ def plot_end_of_val_epoch_pca_umap_latent_space(prefix, combined_latent, epoch, 
     )
     plt.tight_layout()
     if global_step:
-        umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}_step_{global_step:03d}.png"
+        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:03d}_step_{global_step:03d}.png"
     else:
-        umap_file = f"{prefix}combined_latent_umap_epoch_{epoch:03d}.png"
+        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:03d}.png"
     plt.savefig(umap_file, dpi=200, bbox_inches="tight")
     if hasattr(mlflow, "active_run") and mlflow.active_run():
         mlflow.log_artifact(umap_file, artifact_path="train")

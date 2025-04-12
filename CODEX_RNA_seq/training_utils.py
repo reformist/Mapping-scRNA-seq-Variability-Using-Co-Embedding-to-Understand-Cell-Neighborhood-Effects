@@ -135,8 +135,8 @@ def process_latent_spaces(rna_adata, protein_adata):
     combined_latent.uns.pop("neighbors", None) if "neighbors" in combined_latent.uns else None
 
     # Use cosine metric and larger n_neighbors for better batch integration
-    sc.pp.neighbors(combined_latent, use_rep="X", n_neighbors=30, metric="cosine")
-    sc.tl.umap(combined_latent, min_dist=0.3)
+    sc.pp.neighbors(combined_latent, use_rep="X")
+    sc.tl.umap(combined_latent)
 
     return rna_latent, prot_latent, combined_latent
 

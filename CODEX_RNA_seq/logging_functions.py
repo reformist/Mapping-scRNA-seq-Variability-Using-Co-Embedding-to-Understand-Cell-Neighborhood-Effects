@@ -100,26 +100,30 @@ def estimate_training_time(rna_cells, prot_cells, params, total_combinations):
     return estimated_time_per_iter, total_estimated_time
 
 
-def save_tabulate_to_txt(losses, global_step, total_steps):
+def save_tabulate_to_txt(losses, global_step, total_steps, is_validation=False):
     """Save losses as a formatted table and log it to MLflow.
 
     Args:
         losses: Dictionary containing loss values
         global_step: Current global step
         total_steps: Total number of steps
+        is_validation: Whether this is validation data
     """
     # Convert tensor values to Python scalars
     losses_to_save = {
         k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.copy().items()
     }
 
+    # Determine modality prefix for filename
+    modality = "val" if is_validation else "train"
+
     # Determine filename based on step
     if global_step is not None:
         last_step = global_step == total_steps - 1 if total_steps is not None else False
     if last_step:
-        losses_file = "final_losses.txt"
+        losses_file = f"{modality}_final_losses.txt"
     else:
-        losses_file = f"losses_{global_step:05d}.txt"
+        losses_file = f"{modality}_losses_step_{global_step:05d}.txt"
 
     # Get total loss for percentage calculations
     total_loss = losses_to_save.get("total_loss", 0)
@@ -159,7 +163,7 @@ def save_tabulate_to_txt(losses, global_step, total_steps):
         f.write(tabulate(table_data, headers="firstrow", tablefmt="fancy_grid"))
 
     # Log to MLflow and clean up
-    mlflow.log_artifact(losses_file, "losses")
+    mlflow.log_artifact(losses_file, f"{modality}_losses")
     os.remove(losses_file)
 
 
@@ -248,7 +252,9 @@ def log_step(
 
     # Format metrics for printing to console
     if print_to_console:
-        save_tabulate_to_txt(format_loss_mlflow(losses), global_step, total_steps)
+        save_tabulate_to_txt(
+            format_loss_mlflow(losses), global_step, total_steps, is_validation=is_validation
+        )
 
         print("\n" + "=" * 80)
         step_info = ""
