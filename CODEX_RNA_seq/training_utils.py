@@ -453,16 +453,61 @@ def run_cell_type_clustering_loss(
             if count > 0:
                 structure_preservation_loss = structure_preservation_loss / count
 
-            # Calculate within-cluster cohesion
+            # Calculate within-cluster cohesion and variance regularization
             cohesion_loss = 0.0
             total_cells = 0
 
-            for i, cells in enumerate(cells_per_type):
-                if len(cells) > 1:
-                    # Calculate distances to centroid
-                    dists = torch.norm(cells - centroids[i], dim=1)
-                    cohesion_loss += dists.mean()
-                    total_cells += 1
+            # Calculate variances for each cluster in each dimension
+            valid_clusters = [cells for cells in cells_per_type if len(cells) > 1]
+            if len(valid_clusters) > 1:
+                # Calculate variance for each cluster in each dimension
+                cluster_variances = []
+                for cells in valid_clusters:
+                    # Compute variance per dimension
+                    vars_per_dim = torch.var(cells, dim=0)
+                    cluster_variances.append(vars_per_dim)
+
+                # Stack variances for all clusters
+                cluster_variances = torch.stack(cluster_variances)
+
+                # Calculate mean variance across all clusters for each dimension
+                mean_variance_per_dim = torch.mean(cluster_variances, dim=0)
+
+                # Log the mean variance for some dimensions
+                if mean_variance_per_dim.shape[0] > 3:
+                    print(
+                        f"Mean variances for first 3 dimensions: {mean_variance_per_dim[:3].detach().cpu().numpy()}"
+                    )
+                    print(f"Dimension variance std: {torch.std(mean_variance_per_dim).item():.4f}")
+
+                # Modify the cluster cohesion calculation to include variance regularization
+                for i, cells in enumerate(cells_per_type):
+                    if len(cells) > 1:
+                        # Calculate distances to centroid (standard cohesion)
+                        dists = torch.norm(cells - centroids[i], dim=1)
+
+                        # Calculate variance regularization term for this cluster
+                        vars_per_dim = torch.var(cells, dim=0)
+                        variance_diff = torch.mean((vars_per_dim - mean_variance_per_dim) ** 2)
+
+                        # Log the variance regularization term for the first few clusters
+                        if i < 3:  # Only log for first 3 clusters to avoid too much output
+                            print(f"Cluster {i} variance diff: {variance_diff.item():.4f}")
+                        print(
+                            f"Cluster {i} cohesion loss: {dists.mean().item():.4f} + variance diff {0.3 * variance_diff.item():.4f}"
+                        )
+                        # Combine standard cohesion with variance regularization
+                        # Use 0.3 as weight for variance regularization within cohesion
+                        cohesion_loss += dists.mean() + 0.3 * variance_diff
+
+                        total_cells += 1
+            else:
+                # If we don't have enough clusters with multiple cells, just use standard cohesion
+                for i, cells in enumerate(cells_per_type):
+                    if len(cells) > 1:
+                        dists = torch.norm(cells - centroids[i], dim=1)
+                        cohesion_loss += dists.mean()
+                        total_cells += 1
 
             if total_cells > 0:
                 cohesion_loss = cohesion_loss / total_cells

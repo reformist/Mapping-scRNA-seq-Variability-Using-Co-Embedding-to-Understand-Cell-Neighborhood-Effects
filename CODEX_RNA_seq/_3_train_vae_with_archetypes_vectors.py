@@ -208,6 +208,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.similarity_weight = kwargs.pop("similarity_weight")
         self.cell_type_clustering_weight = kwargs.pop("cell_type_clustering_weight", 1000.0)
         self.cross_modal_cell_type_weight = kwargs.pop("cross_modal_cell_type_weight", 1000.0)
+        self.variance_similarity_weight = kwargs.pop("variance_similarity_weight", 0.5)
         self.lr = kwargs.pop("lr", 0.001)
         self.kl_weight_rna = kwargs.pop("kl_weight_rna", 1.0)
         self.kl_weight_prot = kwargs.pop("kl_weight_prot", 1.0)
@@ -581,8 +582,8 @@ class DualVAETrainingPlan(TrainingPlan):
         # Get validation batches
         self.rna_vae.module.eval()  # todo bring it back
         self.protein_vae.module.eval()
-        self.rna_vae.module.train()
-        self.protein_vae.module.train()
+        # self.rna_vae.module.train()
+        # self.protein_vae.module.train()
         indices = range(self.batch_size)
         self.validation_step_ += 1
         indices_prot = np.random.choice(

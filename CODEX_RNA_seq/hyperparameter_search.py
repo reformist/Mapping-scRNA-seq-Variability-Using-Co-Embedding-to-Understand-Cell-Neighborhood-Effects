@@ -84,7 +84,7 @@ sys.path.append(str(project_root))
 param_grid = {
     "plot_x_times": [6],
     "check_val_every_n_epoch": [3],
-    "max_epochs": [80],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [75],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
     "lr": [1e-4],
     "contrastive_weight": [0, 0.001, 0.1, 1],
@@ -104,8 +104,8 @@ param_grid = {
     "n_hidden_rna": [256],
     "n_hidden_prot": [32],
     "n_layers": [4],
-    "latent_dim": [10],
-    "kl_weight_rna": [0.1, 1],
+    "latent_dim": [20],
+    "kl_weight_rna": [1, 0.1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -117,7 +117,7 @@ param_grid = {
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search_5"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_8"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -136,11 +136,16 @@ for _, run in existing_runs.iterrows():
     run_params = {}
     for param in param_grid.keys():
         param_key = f"params.{param}"
-        if param_key in run.index and param not in [
-            "plot_x_times",
-            "check_val_every_n_epoch",
-            "max_epochs",
-        ]:
+        if (
+            run.status == "FINISHED"
+            and param_key in run.index
+            and param
+            not in [
+                "plot_x_times",
+                "check_val_every_n_epoch",
+                "max_epochs",
+            ]
+        ):
             run_params[param] = run[param_key]
     if run_params:  # Only add if we have parameters
         existing_params.append(run_params)
