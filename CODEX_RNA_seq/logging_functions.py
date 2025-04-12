@@ -364,8 +364,8 @@ def log_step(
         f"{prefix}similarity_loss": similarity_loss,
         f"{prefix}cell_type_clustering_loss": cell_type_clustering_loss,
         f"{prefix}cross_modal_cell_type_loss": cross_modal_cell_type_loss,
-        f"{prefix}adversarial_loss": adv_loss,
-        f"{prefix}diversity_loss": diversity_loss,
+        # f"{prefix}adversarial_loss": adv_loss,
+        # f"{prefix}diversity_loss": diversity_loss,
     }
 
     # Add training-specific metrics
@@ -375,17 +375,14 @@ def log_step(
     if not is_validation and all(
         x is not None for x in [num_acceptable, num_cells, exact_pairs, latent_distances]
     ):
-        items_to_log[f"{prefix}acceptable_ratio"] = (
-            num_acceptable / num_cells if num_cells > 0 else 0
-        )
-        items_to_log[f"{prefix}exact_pairs"] = exact_pairs
-        items_to_log[f"{prefix}latent_distances"] = get_value(latent_distances)
+        pass
+        # items_to_log[f"{prefix}acceptable_ratio"] = (
+        #     num_acceptable / num_cells if num_cells > 0 else 0
+        # )
+        # items_to_log[f"{prefix}exact_pairs"] = exact_pairs
+        # items_to_log[f"{prefix}latent_distances"] = get_value(latent_distances)
 
     # Add extra metrics if available
-    items_to_log[f"{prefix}iLISI"] = ilisi
-    items_to_log[f"{prefix}cLISI"] = clisi
-    items_to_log[f"{prefix}accuracy"] = accuracy
-    items_to_log[f"{prefix}reward"] = reward
 
     mlflow.log_metrics(format_loss_mlflow(items_to_log), step=step)
 

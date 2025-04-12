@@ -82,30 +82,31 @@ sys.path.append(str(project_root))
 
 # Define hyperparameter search space
 param_grid = {
-    "plot_x_times": [6],
-    "check_val_every_n_epoch": [3],
-    "max_epochs": [30],  # Changed from n_epochs to max_epochs to match train_vae
+    "plot_x_times": [4],
+    "check_val_every_n_epoch": [2],
+    "max_epochs": [40],  # Changed from n_epochs to max_epochs to match train_vae
+    # "plot_x_times": [1],
+    # "check_val_every_n_epoch": [1],
+    # "max_epochs": [3],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
-    "lr": [1e-4],
-    "contrastive_weight": [0, 0.001, 0.1, 1],
-    "similarity_weight": [0, 100, 1000.0, 10000.0],
+    "lr": [1e-4],  # 1e-3 was good
+    "contrastive_weight": [0, 100, 0.1],
+    "similarity_weight": [0],
     "diversity_weight": [0.0],
     "matching_weight": [
-        0,
         0.1,
-        1000,
     ],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [10000, 10_000, 100_000],  # Within-modality cell type clustering
+    "cell_type_clustering_weight": [1_000, 10_000, 100_000],  # Within-modality cell type clustering
     "cross_modal_cell_type_weight": [
         1000,
-        1000,
+        10_000,
         100_000,
     ],  # Added cross-modal cell type alignment weight
     "n_hidden_rna": [512],
     "n_hidden_prot": [32],
     "n_layers": [4],
     "latent_dim": [20],
-    "kl_weight_rna": [1, 0.1],
+    "kl_weight_rna": [1],
     "kl_weight_prot": [1],
     "adv_weight": [0.0],
     "train_size": [0.85],
@@ -116,7 +117,7 @@ param_grid = {
 mlflow.set_tracking_uri("file:./mlruns")
 
 # Get existing experiment or create new one
-experiment_name = "vae_hyperparameter_search_8_tmp1"  # Fixed name instead of timestamp
+experiment_name = "vae_hyperparameter_search_9"  # Fixed name instead of timestamp
 try:
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -304,7 +305,7 @@ for i, params in enumerate(new_combinations):
             os.remove(loss_weights_path)
 
             # Setup and train model
-            rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
+            rna_vae, protein_vae = setup_and_train_model(
                 adata_rna_subset, adata_prot_subset, params, model_checkpoints_folder
             )
 
@@ -381,7 +382,25 @@ for i, params in enumerate(new_combinations):
 
         except Exception as e:
             # Log failed run
-            mlflow.log_param("run_failed", True)
+            mlflow.set_tag("run_status", "FAILED")
+            error_details = str(e)
+            # Create detailed error log file
+            error_log_path = os.path.join(run_log_dir, f"{run_name}_error.log")
+            with open(error_log_path, "w") as error_file:
+                import traceback
+
+                error_file.write(
+                    f"Error occurred at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                )
+                error_file.write(f"Parameters: {json.dumps(params, indent=2)}\n\n")
+                error_file.write(f"Error message: {str(e)}\n\n")
+                error_file.write("Traceback:\n")
+                error_file.write(traceback.format_exc())
+
+            # Log the error file as an artifact
+            mlflow.log_artifact(error_log_path, "error_logs")
+            print(f"Logged detailed error information to: {error_log_path}")
+
             handle_error(e, params, run_name)
 
             # Close run log file and reset stdout

@@ -55,7 +55,9 @@ class Tee(object):
             f.flush()
 
 
-def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
+def setup_and_train_model(
+    adata_rna_subset, adata_prot_subset, params, model_checkpoints_folder=None
+):
     """Setup and train the VAE models with given parameters."""
     from _3_train_vae_with_archetypes_vectors import train_vae
 
@@ -77,11 +79,14 @@ def setup_and_train_model(adata_rna_subset, adata_prot_subset, params):
         }
     )
     # Training setup and execution
-    rna_vae, protein_vae, latent_rna_before, latent_prot_before = train_vae(
-        adata_rna_subset=adata_rna_subset, adata_prot_subset=adata_prot_subset, **params
+    rna_vae, protein_vae = train_vae(
+        adata_rna_subset=adata_rna_subset,
+        adata_prot_subset=adata_prot_subset,
+        model_checkpoints_folder=model_checkpoints_folder,
+        **params,
     )
 
-    return rna_vae, protein_vae, latent_rna_before, latent_prot_before
+    return rna_vae, protein_vae
 
 
 def process_latent_spaces(rna_adata, protein_adata):

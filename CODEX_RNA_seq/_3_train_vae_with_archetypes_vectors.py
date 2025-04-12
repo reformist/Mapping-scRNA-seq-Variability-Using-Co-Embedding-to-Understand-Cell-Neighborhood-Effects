@@ -40,6 +40,8 @@ import scanpy as sc
 import torch
 from sklearn.preprocessing import normalize
 
+from CODEX_RNA_seq.neighborhood_utils import clean_uns_for_h5ad
+
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -409,13 +411,11 @@ class DualVAETrainingPlan(TrainingPlan):
             size=len(indices),
             replace=True if len(indices) > len(self.train_indices_rna) else False,
         )
-        indices_rna = np.sort(indices_rna)
         indices_prot = np.random.choice(
             self.train_indices_prot,
             size=len(indices),
             replace=True if len(indices) > len(self.train_indices_prot) else False,
         )
-        indices_prot = np.sort(indices_prot)
 
         # Debug print - model identity verification
 
@@ -460,7 +460,7 @@ class DualVAETrainingPlan(TrainingPlan):
         # Update last_ilisi_score if we calculated a new one
         if "ilisi_score" in losses:
             self.last_ilisi_score = losses["ilisi_score"]
-            ilisi_threshold = 1.7
+            ilisi_threshold = 1.5  # use tp be 1.7
             if self.last_ilisi_score < ilisi_threshold:
                 # If iLISI is too low, increase the similarity weight
                 self.similarity_weight = min(1e6, self.similarity_weight * 10)
@@ -470,7 +470,7 @@ class DualVAETrainingPlan(TrainingPlan):
                 # Also ensure similarity loss is active
                 self.similarity_active = True
                 self.similarity_loss_steady_counter = 0  # Reset steady state counter
-            elif self.similarity_weight > 100 and self.last_ilisi_score >= ilisi_threshold:
+            elif self.similarity_weight > 10 and self.last_ilisi_score >= ilisi_threshold:
                 # If iLISI is good and weight is high, reduce it gradually
                 self.similarity_weight = self.similarity_weight / 10
                 print(
@@ -613,13 +613,11 @@ class DualVAETrainingPlan(TrainingPlan):
             size=len(indices),
             replace=True if len(indices) > len(self.val_indices_prot) else False,
         )
-        indices_prot = np.sort(indices_prot)
         indices_rna = np.random.choice(
             self.val_indices_rna,
             size=len(indices),
             replace=True if len(indices) > len(self.val_indices_rna) else False,
         )
-        indices_rna = np.sort(indices_rna)
         rna_batch = self._get_rna_batch(batch, indices_rna)
         protein_batch = self._get_protein_batch(batch, indices_prot)
 
@@ -632,7 +630,6 @@ class DualVAETrainingPlan(TrainingPlan):
             or self.validation_step_ >= val_steps_per_epoch  # Last step
         )
         to_plot = self.global_step % (1 + int(self.total_steps / self.plot_x_times)) == 0
-
         # Calculate all losses using the same function as training
         with torch.no_grad():
             losses = calculate_losses(
@@ -721,50 +718,16 @@ class DualVAETrainingPlan(TrainingPlan):
 
         return losses["total_loss"]
 
-    def calculate_metrics_for_data(self, rna_adata, prot_adata, prefix="", subsample_size=None):
+    def calculate_metrics_for_data(self, rna_latent_adata, prot_latent_adata, prefix=""):
         """Calculate metrics for given RNA and protein data.
 
         Args:
-            rna_adata: RNA AnnData object
-            prot_adata: Protein AnnData object
+            rna_latent_adata: RNA AnnData object
+            prot_latent_adata: Protein AnnData object
             prefix: Prefix for metric names (e.g., "train_" or "val_")
             subsample_size: If not None, subsample the data to this size
         """
         print(f"   Calculating {prefix}metrics...")
-
-        # Subsample if requested
-        if subsample_size is not None:
-            rna_adata = sc.pp.subsample(rna_adata, n_obs=subsample_size, copy=True)
-            prot_adata = sc.pp.subsample(prot_adata, n_obs=subsample_size, copy=True)
-            print(f"   ✓ Subsampled to {subsample_size} cells")
-
-        # Get latent representations
-        with torch.no_grad():
-            # Use 1000 random indices for RNA
-            rna_subsample_size = min(rna_adata.shape[0], 1000)
-            indices_rna = np.random.choice(
-                rna_adata.shape[0], size=rna_subsample_size, replace=False
-            )
-            rna_batch = self._get_rna_batch(None, indices_rna)
-            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
-            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
-
-            # Use 1000 random indices for protein
-            prot_subsample_size = min(prot_adata.shape[0], 1000)
-            indices_prot = np.random.choice(
-                prot_adata.shape[0], size=prot_subsample_size, replace=False
-            )
-            prot_batch = self._get_protein_batch(None, indices_prot)
-            prot_inference_outputs, _, _ = self.protein_vae.module(prot_batch)
-            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
-
-        # Create AnnData objects with ONLY the observations for the selected indices
-        rna_latent_adata = AnnData(rna_latent)
-        prot_latent_adata = AnnData(prot_latent)
-
-        # Use only the observations corresponding to the selected indices
-        rna_latent_adata.obs = rna_adata[indices_rna].obs.copy()
-        prot_latent_adata.obs = prot_adata[indices_prot].obs.copy()
 
         # Calculate matching accuracy
         accuracy = CODEX_RNA_seq.metrics.matching_accuracy(rna_latent_adata, prot_latent_adata)
@@ -812,21 +775,57 @@ class DualVAETrainingPlan(TrainingPlan):
     def on_validation_epoch_end_custom(self):
         """Calculate and store metrics at the end of each validation epoch."""
         print(f"\nProcessing validation epoch {self.current_epoch}...")
+        self.rna_vae.module.eval()
+        self.protein_vae.module.eval()
+        self.rna_vae.module.train()
+        self.protein_vae.module.train()
+
+        subsample_size = min(len(self.val_indices_rna), len(self.val_indices_prot), 3000)
+        val_indices_rna = np.random.choice(self.val_indices_rna, size=subsample_size, replace=False)
+        val_indices_prot = np.random.choice(
+            self.val_indices_prot, size=subsample_size, replace=False
+        )
+        rna_batch = self._get_rna_batch(None, val_indices_rna)
+        prot_batch = self._get_protein_batch(None, val_indices_prot)
+
+        # Get latent representations
+        with torch.no_grad():
+            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
+            prot_inference_outputs, _, _ = self.protein_vae.module(prot_batch)
+            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
+
+        # Create AnnData objects with ONLY the observations for the selected indices
+        rna_latent_adata = AnnData(rna_latent)
+        prot_latent_adata = AnnData(prot_latent)
+
+        # Use only the observations corresponding to the selected indices
+        rna_latent_adata.obs = self.rna_vae.adata[val_indices_rna].obs.copy()
+        prot_latent_adata.obs = self.protein_vae.adata[val_indices_prot].obs.copy()
 
         # Calculate validation metrics
         val_metrics = self.calculate_metrics_for_data(
-            self.rna_vae.adata[self.val_indices_rna],
-            self.protein_vae.adata[self.val_indices_prot],
+            rna_latent_adata,
+            prot_latent_adata,
             prefix="val_",
         )
+        # now for train
+        subsample_size = min(len(self.train_indices_rna), len(self.train_indices_prot), 3000)
+        train_indices_rna = np.random.choice(
+            self.train_indices_rna, size=subsample_size, replace=False
+        )
+        train_indices_prot = np.random.choice(
+            self.train_indices_prot, size=subsample_size, replace=False
+        )
+        rna_batch = self._get_rna_batch(None, train_indices_rna)
+        prot_batch = self._get_protein_batch(None, train_indices_prot)
 
         # Calculate training metrics with subsampling
         print("Calculating training metrics...")
         train_metrics = self.calculate_metrics_for_data(
-            self.rna_vae.adata[self.train_indices_rna],
-            self.protein_vae.adata[self.train_indices_prot],
+            rna_latent_adata,
+            prot_latent_adata,
             prefix="train_",
-            subsample_size=len(self.val_indices_rna),  # Use validation set size for subsampling
         )
 
         # Combine metrics
@@ -834,7 +833,7 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Store in history
         self.metrics_history.append(epoch_metrics)
-        print("   ✓ Metrics stored")
+        print("   ✓ Metrics: ", epoch_metrics)
 
         # Now process accumulated validation losses from validation_step
         # These are the epoch-level means of the batch-level losses
@@ -910,6 +909,10 @@ class DualVAETrainingPlan(TrainingPlan):
 
     def on_train_end_custom(self, plot_flag=True):
         """Called when training ends."""
+        self.rna_vae.module.eval()
+        self.protein_vae.module.eval()
+        self.rna_vae.module.train()
+        self.protein_vae.module.train()
         if self.on_train_end_custom_called:
             print("on_train_end_custom already called, skipping")
             return
@@ -918,24 +921,47 @@ class DualVAETrainingPlan(TrainingPlan):
 
         # Get final latent representations
         with torch.no_grad():
-            # Use random 1000 indices for RNA
-            indices_rna = np.random.choice(
-                range(self.rna_vae.adata.shape[0]), size=self.rna_vae.adata.shape[0], replace=False
-            )
-            rna_batch = self._get_rna_batch(None, indices_rna)
-            rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
-            rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
+            # Process RNA data in batches to avoid memory overflow
+            rna_latent_list = []
+            # Adjust batch size if needed
+            for i in range(0, self.rna_vae.adata.shape[0], self.batch_size):
+                batch_indices = np.arange(i, min(i + self.batch_size, self.rna_vae.adata.shape[0]))
+                rna_batch = self._get_rna_batch(None, batch_indices)
+                rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
+                rna_latent_list.append(rna_inference_outputs["qz"].mean.detach().cpu().numpy())
+            rna_latent = np.concatenate(rna_latent_list, axis=0)
 
-            # Use random 1000 indices for protein
-            indices_prot = np.random.choice(
-                range(self.protein_vae.adata.shape[0]),
-                size=self.protein_vae.adata.shape[0],
-                replace=False,
-            )
-            protein_batch = self._get_protein_batch(None, indices_prot)
-            prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
-            prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
-
+            # Process protein data in batches to avoid memory overflow
+            prot_latent_list = []
+            for i in range(0, self.protein_vae.adata.shape[0], self.batch_size):
+                batch_indices = np.arange(
+                    i, min(i + self.batch_size, self.protein_vae.adata.shape[0])
+                )
+                protein_batch = self._get_protein_batch(None, batch_indices)
+                prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
+                prot_latent_list.append(prot_inference_outputs["qz"].mean.detach().cpu().numpy())
+            prot_latent = np.concatenate(prot_latent_list, axis=0)
+        losses = calculate_losses(  # for the plots
+            self,
+            rna_batch=rna_batch,
+            protein_batch=protein_batch,
+            rna_vae=self.rna_vae,
+            protein_vae=self.protein_vae,
+            device=self.device,
+            similarity_weight=self.similarity_weight,
+            similarity_active=self.similarity_active,
+            contrastive_weight=self.contrastive_weight,
+            matching_weight=self.matching_weight,
+            cell_type_clustering_weight=self.cell_type_clustering_weight,
+            cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
+            kl_weight_rna=self.kl_weight_rna,
+            kl_weight_prot=self.kl_weight_prot,
+            check_ilisi=True,
+            to_plot=True,
+            global_step=self.global_step,
+            total_steps=self.total_steps,
+        )
+        print(f"end of training, losses: {losses}")
         # Store in adata
         self.rna_vae.adata.obsm["X_scVI"] = rna_latent
         self.protein_vae.adata.obsm["X_scVI"] = prot_latent
@@ -1002,34 +1028,16 @@ class DualVAETrainingPlan(TrainingPlan):
         checkpoint_path = f"{self.checkpoint_dir}/epoch_{self.current_epoch}"
         os.makedirs(checkpoint_path, exist_ok=True)
 
-        # Get latent representations for all cells
-        # with torch.no_grad():
-        #     # RNA model
-        #     rna_indices = np.arange(len(self.rna_vae.adata))
-        #     rna_batch = self._get_rna_batch(None, rna_indices)
-        #     rna_inference_outputs, _, _ = self.rna_vae.module(rna_batch)
-        #     rna_latent = rna_inference_outputs["qz"].mean.detach().cpu().numpy()
+        rna_adata_save = self.rna_vae.adata.copy()
+        protein_adata_save = self.protein_vae.adata.copy()
 
-        #     # Protein model
-        #     prot_indices = np.arange(len(self.protein_vae.adata))
-        #     protein_batch = self._get_protein_batch(None, prot_indices)
-        #     prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
-        #     prot_latent = prot_inference_outputs["qz"].mean.detach().cpu().numpy()
+        # Clean for h5ad saving
+        clean_uns_for_h5ad(rna_adata_save)
+        clean_uns_for_h5ad(protein_adata_save)
 
-        # Store latent representations in AnnData
-        # rna_adata_save = self.rna_vae.adata.copy()
-        # protein_adata_save = self.protein_vae.adata.copy()
-
-        # rna_adata_save.obsm["X_scVI"] = rna_latent
-        # protein_adata_save.obsm["X_scVI"] = prot_latent
-
-        # # Clean for h5ad saving
-        # clean_uns_for_h5ad(rna_adata_save)
-        # clean_uns_for_h5ad(protein_adata_save)
-
-        # # Save AnnData objects with latent representations
-        # sc.write(f"{checkpoint_path}/rna_adata.h5ad", rna_adata_save)
-        # sc.write(f"{checkpoint_path}/protein_adata.h5ad", protein_adata_save)
+        # Save AnnData objects with latent representations
+        sc.write(f"{checkpoint_path}/rna_adata.h5ad", rna_adata_save)
+        sc.write(f"{checkpoint_path}/protein_adata.h5ad", protein_adata_save)
 
         # Save model state dictionaries
         torch.save(self.rna_vae.module.state_dict(), f"{checkpoint_path}/rna_vae_model.pt")
@@ -1235,14 +1243,6 @@ class DualVAETrainingPlan(TrainingPlan):
             self.save_checkpoint()
             print(f"Checkpoint saved in {time() - start_time:.2f} seconds")
 
-        # Check if this is the last epoch
-        if self.current_epoch + 1 >= self.max_epochs:
-            print(f"Completed final epoch {self.current_epoch}")
-            # Call on_train_end_custom if it hasn't been called yet
-            if not self.on_train_end_custom_called:
-                print("Last epoch completed, calling on_train_end_custom")
-                self.on_train_end_custom(plot_flag=True)
-
     @staticmethod
     def load_from_checkpoint(
         checkpoint_path,
@@ -1427,8 +1427,6 @@ def train_vae(
     protein_vae.is_trained_ = True
     rna_vae.module.cpu()
     protein_vae.module.cpu()
-    latent_rna_before = rna_vae.get_latent_representation()  # bad should probaly repalace
-    latent_prot_before = protein_vae.get_latent_representation()
 
     if model_checkpoints_folder is not None:
         rna_vae, protein_vae, training_state = DualVAETrainingPlan.load_from_checkpoint(
@@ -1446,7 +1444,7 @@ def train_vae(
     protein_vae.is_trained_ = True
     print("Training flags set")
 
-    return rna_vae, protein_vae, latent_rna_before, latent_prot_before
+    return rna_vae, protein_vae
 
 
 if __name__ == "__main__":
@@ -1658,6 +1656,7 @@ def calculate_losses(
     total_steps=None,
     to_plot=False,
     check_ilisi=False,
+    return_inference_outputs=False,
 ):
     """Calculate all losses for a batch of data.
 
@@ -1953,22 +1952,7 @@ def calculate_losses(
             epoch=int(global_step / total_steps),
             global_step=global_step,
         )
-        # Calculate validation metrics
-        val_metrics = self.calculate_metrics_for_data(
-            self.rna_vae.adata[self.val_indices_rna],
-            self.protein_vae.adata[self.val_indices_prot],
-            prefix="val_",
-        )
-        # Calculate training metrics with subsampling
-        print("Calculating training metrics...")
-        train_metrics = self.calculate_metrics_for_data(
-            self.rna_vae.adata[self.train_indices_rna],
-            self.protein_vae.adata[self.train_indices_prot],
-            prefix="train_",
-            subsample_size=len(self.val_indices_rna),  # Use validation set size for subsampling
-        )
-        print("val metrics", val_metrics)
-        print("train metrics", train_metrics)
+
     if check_ilisi:
         # Calculate iLISI score using the latent representations we already have
         # No need to recreate the combined latent AnnData, just use the existing representations
@@ -1978,7 +1962,6 @@ def calculate_losses(
         losses["ilisi_score"] = ilisi_score
         print(f"iLISI score: {ilisi_score}")
         # if to_plot:
-
     return losses
 
 
