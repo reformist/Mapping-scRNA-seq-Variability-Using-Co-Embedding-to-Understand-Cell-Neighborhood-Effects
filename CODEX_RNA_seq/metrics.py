@@ -57,13 +57,16 @@ def ari_score_calc(adata_rna, adata_prot):
 
 
 # matching_accuracy 1-1
-def matching_accuracy(latent_rna, latent_prot):
+def matching_accuracy(latent_rna, latent_prot, global_step=None):
     correct_matches = 0
     nn_celltypes_prot = calc_dist(latent_rna, latent_prot)
     for index, cell_type in enumerate(latent_rna.obs["cell_types"]):
         if cell_type == nn_celltypes_prot[index]:
             correct_matches += 1
     accuracy = correct_matches / len(nn_celltypes_prot)
+    pf.plot_cell_type_prediction_confusion_matrix(
+        latent_rna.obs["cell_types"], nn_celltypes_prot, global_step
+    )
     return accuracy
 
 

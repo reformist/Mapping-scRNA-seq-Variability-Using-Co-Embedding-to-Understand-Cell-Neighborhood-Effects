@@ -988,6 +988,71 @@ def plot_normalized_losses(history):
         plot_losses(val_loss_keys, "Normalized Validation Losses")
 
 
+def plot_cell_type_prediction_confusion_matrix(
+    true_cell_types=None, predicted_cell_types=None, global_step=None
+):
+    if true_cell_types is None or predicted_cell_types is None:  # show default confusion matrix
+        confusion_matrix_values = np.array(
+            [
+                [91, 4, 3, 0, 0, 0],
+                [22, 77, 0, 0, 0, 0],
+                [14, 1, 79, 4, 0, 0],
+                [13, 1, 3, 70, 0, 0],
+                [11, 1, 11, 0, 65, 2],
+                [10, 2, 0, 0, 2, 70],
+                [52, 17, 16, 16, 10, 0],
+            ]
+        )
+        x_labels = ["B-CD22-CD40", "B-Ki67", "CD4 T", "CD8 T", "DC", "Plasma"]
+        y_labels = ["B-CD22-CD40", "B-Ki67", "CD4 T", "CD8 T", "DC", "Plasma", "Unknown"]
+        confusion_matrix_df = pd.DataFrame(
+            confusion_matrix_values, index=y_labels, columns=x_labels
+        )
+    else:
+        # use pandas to get the confusion matrix instead of sklearn
+        confusion_matrix_df = pd.crosstab(
+            true_cell_types.values,
+            predicted_cell_types.values,
+            rownames=["True"],
+            colnames=["Predicted"],
+            margins=False,
+        )
+
+    percentages = (confusion_matrix_df / confusion_matrix_df.sum(axis=0)) * 100
+
+    # Create the figure with size ratio matching the image
+    plt.figure(figsize=(12, 10))
+
+    # Create the heatmap with percentage values and no color bar
+    ax = sns.heatmap(
+        percentages,
+        annot=True,
+        fmt=".1f",
+        cmap="viridis",
+        cbar=False,
+        annot_kws={"fontsize": 25, "fontweight": "bold"},
+    )
+
+    # Add '%' sign to annotations
+    for text in ax.texts:
+        text.set_text(f"{text.get_text()}%")
+
+    # Style adjustments with x-ticks rotated at 45 degrees
+    plt.xticks(fontsize=30, rotation=45)  # 45 degree rotation on x-axis labels
+    plt.yticks(fontsize=30, rotation=45)
+
+    # Add some padding at the bottom to accommodate rotated labels
+    plt.tight_layout(pad=1.5)
+
+    # Display the plot
+    # Optional: To save the figure
+    if global_step:
+        safe_mlflow_log_figure(plt.gcf(), f"metrics/step_{global_step:05d}_cell_type_accuracy.png")
+    else:
+        safe_mlflow_log_figure(plt.gcf(), "metrics/cell_type_accuracy.png")
+    plt.show()
+
+
 def plot_pca_umap_latent_space_during_train(prefix, combined_latent, epoch, global_step=""):
     sc.pp.pca(combined_latent)
     fig = plt.figure(figsize=(15, 5))
@@ -1045,9 +1110,9 @@ def plot_pca_umap_latent_space_during_train(prefix, combined_latent, epoch, glob
     )
     plt.tight_layout()
     if global_step:
-        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:03d}_step_{global_step:03d}.png"
+        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:05d}_step_{global_step:05d}.png"
     else:
-        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:03d}.png"
+        umap_file = f"{prefix}_combined_latent_umap_epoch_{epoch:05d}.png"
     plt.savefig(umap_file, dpi=200, bbox_inches="tight")
     if hasattr(mlflow, "active_run") and mlflow.active_run():
         mlflow.log_artifact(umap_file, artifact_path="train")

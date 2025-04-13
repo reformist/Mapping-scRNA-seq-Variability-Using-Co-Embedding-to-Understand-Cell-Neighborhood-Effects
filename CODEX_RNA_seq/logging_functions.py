@@ -217,9 +217,6 @@ def log_step(
     adv_loss = get_value(losses.get("adversarial_loss", float("nan")))
     diversity_loss = get_value(losses.get("diversity_loss", float("nan")))
     reward = get_value(losses.get("reward", float("nan")))
-    ilisi_score = get_value(
-        losses.get("ilisi_score", float("nan"))
-    )  # Extract iLISI score from losses
 
     # Handle parameters that might be in losses dict or passed directly
     exact_pairs = get_value(metrics.get("exact_pairs", float("nan")))
@@ -227,8 +224,10 @@ def log_step(
     num_cells = get_value(metrics.get("num_cells", float("nan")))
 
     # Extract additional metrics
-    ilisi = get_value(metrics.get("iLISI", float("nan")))
-    clisi = get_value(metrics.get("cLISI", float("nan")))
+    ilisi_score = get_value(
+        losses.get("ilisi_score", float("nan"))
+    )  # Extract iLISI score from losses
+    clisi_score = get_value(metrics.get("clisi_score", float("nan")))
     accuracy = get_value(metrics.get("accuracy", float("nan")))
 
     def format_loss(loss, total):
@@ -337,7 +336,7 @@ def log_step(
             f"{prefix}Reward": reward,
             f"{prefix}Exact Pairs": exact_pairs,
             f"{prefix}iLISI": ilisi_score,  # Use ilisi_score from losses
-            f"{prefix}cLISI": clisi,
+            f"{prefix}cLISI": clisi_score,
             f"{prefix}Accuracy": accuracy,
         }
 
@@ -364,8 +363,8 @@ def log_step(
         f"{prefix}similarity_loss": similarity_loss,
         f"{prefix}cell_type_clustering_loss": cell_type_clustering_loss,
         f"{prefix}cross_modal_cell_type_loss": cross_modal_cell_type_loss,
-        # f"{prefix}adversarial_loss": adv_loss,
-        # f"{prefix}diversity_loss": diversity_loss,
+        f"{prefix}ilisi_score": ilisi_score,
+        f"{prefix}clisi": clisi_score,
     }
 
     # Add training-specific metrics

@@ -69,6 +69,7 @@ def setup_and_train_model(
             "similarity_weight": round(params["similarity_weight"], 3),
             "matching_weight": round(params["matching_weight"], 3),
             "cell_type_clustering_weight": round(params["cell_type_clustering_weight"], 3),
+            "cross_modal_cell_type_weight": round(params["cross_modal_cell_type_weight"], 3),
             "kl_weight_rna": round(params["kl_weight_rna"], 3),
             "kl_weight_prot": round(params["kl_weight_prot"], 3),
             "adv_weight": round(params.get("adv_weight", 0), 3),

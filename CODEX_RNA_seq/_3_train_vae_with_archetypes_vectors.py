@@ -463,7 +463,7 @@ class DualVAETrainingPlan(TrainingPlan):
             ilisi_threshold = 1.5  # use tp be 1.7
             if self.last_ilisi_score < ilisi_threshold:
                 # If iLISI is too low, increase the similarity weight
-                self.similarity_weight = min(1e6, self.similarity_weight * 10)
+                self.similarity_weight = min(1e7, self.similarity_weight * 2)
                 print(
                     f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (< {ilisi_threshold}), increasing similarity weight to {self.similarity_weight}"
                 )
@@ -472,7 +472,7 @@ class DualVAETrainingPlan(TrainingPlan):
                 self.similarity_loss_steady_counter = 0  # Reset steady state counter
             elif self.similarity_weight > 10 and self.last_ilisi_score >= ilisi_threshold:
                 # If iLISI is good and weight is high, reduce it gradually
-                self.similarity_weight = self.similarity_weight / 10
+                self.similarity_weight = self.similarity_weight / 2
                 print(
                     f"[Step {self.global_step}] iLISI score is {self.last_ilisi_score:.4f} (>= {ilisi_threshold}), reducing similarity weight to {self.similarity_weight}"
                 )
@@ -576,10 +576,11 @@ class DualVAETrainingPlan(TrainingPlan):
 
         if is_last_step_of_epoch:
             print(
-                f"Completed last step of epoch {self.current_epoch} in global step {self.global_step}"
+                f"Completed last step of epoch {self.current_epoch} in global step {self.global_step}/{self.total_steps}"
             )
             # self.on_epoch_end_custom()
-
+        else:
+            print(f"global step {self.global_step}/{self.total_steps}")
         if is_last_step_of_training:
             print(f"Completed last step of training at epoch {self.current_epoch}")
             # Call the custom end of training function if it hasn't been called yet
@@ -718,7 +719,9 @@ class DualVAETrainingPlan(TrainingPlan):
 
         return losses["total_loss"]
 
-    def calculate_metrics_for_data(self, rna_latent_adata, prot_latent_adata, prefix=""):
+    def calculate_metrics_for_data(
+        self, rna_latent_adata, prot_latent_adata, prefix="", global_step=None
+    ):
         """Calculate metrics for given RNA and protein data.
 
         Args:
@@ -730,7 +733,9 @@ class DualVAETrainingPlan(TrainingPlan):
         print(f"   Calculating {prefix}metrics...")
 
         # Calculate matching accuracy
-        accuracy = CODEX_RNA_seq.metrics.matching_accuracy(rna_latent_adata, prot_latent_adata)
+        accuracy = CODEX_RNA_seq.metrics.matching_accuracy(
+            rna_latent_adata, prot_latent_adata, global_step
+        )
         print(f"   ✓ {prefix}matching accuracy calculated")
 
         # Calculate silhouette F1
@@ -808,6 +813,7 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_latent_adata,
             prot_latent_adata,
             prefix="val_",
+            global_step=self.global_step,
         )
         # now for train
         subsample_size = min(len(self.train_indices_rna), len(self.train_indices_prot), 3000)
@@ -826,6 +832,7 @@ class DualVAETrainingPlan(TrainingPlan):
             rna_latent_adata,
             prot_latent_adata,
             prefix="train_",
+            global_step=self.global_step,
         )
 
         # Combine metrics
@@ -913,6 +920,7 @@ class DualVAETrainingPlan(TrainingPlan):
         self.protein_vae.module.eval()
         self.rna_vae.module.train()
         self.protein_vae.module.train()
+        self.mode = "validation"
         if self.on_train_end_custom_called:
             print("on_train_end_custom already called, skipping")
             return
@@ -941,26 +949,41 @@ class DualVAETrainingPlan(TrainingPlan):
                 prot_inference_outputs, _, _ = self.protein_vae.module(protein_batch)
                 prot_latent_list.append(prot_inference_outputs["qz"].mean.detach().cpu().numpy())
             prot_latent = np.concatenate(prot_latent_list, axis=0)
-        losses = calculate_losses(  # for the plots
-            self,
-            rna_batch=rna_batch,
-            protein_batch=protein_batch,
-            rna_vae=self.rna_vae,
-            protein_vae=self.protein_vae,
-            device=self.device,
-            similarity_weight=self.similarity_weight,
-            similarity_active=self.similarity_active,
-            contrastive_weight=self.contrastive_weight,
-            matching_weight=self.matching_weight,
-            cell_type_clustering_weight=self.cell_type_clustering_weight,
-            cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
-            kl_weight_rna=self.kl_weight_rna,
-            kl_weight_prot=self.kl_weight_prot,
-            check_ilisi=True,
-            to_plot=True,
-            global_step=self.global_step,
-            total_steps=self.total_steps,
-        )
+
+            # take a random batch
+            rna_batch = self._get_rna_batch(
+                None,
+                np.random.choice(
+                    range(self.rna_vae.adata.shape[0]), size=self.batch_size, replace=False
+                ),
+            )
+            protein_batch = self._get_protein_batch(
+                None,
+                np.random.choice(
+                    range(self.protein_vae.adata.shape[0]), size=self.batch_size, replace=False
+                ),
+            )
+        with torch.no_grad():
+            losses = calculate_losses(  # for the plots
+                self,
+                rna_batch=rna_batch,
+                protein_batch=protein_batch,
+                rna_vae=self.rna_vae,
+                protein_vae=self.protein_vae,
+                device=self.device,
+                similarity_weight=self.similarity_weight,
+                similarity_active=self.similarity_active,
+                contrastive_weight=self.contrastive_weight,
+                matching_weight=self.matching_weight,
+                cell_type_clustering_weight=self.cell_type_clustering_weight,
+                cross_modal_cell_type_weight=self.cross_modal_cell_type_weight,
+                kl_weight_rna=self.kl_weight_rna,
+                kl_weight_prot=self.kl_weight_prot,
+                check_ilisi=True,
+                to_plot=True,
+                global_step=self.global_step,
+                total_steps=self.total_steps,
+            )
         print(f"end of training, losses: {losses}")
         # Store in adata
         self.rna_vae.adata.obsm["X_scVI"] = rna_latent
@@ -1683,6 +1706,7 @@ def calculate_losses(
         Dictionary containing all calculated losses and metrics
     """
     # Get model outputs
+
     rna_inference_outputs, _, rna_loss_output_raw = rna_vae.module(rna_batch)
     protein_inference_outputs, _, protein_loss_output_raw = protein_vae.module(protein_batch)
 
@@ -1748,10 +1772,18 @@ def calculate_losses(
     matching_loss = (stress_loss - reward + exact_pairs) * matching_weight
 
     # Calculate contrastive loss
-    rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
-    prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
-    distances = prot_distances + rna_distances
-
+    print(f"rna_latent_mean.shape: {rna_latent_mean.shape}")
+    print(f"rna_latent_std.shape: {rna_latent_std.shape}")
+    print(f"protein_latent_mean.shape: {protein_latent_mean.shape}")
+    print(f"protein_latent_std.shape: {protein_latent_std.shape}")
+    if self.mode == "train":
+        rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
+        prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
+        distances = prot_distances + rna_distances
+    else:
+        rna_distances = compute_pairwise_kl(rna_latent_mean, rna_latent_std)
+        prot_distances = compute_pairwise_kl(protein_latent_mean, protein_latent_std)
+        distances = prot_distances + rna_distances
     # Get cell type and neighborhood info
     cell_neighborhood_info_protein = torch.tensor(
         protein_vae.adata[protein_batch["labels"]].obs["CN"].cat.codes.values
