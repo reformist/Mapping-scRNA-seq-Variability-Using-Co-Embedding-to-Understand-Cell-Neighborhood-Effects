@@ -246,13 +246,13 @@ def mixing_score(
     if index_prot is None:
         index_prot = np.arange(len(protein_inference_outputs_mean))
     if isinstance(rna_inference_outputs_mean, torch.Tensor):
-        latent_rna = rna_inference_outputs_mean.clone().detach().cpu().numpy()
-        latent_prot = protein_inference_outputs_mean.clone().detach().cpu().numpy()
+        rna_latent = rna_inference_outputs_mean.clone().detach().cpu().numpy()
+        prot_latent = protein_inference_outputs_mean.clone().detach().cpu().numpy()
     else:
-        latent_rna = rna_inference_outputs_mean
-        latent_prot = protein_inference_outputs_mean
+        rna_latent = rna_inference_outputs_mean
+        prot_latent = protein_inference_outputs_mean
     combined_latent = ad.concat(
-        [AnnData(latent_rna), AnnData(latent_prot)],
+        [AnnData(rna_latent), AnnData(prot_latent)],
         join="outer",
         label="modality",
         keys=["RNA", "Protein"],

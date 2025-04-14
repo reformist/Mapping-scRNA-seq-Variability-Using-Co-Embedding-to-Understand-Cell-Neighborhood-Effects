@@ -374,7 +374,9 @@ class DualVAETrainingPlan(TrainingPlan):
         protein_params = self.protein_vae.module.parameters()
 
         # Use a higher learning rate for RNA to help unstick it
-        rna_lr = self.lr * 10.0  # can even be higher 12 or 15
+        rna_lr = (
+            self.lr * 10.0
+        )  # can even be higher 12 or 15, but 10 is good #todo change back to 10
         protein_lr = self.lr
 
         # Combined parameters with different parameter groups
@@ -1590,7 +1592,7 @@ if __name__ == "__main__":
         # Clean up temporary file
         os.remove(loss_weights_path)
 
-        rna_vae, protein_vae, latent_rna_before, latent_prot_before = setup_and_train_model(
+        rna_vae, protein_vae, rna_latent_before, latent_prot_before = setup_and_train_model(
             adata_rna_subset, adata_prot_subset, training_params
         )
         clear_memory()

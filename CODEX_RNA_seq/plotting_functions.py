@@ -530,8 +530,8 @@ def plot_latent_pca_both_modalities_cn(
 def plot_latent_pca_both_modalities_by_celltype(
     adata_rna_subset,
     adata_prot_subset,
-    latent_rna,
-    latent_prot,
+    rna_latent,
+    prot_latent,
     index_rna=None,
     index_prot=None,
     global_step=None,
@@ -539,9 +539,9 @@ def plot_latent_pca_both_modalities_by_celltype(
 ):
     """Plot PCA of latent space colored by cell type."""
     if index_rna is None:
-        index_rna = range(len(latent_rna))
+        index_rna = range(len(rna_latent))
     if index_prot is None:
-        index_prot = range(len(latent_prot))
+        index_prot = range(len(prot_latent))
 
     # Ensure indices are within bounds
 
@@ -551,12 +551,12 @@ def plot_latent_pca_both_modalities_by_celltype(
         n_subsample_rna = min(1000, len(index_rna))
         rna_subsample_idx = np.random.choice(len(index_rna), n_subsample_rna, replace=False)
         index_rna = np.array(index_rna)[rna_subsample_idx]
-        latent_rna = latent_rna[rna_subsample_idx]
+        rna_latent = rna_latent[rna_subsample_idx]
         # Sample protein data (separately)
         n_subsample_prot = min(1000, len(index_prot))
         prot_subsample_idx = np.random.choice(len(index_prot), n_subsample_prot, replace=False)
         index_prot = np.array(index_prot)[prot_subsample_idx]
-        latent_prot = latent_prot[prot_subsample_idx]
+        prot_latent = prot_latent[prot_subsample_idx]
 
     # Ensure all indices are valid
     if len(index_rna) == 0 or len(index_prot) == 0:
@@ -565,7 +565,7 @@ def plot_latent_pca_both_modalities_by_celltype(
 
     num_rna = len(index_rna)
 
-    combined_latent = np.vstack([latent_rna, latent_prot])
+    combined_latent = np.vstack([rna_latent, prot_latent])
     pca = PCA(n_components=2)
     combined_pca = pca.fit_transform(combined_latent)
 
@@ -1017,7 +1017,12 @@ def plot_cell_type_prediction_confusion_matrix(
             colnames=["Predicted"],
             margins=False,
         )
-
+    if len(set(true_cell_types)) > 8:
+        fontsize_ticks = 16
+        fontsize_percentage = 17
+    else:
+        fontsize_ticks = 30
+        fontsize_percentage = 25
     percentages = (confusion_matrix_df / confusion_matrix_df.sum(axis=0)) * 100
 
     # Create the figure with size ratio matching the image
@@ -1027,10 +1032,10 @@ def plot_cell_type_prediction_confusion_matrix(
     ax = sns.heatmap(
         percentages,
         annot=True,
-        fmt=".1f",
+        fmt=".0f",
         cmap="viridis",
         cbar=False,
-        annot_kws={"fontsize": 25, "fontweight": "bold"},
+        annot_kws={"fontsize": fontsize_percentage, "fontweight": "bold"},
     )
 
     # Add '%' sign to annotations
@@ -1038,8 +1043,8 @@ def plot_cell_type_prediction_confusion_matrix(
         text.set_text(f"{text.get_text()}%")
 
     # Style adjustments with x-ticks rotated at 45 degrees
-    plt.xticks(fontsize=30, rotation=45)  # 45 degree rotation on x-axis labels
-    plt.yticks(fontsize=30, rotation=45)
+    plt.xticks(fontsize=fontsize_ticks, rotation=45)  # 45 degree rotation on x-axis labels
+    plt.yticks(fontsize=fontsize_ticks, rotation=45)
 
     # Add some padding at the bottom to accommodate rotated labels
     plt.tight_layout(pad=1.5)
@@ -1094,7 +1099,7 @@ def plot_pca_umap_latent_space_during_train(prefix, combined_latent, epoch, glob
         color="modality",
         ax=ax1,
         show=False,
-        title=f"{prefix}Combined Latent UMAP by Modality",
+        title=f"{prefix}_Combined Latent UMAP by Modality",
     )
     ax2 = fig.add_subplot(1, 3, 2)
     sc.pl.umap(
@@ -1102,11 +1107,15 @@ def plot_pca_umap_latent_space_during_train(prefix, combined_latent, epoch, glob
         color="cell_types",
         ax=ax2,
         show=False,
-        title=f"{prefix}Combined Latent UMAP by Cell Type",
+        title=f"{prefix}_Combined Latent UMAP by Cell Type",
     )
     ax3 = fig.add_subplot(1, 3, 3)
     sc.pl.umap(
-        combined_latent, color="CN", ax=ax3, show=False, title=f"{prefix}Combined Latent UMAP by CN"
+        combined_latent,
+        color="CN",
+        ax=ax3,
+        show=False,
+        title=f"{prefix}_Combined Latent UMAP by CN",
     )
     plt.tight_layout()
     if global_step:
@@ -1920,8 +1929,8 @@ def test_plot_latent_pca_both_modalities_by_celltype():
     latent_dim = 20
 
     # Create latent representations for RNA and protein
-    latent_rna = np.random.normal(0, 1, size=(n_cells, latent_dim))
-    latent_prot = np.random.normal(0, 1, size=(n_cells, latent_dim))
+    rna_latent = np.random.normal(0, 1, size=(n_cells, latent_dim))
+    prot_latent = np.random.normal(0, 1, size=(n_cells, latent_dim))
 
     # Create cell type labels
     cell_type_names = [f"CellType_{i}" for i in range(n_cell_types)]
@@ -1946,8 +1955,8 @@ def test_plot_latent_pca_both_modalities_by_celltype():
     plot_latent_pca_both_modalities_by_celltype(
         adata_rna_subset=adata_rna,
         adata_prot_subset=adata_prot,
-        latent_rna=latent_rna,
-        latent_prot=latent_prot,
+        rna_latent=rna_latent,
+        prot_latent=prot_latent,
         use_subsample=True,
     )
 
@@ -1956,8 +1965,8 @@ def test_plot_latent_pca_both_modalities_by_celltype():
     plot_latent_pca_both_modalities_by_celltype(
         adata_rna_subset=adata_rna,
         adata_prot_subset=adata_prot,
-        latent_rna=latent_rna,
-        latent_prot=latent_prot,
+        rna_latent=rna_latent,
+        prot_latent=prot_latent,
         use_subsample=False,
     )
 
@@ -1968,8 +1977,8 @@ def test_plot_latent_pca_both_modalities_by_celltype():
     plot_latent_pca_both_modalities_by_celltype(
         adata_rna_subset=adata_rna,
         adata_prot_subset=adata_prot,
-        latent_rna=latent_rna,
-        latent_prot=latent_prot,
+        rna_latent=rna_latent,
+        prot_latent=prot_latent,
         index_rna=index_rna,
         index_prot=index_prot,
         use_subsample=True,

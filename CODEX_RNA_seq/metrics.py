@@ -57,15 +57,15 @@ def ari_score_calc(adata_rna, adata_prot):
 
 
 # matching_accuracy 1-1
-def matching_accuracy(latent_rna, latent_prot, global_step=None):
+def matching_accuracy(rna_latent, prot_latent, global_step=None):
     correct_matches = 0
-    nn_celltypes_prot = calc_dist(latent_rna, latent_prot)
-    for index, cell_type in enumerate(latent_rna.obs["cell_types"]):
+    nn_celltypes_prot = calc_dist(rna_latent, prot_latent)
+    for index, cell_type in enumerate(rna_latent.obs["cell_types"]):
         if cell_type == nn_celltypes_prot[index]:
             correct_matches += 1
     accuracy = correct_matches / len(nn_celltypes_prot)
     pf.plot_cell_type_prediction_confusion_matrix(
-        latent_rna.obs["cell_types"], nn_celltypes_prot, global_step
+        rna_latent.obs["cell_types"], nn_celltypes_prot, global_step
     )
     return accuracy
 
@@ -75,7 +75,7 @@ def normalize_silhouette(silhouette_vals):
     return (np.mean(silhouette_vals) + 1) / 2
 
 
-def compute_silhouette_f1(latent_rna, latent_prot):
+def compute_silhouette_f1(rna_latent, prot_latent):
     """
     Compute the Silhouette F1 score.
 
@@ -85,15 +85,15 @@ def compute_silhouette_f1(latent_rna, latent_prot):
     """
 
     # protein embeddings
-    prot_embeddings = latent_prot.X
+    prot_embeddings = prot_latent.X
     # rna embeddings
-    rna_embeddings = latent_rna.X
+    rna_embeddings = rna_latent.X
     embeddings = np.concatenate([rna_embeddings, prot_embeddings], axis=0)
     celltype_labels = np.concatenate(
-        [latent_rna.obs["cell_types"], latent_prot.obs["cell_types"]], axis=0
+        [rna_latent.obs["cell_types"], prot_latent.obs["cell_types"]], axis=0
     )
     modality_labels = np.concatenate(
-        [["rna"] * len(latent_rna.obs), ["protein"] * len(latent_prot.obs)], axis=0
+        [["rna"] * len(rna_latent.obs), ["protein"] * len(prot_latent.obs)], axis=0
     )
 
     le_ct = LabelEncoder()

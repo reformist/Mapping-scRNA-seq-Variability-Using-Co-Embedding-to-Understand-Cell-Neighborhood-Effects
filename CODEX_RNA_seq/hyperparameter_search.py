@@ -82,25 +82,28 @@ sys.path.append(str(project_root))
 
 # Define hyperparameter search space
 param_grid = {
-    "plot_x_times": [4],
+    "plot_x_times": [30],
     "check_val_every_n_epoch": [2],
-    "max_epochs": [40],  # Changed from n_epochs to max_epochs to match train_vae
+    "max_epochs": [800],  # Changed from n_epochs to max_epochs to match train_vae
     # "plot_x_times": [1],
     # "check_val_every_n_epoch": [1],
     # "max_epochs": [3],  # Changed from n_epochs to max_epochs to match train_vae
     "batch_size": [3000],
-    "lr": [1e-4],  # 1e-3 was good
-    "contrastive_weight": [0, 100, 0.1],
-    "similarity_weight": [0],
+    "contrastive_weight": [
+        0
+        # 10
+    ],
+    "similarity_weight": [100],
     "diversity_weight": [0.0],
-    "matching_weight": [
-        0.1,
-    ],  # Updated range to reflect typical values
-    "cell_type_clustering_weight": [1_000, 10_000, 100_000],  # Within-modality cell type clustering
+    "matching_weight": [0.1],  # Updated range to reflect typical values
+    "cell_type_clustering_weight": [
+        1_000,
+        # 10_000,
+        # 100_000,
+    ],  # Within-modality cell type clustering
     "cross_modal_cell_type_weight": [
-        1000,
-        10_000,
-        100_000,
+        1_000
+        # 10_000,
     ],  # Added cross-modal cell type alignment weight
     "n_hidden_rna": [512],
     "n_hidden_prot": [32],
@@ -112,6 +115,11 @@ param_grid = {
     "train_size": [0.85],
     "validation_size": [0.15],
     "gradient_clip_val": [1.0],
+    "lr": [
+        # 1e-2,
+        1e-3,
+        # ,1e-4
+    ],  # 1e-3 was good
 }
 
 mlflow.set_tracking_uri("file:./mlruns")
@@ -169,17 +177,29 @@ print(f"Already tried: {len(existing_params)}")
 print(f"New combinations to try: {total_combinations}")
 
 # Load data
-save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
-log_memory_usage("Before loading data: ")
+# save_dir = Path("CODEX_RNA_seq/data/processed_data").absolute()
+# log_memory_usage("Before loading data: ")
 
-adata_rna_subset = sc.read_h5ad(
-    bar_nick_utils.get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
-)
-log_memory_usage("After loading RNA data: ")
+# adata_rna_subset = sc.read_h5ad(
+#     bar_nick_utils.get_latest_file(save_dir, "adata_rna_subset_prepared_for_training_")
+# )
+# log_memory_usage("After loading RNA data: ")
 
-adata_prot_subset = sc.read_h5ad(
-    bar_nick_utils.get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
+# adata_prot_subset = sc.read_h5ad(
+#     bar_nick_utils.get_latest_file(save_dir, "adata_prot_subset_prepared_for_training_")
+# )
+
+# todo this is cite-seq data temp
+adata_rna_subset_cite_seq = (
+    "CODEX_RNA_seq/adata_rna_subset_prepared_for_training_2025-04-10-18-05-13.h5ad"
 )
+adata_prot_subset_cite_seq = (
+    "CODEX_RNA_seq/adata_prot_subset_prepared_for_training_2025-04-10-18-05-13.h5ad"
+)
+adata_rna_subset = sc.read_h5ad(adata_rna_subset_cite_seq)
+adata_prot_subset = sc.read_h5ad(adata_prot_subset_cite_seq)
+adata_rna_subset.obs["cell_types"] = adata_rna_subset.obs["major_cell_types"]
+adata_prot_subset.obs["cell_types"] = adata_prot_subset.obs["major_cell_types"]
 log_memory_usage("After loading protein data: ")
 
 print(f"RNA dataset shape: {adata_rna_subset.shape}")
@@ -191,7 +211,29 @@ print(f"Protein dataset shape: {adata_prot_subset.shape}")
 # adata_rna_subset = sc.pp.subsample(adata_rna_subset, n_obs=rna_sample_size, copy=True)
 # adata_prot_subset = sc.pp.subsample(adata_prot_subset, n_obs=prot_sample_size, copy=True)
 log_memory_usage("After subsampling: ")
-model_checkpoints_folder = Path("CODEX_RNA_seq/pretrained_vae/epoch_74")
+model_checkpoints_folder = Path("CODEX_RNA_seq/pretrained_vae/epoch_74")  # base model
+# good mixing model
+model_checkpoints_folder = Path(
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/59ea832431a94c608377d66fbac380f6/artifacts/epoch_59"
+)
+# good mixing model trained more epochs
+model_checkpoints_folder = Path(
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/a9dcb6cd70404a15a486ae38130ed5cb/artifacts/epoch_149"
+)
+
+model_checkpoints_folder = Path(  # best mixing so far
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/9cecb1810d4e4145b35cf8651f0eec86/artifacts/epoch_149"
+)
+model_checkpoints_folder = Path(
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/467605ebd3a6460bb60788777148a920/artifacts/epoch_399"
+)
+model_checkpoints_folder = Path(
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/964c65b61dcf40a289a67ada1cfa8c13/artifacts/epoch_399"
+)
+model_checkpoints_folder = Path(
+    "/home/barroz/projects/Mapping-scRNA-seq-Variability-Using-Co-Embedding-to-Understand-Cell-Neighborhood-Effects/mlruns/653315841334425763/026fec4ddfc048f388c1515a0e97ce61/artifacts/epoch_399"
+)
+
 # Estimate training time before starting
 if total_combinations > 0 and len(new_combinations) > 0:
     # Use first parameter combination for estimation
@@ -382,7 +424,6 @@ for i, params in enumerate(new_combinations):
 
         except Exception as e:
             # Log failed run
-            mlflow.set_tag("run_status", "FAILED")
             error_details = str(e)
             # Create detailed error log file
             error_log_path = os.path.join(run_log_dir, f"{run_name}_error.log")
@@ -410,7 +451,7 @@ for i, params in enumerate(new_combinations):
             # Log the run-specific log file as an artifact even in case of error
             mlflow.log_artifact(run_log_file_path, "logs")
             print(f"Logged run log file for failed run: {run_log_file_path}")
-
+            mlflow.end_run(status="FAILED")
             time.sleep(5)  # Sleep for 5 seconds after failure
             continue
         finally:
