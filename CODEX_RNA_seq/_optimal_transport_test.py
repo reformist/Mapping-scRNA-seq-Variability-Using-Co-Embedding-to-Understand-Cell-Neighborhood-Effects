@@ -3,6 +3,7 @@ import copy
 import os
 import sys
 import warnings
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,7 +11,9 @@ import ot
 import scanpy as sc
 import seaborn as sns
 import torch
+from scipy.sparse.csgraph import shortest_path
 from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,45 +26,85 @@ def soften_matching(M, temperature=0.1):
     return M_exp / M_exp.sum(axis=1, keepdims=True)
 
 
+def compute_nn_distance_matrix(data, k=5):
+    # Build k-NN graph
+    nn = NearestNeighbors(n_neighbors=k, metric="euclidean").fit(data)
+    adj_matrix = nn.kneighbors_graph(mode="distance").toarray()
+
+    # Compute shortest path distances (number of hops)
+    _, predecessors = shortest_path(
+        csgraph=adj_matrix,
+        directed=False,
+        return_predecessors=True,
+        unweighted=True,  # Treat as unweighted graph for hop count
+    )
+
+    # Convert predecessors to hop counts
+    n_samples = data.shape[0]
+    dist_matrix = np.zeros((n_samples, n_samples))
+    for i in range(n_samples):
+        for j in range(n_samples):
+            path = []
+            k = j
+            while predecessors[i, k] != -9999:
+                path.append(k)
+                k = predecessors[i, k]
+                if k == i:
+                    break
+            dist_matrix[i, j] = len(path)
+
+    return dist_matrix
+
+
 def plot_archetypes_comparison(archetype1, archetype2, i, j):
     """Plot the source and target archetypes side by side."""
     if archetype1.shape[1] == 2:  # Only for 2D data
+        # Limit to first 1000 cells
+        n_cells_to_plot = min(1000, len(archetype1), len(archetype2))
+        archetype1_np = archetype1[:n_cells_to_plot].cpu().numpy()
+        archetype2_np = archetype2[:n_cells_to_plot].cpu().numpy()
+
         fig = plt.figure(figsize=(10, 5))
 
         # Source archetype
         ax1 = fig.add_subplot(121)
         ax1.scatter(
-            archetype1[:, 0].cpu().numpy(),
-            archetype1[:, 1].cpu().numpy(),
+            archetype1_np[:, 0],
+            archetype1_np[:, 1],
             c="b",
             label="Source",
         )
-        ax1.set_title(f"Archetype {i} (Source)")
+        ax1.set_title(f"Archetype {i} (Source) - First {n_cells_to_plot} cells")
         # Target archetype
         ax2 = fig.add_subplot(122)
         ax2.scatter(
-            archetype2[:, 0].cpu().numpy(),
-            archetype2[:, 1].cpu().numpy(),
+            archetype2_np[:, 0],
+            archetype2_np[:, 1],
             c="r",
             label="Target",
         )
-        ax2.set_title(f"Archetype {j} (Target)")
+        ax2.set_title(f"Archetype {j} (Target) - First {n_cells_to_plot} cells")
         plt.show()
         plt.close()
 
 
 def plot_distance_matrices(C1, C2, i, j):
     """Plot the distance matrices of the source and target archetypes."""
+    # Select first 1000 cells to plot
+    n_cells_to_plot = min(1000, C1.shape[0], C2.shape[0])
+    C1_np = C1[:n_cells_to_plot, :n_cells_to_plot].cpu().numpy()
+    C2_np = C2[:n_cells_to_plot, :n_cells_to_plot].cpu().numpy()
+
     plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
-    plt.imshow(C1.cpu().numpy(), cmap="viridis")
-    plt.title(f"Source Archetype {i} Distance Matrix")
+    plt.imshow(C1_np, cmap="viridis")
+    plt.title(f"Source Archetype {i} Distance Matrix - First {n_cells_to_plot} cells")
     plt.colorbar()
 
     plt.subplot(1, 2, 2)
-    plt.imshow(C2.cpu().numpy(), cmap="viridis")
-    plt.title(f"Target Archetype {j} Distance Matrix")
+    plt.imshow(C2_np, cmap="viridis")
+    plt.title(f"Target Archetype {j} Distance Matrix - First {n_cells_to_plot} cells")
     plt.colorbar()
 
     plt.tight_layout()
@@ -74,12 +117,15 @@ def plot_transport_plan(transport_plan, i, j, gw_dist):
     transport_plan_np = (
         transport_plan.cpu().numpy() if isinstance(transport_plan, torch.Tensor) else transport_plan
     )
+    # Limit to first 1000 cells
+    n_cells_to_plot = min(400, transport_plan_np.shape[0], transport_plan_np.shape[1])
+    transport_plan_np = transport_plan_np[:n_cells_to_plot, :n_cells_to_plot]
 
     plt.figure(figsize=(10, 8))
     plt.imshow(np.log1p(transport_plan_np), cmap="viridis", aspect="auto")
     plt.colorbar(label="Transport mass")
     plt.title(
-        f"GW Logarithm of Transport Plan values: Archetype {i} ↔ {j}\nDistance: {gw_dist:.4f}"
+        f"GW Logarithm of Transport Plan values: Archetype {i} ↔ {j}\nDistance: {gw_dist:.4f}, First {n_cells_to_plot} cells"
     )
     plt.xlabel("Target Archetype Cells")
     plt.ylabel("Source Archetype Cells")
@@ -87,17 +133,70 @@ def plot_transport_plan(transport_plan, i, j, gw_dist):
     plt.close()
 
 
-def plot_transformed_points(archetype1_np, archetype2_np, transport_plan_np, i, j):
+def plot_transformed_points(archetype1_np, archetype2_np, transformed_source_scaled, i, j):
     """Plot original source, transformed source, and target points."""
+    # Limit to first 1000 cells
+    n_cells_to_plot = min(
+        1000, len(archetype1_np), len(archetype2_np), len(transformed_source_scaled)
+    )
+    archetype1_np = archetype1_np[:n_cells_to_plot]
+    archetype2_np = archetype2_np[:n_cells_to_plot]
+    transformed_source_scaled = transformed_source_scaled[:n_cells_to_plot]
+
+    # Plot original source, transformed source, and target
+    plt.figure(figsize=(15, 5))
+
+    # Original source
+    plt.subplot(1, 3, 1)
+    plt.scatter(archetype1_np[:, 0], archetype1_np[:, 1], c="blue", label="Source", alpha=0.7)
+    plt.title(f"Original Source (Archetype {i}) - First {n_cells_to_plot} cells")
+    plt.legend()
+
+    # Transformed source (with proper scaling)
+    plt.subplot(1, 3, 2)
+    plt.scatter(
+        transformed_source_scaled[:, 0],
+        transformed_source_scaled[:, 1],
+        c="green",
+        label="Transformed Source",
+        alpha=0.7,
+    )
+    plt.title(f"Transformed Source (Scaled) - First {n_cells_to_plot} cells")
+    plt.legend()
+
+    # Target and scaled transformed source overlay
+    plt.subplot(1, 3, 3)
+    plt.scatter(archetype2_np[:, 0], archetype2_np[:, 1], c="red", label="Target", alpha=0.5)
+    plt.scatter(
+        transformed_source_scaled[:, 0],
+        transformed_source_scaled[:, 1],
+        c="green",
+        label="Transformed Source",
+        alpha=0.5,
+    )
+
+    plt.title(f"Overlay: Target (Arch {j}) & Transformed - First {n_cells_to_plot} cells")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    plt.close()
+
+
+def scale_transformed_source(transport_plan_np, archetype2_np):
+    """Transform source points using transport plan and scale them to match target range."""
+    # Limit to first 1000 cells for consistency with other plots
+    n_cells_to_plot = min(1000, transport_plan_np.shape[0], len(archetype2_np))
+    transport_plan_np_subset = transport_plan_np[:n_cells_to_plot, :n_cells_to_plot]
+    archetype2_np_subset = archetype2_np[:n_cells_to_plot]
 
     # Use the transport plan to transform source points
     # Each source point is mapped as a weighted combination of target points
-    transformed_source = transport_plan_np @ archetype2_np
+    transformed_source = transport_plan_np_subset @ archetype2_np_subset
 
     # Rescale transformed source to match target scale for better visualization
     # Get min/max of target data
-    target_min = archetype2_np.min(axis=0)
-    target_max = archetype2_np.max(axis=0)
+    target_min = archetype2_np_subset.min(axis=0)
+    target_max = archetype2_np_subset.max(axis=0)
     target_range = target_max - target_min
 
     # Get min/max of transformed source
@@ -114,64 +213,48 @@ def plot_transformed_points(archetype1_np, archetype2_np, transport_plan_np, i, 
             ) / trans_range[dim] * target_range[dim] + target_min[dim]
         else:
             transformed_source_scaled[:, dim] = target_min[dim] + target_range[dim] / 2
-
-    # Plot original source, transformed source, and target
-    plt.figure(figsize=(15, 5))
-
-    # Original source
-    plt.subplot(1, 3, 1)
-    plt.scatter(archetype1_np[:, 0], archetype1_np[:, 1], c="blue", label="Source", alpha=0.7)
-    plt.title(f"Original Source (Archetype {i})")
-    plt.legend()
-
-    # Transformed source (with proper scaling)
-    plt.subplot(1, 3, 2)
-    plt.scatter(
-        transformed_source_scaled[:, 0],
-        transformed_source_scaled[:, 1],
-        c="green",
-        label="Transformed Source",
-        alpha=0.7,
-    )
-    plt.title(f"Transformed Source (Scaled)")
-    plt.legend()
-
-    # Target and scaled transformed source overlay
-    plt.subplot(1, 3, 3)
-    plt.scatter(archetype2_np[:, 0], archetype2_np[:, 1], c="red", label="Target", alpha=0.5)
-    plt.scatter(
-        transformed_source_scaled[:, 0],
-        transformed_source_scaled[:, 1],
-        c="green",
-        label="Transformed Source",
-        alpha=0.5,
-    )
-
-    plt.title(f"Overlay: Target (Arch {j}) & Transformed")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-    plt.close()
-
     return transformed_source_scaled
 
 
 def plot_connections(
     archetype2_np, transformed_source_scaled, transport_plan_np, i, j, num_connections=50
 ):
-    """Plot connections between transformed source and target points."""
-    # For each source point, find the best matching target point
-    matches_1_to_2 = np.argmax(transport_plan_np, axis=1)
+    """Plot connections between transformed source and target points.
 
-    # Take only the first num_connections source points
-    source_indices = np.arange(min(num_connections, len(matches_1_to_2)))
+    Note: assumes transformed_source_scaled is already limited to 1000 cells
+    and we need to use the same subset of transport_plan_np.
+    """
+    # Limit transport_plan to match the size of transformed_source_scaled
+    n_source = min(len(transformed_source_scaled), transport_plan_np.shape[0])
+    n_target = min(len(archetype2_np), transport_plan_np.shape[1])
+
+    # Use the same subset for calculation
+    transport_plan_subset = transport_plan_np[:n_source, :n_target]
+
+    # Find the best match in space 2 for each cell in space 1
+    matches_1_to_2 = np.argmax(transport_plan_subset, axis=1)
+
+    # Get the matching weights for each source cell to its best target match
+    match_weights = np.array(
+        [transport_plan_subset[idx, matches_1_to_2[idx]] for idx in range(len(matches_1_to_2))]
+    )
+
+    # Get indices of cells sorted by match weight (highest to lowest)
+    sorted_indices = np.argsort(match_weights)[::-1]  # Reverse to get highest first
+
+    # Take only the top connections for arrows (based on match strength)
+    source_indices = sorted_indices[:num_connections]
     target_indices = matches_1_to_2[source_indices]
 
     # Define a list of colors to cycle through
     line_colors = ["black", "orange", "purple", "brown"]
 
     plt.figure(figsize=(8, 8))
-    plt.scatter(archetype2_np[:, 0], archetype2_np[:, 1], c="red", label="Target", alpha=0.5)
+
+    # Plot all cells in the current subset
+    plt.scatter(
+        archetype2_np[:n_target, 0], archetype2_np[:n_target, 1], c="red", label="Target", alpha=0.5
+    )
     plt.scatter(
         transformed_source_scaled[:, 0],
         transformed_source_scaled[:, 1],
@@ -180,11 +263,11 @@ def plot_connections(
         alpha=0.5,
     )
 
-    # Draw arrows with reasonable sizes
+    # Draw arrows for the top connections
     for idx, (src_idx, tgt_idx) in enumerate(zip(source_indices, target_indices)):
-        weight = transport_plan_np[src_idx, tgt_idx]
+        weight = transport_plan_subset[src_idx, tgt_idx]
         # Use smaller arrow width parameters
-        arrow_width = 0.01 + 0.05 * weight / np.max(transport_plan_np)
+        arrow_width = 0.01 + 0.05 * weight / np.max(transport_plan_subset)
         color_idx = idx % len(line_colors)
         plt.arrow(
             transformed_source_scaled[src_idx, 0],
@@ -199,7 +282,9 @@ def plot_connections(
             length_includes_head=True,
         )
 
-    plt.title(f"Top {len(source_indices)} Connections: Archetype {i} → {j}")
+    plt.title(
+        f"Best Matches for Archetype {i} → {j} (Showing {len(source_indices)} Strongest Connections)"
+    )
     plt.legend()
     plt.tight_layout()
     plt.show()
@@ -208,6 +293,14 @@ def plot_connections(
 
 def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_source_scaled, i, j):
     """Plot histograms comparing distributions before and after transport."""
+    # Limit to first 1000 cells
+    n_cells_to_plot = min(
+        1000, len(archetype1_np), len(archetype2_np), len(transformed_source_scaled)
+    )
+    archetype1_np = archetype1_np[:n_cells_to_plot]
+    archetype2_np = archetype2_np[:n_cells_to_plot]
+    transformed_source_scaled = transformed_source_scaled[:n_cells_to_plot]
+
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 
     # Define bins consistently across all histograms
@@ -309,31 +402,35 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
     axs[1, 1].set_title("Transformed vs Target")
     axs[1, 1].legend()
 
-    plt.suptitle(f"Distribution Comparison: Archetype {i} → {j}")
+    plt.suptitle(f"Distribution Comparison: Archetype {i} → {j} - First {n_cells_to_plot} cells")
     plt.tight_layout()
     plt.show()
     plt.close()
 
 
 def get_2D_data(archetype1, archetype2):
+    """Convert high-dimensional data to 2D using PCA."""
+    # Limit to first 1000 cells
+    n_cells_to_plot = min(1000, len(archetype1), len(archetype2))
+    archetype1_subset = archetype1[:n_cells_to_plot]
+    archetype2_subset = archetype2[:n_cells_to_plot]
+
     # Visualize the transported source points to see overlap
-    archetype1_np = archetype1.cpu().numpy()
-    archetype2_np = archetype2.cpu().numpy()
-    # meage data to 2D and then apply PCA
+    archetype1_np = archetype1_subset.cpu().numpy()
+    archetype2_np = archetype2_subset.cpu().numpy()
+
+    # Merge data and apply PCA
     len_archetype1 = len(archetype1_np)
     len_archetype2 = len(archetype2_np)
     merge_data = np.concatenate((archetype1_np, archetype2_np), axis=0)
     merge_data = PCA(n_components=2).fit_transform(merge_data)
     archetype1_np = merge_data[:len_archetype1, :]
     archetype2_np = merge_data[len_archetype1:, :]
-    # Plot transformed points
-    transformed_source_scaled = plot_transformed_points(
-        archetype1_np, archetype2_np, transport_plan_np, i, j
-    )
-    return archetype1_np, archetype2_np, transformed_source_scaled
+
+    return archetype1_np, archetype2_np
 
 
-def print_transport_plan_validation(transport_plan, p, q):
+def print_transport_plan_validation(transport_plan, p, q, i, j):
     print(f"\nTransport Plan Validation ({i}→{j}):")
     print(f"Mass conservation error: {torch.abs(p.sum() - q.sum()):.2e}")
     print(f"Source marginal L1 error: {torch.abs(transport_plan.sum(1) - p).sum().item():.2e}")
@@ -352,6 +449,22 @@ def plot_convergence(log, i, j):
         plt.ylabel("Marginal Violation (log scale)")
         plt.show()
         plt.close()
+
+
+def compute_distance_matrix(archetype1, archetype2, metric: Literal["euclidean", "nn"] = "nn"):
+    if metric == "euclidean":
+        C1 = torch.cdist(archetype1, archetype1)
+        C2 = torch.cdist(archetype2, archetype2)
+    elif metric == "nn":
+        C1 = compute_nn_distance_matrix(archetype1, k=5)
+        C2 = compute_nn_distance_matrix(archetype2, k=5)
+
+    # Normalize the distance matrices
+    if C1.max() > 0:
+        C1 = C1 / C1.max()
+    if C2.max() > 0:
+        C2 = C2 / C2.max()
+    return C1, C2
 
 
 # read those adata_1_rna.write(f"CODEX_RNA_seq/data/processed_data/adata_rna_archetype_generated_ot_test.h5ad")
@@ -437,7 +550,7 @@ earchetyp_1_rna_cell_dummy = copy.deepcopy(archetyp_rna_cells)
 eaxmple_prot_cell_dummy = copy.deepcopy(archetyp_prot_cells)
 # eaxmple_prot_cell_dummy[0] = eaxmple_prot_cell_dummy[0]+ np.random.normal(0, 0.1, eaxmple_prot_cell_dummy[0].shape)# PCA().fit_transform(earchetyp_1_rna_cell_dummy[0])
 # shuffle the dimension of the archetypes
-earchetyp_1_rna_cell_dummy[0] = eaxmple_prot_cell_dummy[0][:, ::] + 0.00000001 * np.random.normal(
+earchetyp_1_rna_cell_dummy[0] = eaxmple_prot_cell_dummy[0][:, ::] + 0.01 * np.random.normal(
     0, 0.1, eaxmple_prot_cell_dummy[0].shape
 )
 earchetyp_1_rna_cell_dummy[0] = earchetyp_1_rna_cell_dummy[0][
@@ -445,23 +558,23 @@ earchetyp_1_rna_cell_dummy[0] = earchetyp_1_rna_cell_dummy[0][
 ]  #  try unbalance the number of cells in one of the distribution
 # PCA().fit_transform(earchetyp_1_rna_cell_dummy[0])
 # Add some noise to the RNA archetypes
-earchetyp_1_rna_cell_dummy[1] = eaxmple_prot_cell_dummy[1][:, ::-1] + 0.00000001 * np.random.normal(
+earchetyp_1_rna_cell_dummy[1] = eaxmple_prot_cell_dummy[1][:, ::-1] + 0.01 * np.random.normal(
     0, 0.1, eaxmple_prot_cell_dummy[1].shape
 )
-earchetyp_1_rna_cell_dummy[2] = eaxmple_prot_cell_dummy[2][:, ::-1] + 0.00000001 * np.random.normal(
+earchetyp_1_rna_cell_dummy[2] = eaxmple_prot_cell_dummy[2][:, ::-1] + 0.01 * np.random.normal(
     0, 0.1, eaxmple_prot_cell_dummy[2].shape
 )
-earchetyp_1_rna_cell_dummy[3] = eaxmple_prot_cell_dummy[3][:, ::-1] + 0.00000001 * np.random.normal(
+earchetyp_1_rna_cell_dummy[3] = eaxmple_prot_cell_dummy[3][:, ::-1] + 0.01 * np.random.normal(
     0, 0.1, eaxmple_prot_cell_dummy[3].shape
 )
 # make not a function
 archetypes_space1 = earchetyp_1_rna_cell_dummy
 archetypes_space2 = eaxmple_prot_cell_dummy
-metric = "euclidean"
+metric = "euclidean"  #  change to neighbor graph distance
 loss_type = "kl_loss"
 # loss_type = "square_loss"
 epsilon = 0.01
-max_iter = 1000
+max_iter = 100  # should be higher
 # %%
 
 """
@@ -494,15 +607,8 @@ for i, archetype1 in tqdm(
             continue
 
         # Compute distance matrices within each archetype
-        C1 = torch.cdist(archetype1, archetype1)
-        C2 = torch.cdist(archetype2, archetype2)
 
-        # Normalize the distance matrices
-        if C1.max() > 0:
-            C1 = C1 / C1.max()
-        if C2.max() > 0:
-            C2 = C2 / C2.max()
-
+        C1, C2 = compute_distance_matrix(archetype1, archetype2, metric=metric)
         # Plot the distance matrices
         plot_distance_matrices(C1, C2, i, j)
 
@@ -524,16 +630,17 @@ for i, archetype1 in tqdm(
             log=True,
         )
         transport_plan = log["T"]  # Get transport plan from log dict
-        print_transport_plan_validation(transport_plan, p, q)
+        print_transport_plan_validation(transport_plan, p, q, i, j)
 
         # Plot the transport plan
         plot_transport_plan(transport_plan, i, j, gw_dist)
         transport_plan_np = transport_plan.cpu().numpy()
 
-        archetype1_np, archetype2_np, transformed_source_scaled = get_2D_data(
-            archetype1, archetype2
-        )
+        archetype1_np, archetype2_np = get_2D_data(archetype1, archetype2)
+
+        transformed_source_scaled = scale_transformed_source(transport_plan_np, archetype2_np)
         # Plot connections between points
+        plot_transformed_points(archetype1_np, archetype2_np, transformed_source_scaled, i, j)
         plot_connections(archetype2_np, transformed_source_scaled, transport_plan_np, i, j)
 
         # Plot distribution comparison
