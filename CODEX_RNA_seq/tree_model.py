@@ -9,17 +9,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import seaborn as sns
 from scipy.sparse import issparse
 from sklearn.cross_decomposition import CCA
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 
+# from remote_plot import plt
+
+
 # Add repository root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set working directory to project root
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def robust_clamp_outliers(data, lower_quantile=0.001, upper_quantile=0.999):
+    lower_bound = np.quantile(data, lower_quantile, axis=0)
+    upper_bound = np.quantile(data, upper_quantile, axis=0)
+    return np.clip(data, lower_bound, upper_bound)
 
 
 def analyze_residual_variation(
@@ -71,7 +81,12 @@ def analyze_residual_variation(
         adata_prot = sc.read(
             "CODEX_RNA_seq/data/processed_data/preprocessed_adata_prot_neighbors_means.h5ad"
         )
-
+    if plot:
+        subset_size = 2000
+        if adata_prot.shape[0] > subset_size:
+            subset_idx = np.random.choice(adata_prot.shape[0], subset_size, replace=False)
+        else:
+            subset_idx = np.arange(adata_prot.shape[0])
     if verbose:
         print(f"Working with data of shape: {adata_prot.shape}")
 
@@ -110,16 +125,13 @@ def analyze_residual_variation(
             "Input AnnData object must have a 'feature_type' column in .var identifying 'protein' and 'CN' features"
         )
 
-    # Plot the protein data
+    # Original protein data plots
     if plot:
         if verbose:
             print("Plotting original protein data...")
-        toplot = sc.AnnData(protein_data)
-        toplot.obs = (
-            adata_prot.obs.copy()
-        )  # Copy the entire obs dataframe to maintain index and data types
+        toplot = sc.AnnData(protein_data[subset_idx])
+        toplot.obs = adata_prot.obs.iloc[subset_idx].copy()
 
-        # Make sure cell_types is categorical
         if not pd.api.types.is_categorical_dtype(toplot.obs["cell_types"]):
             toplot.obs["cell_types"] = toplot.obs["cell_types"].astype("category")
 
@@ -130,22 +142,29 @@ def analyze_residual_variation(
             print(f"Total number of cells: {toplot.shape[0]}")
             print(f"Cell type distribution: {toplot.obs['cell_types'].value_counts()}")
 
-        # Run PCA and plot
+        # PCA plot
         sc.pp.pca(toplot)
-        sc.pl.pca(toplot, color="cell_types")
-        plt.savefig(f"{output_dir}/original_protein_pca.png", dpi=300, bbox_inches="tight")
+        plt.figure()
 
-        # Run UMAP and plot
+        ax = sc.pl.pca(toplot, color="cell_types", show=False)
+        plt.savefig(f"{output_dir}/original_protein_pca.png", dpi=300, bbox_inches="tight")
+        plt.show()
+        plt.close()
+
+        # UMAP plot
         sc.pp.neighbors(toplot)
         sc.tl.umap(toplot)
-        sc.pl.umap(toplot, color="cell_types")
+        plt.figure()
+
+        sc.pl.umap(toplot, color="cell_types", show=False)
         plt.savefig(f"{output_dir}/original_protein_umap.png", dpi=300, bbox_inches="tight")
+        plt.show()
         plt.close()
 
     # Standardize data for comparison
     scaler = StandardScaler()
-    norm_protein_data = scaler.fit_transform(protein_data)
-    norm_cn_data = scaler.fit_transform(cn_data)
+    norm_protein_data = scaler.fit_transform(robust_clamp_outliers(protein_data))
+    norm_cn_data = scaler.fit_transform(robust_clamp_outliers(cn_data))
 
     # Residual Modeling to explain intra-cluster variation
     if verbose:
@@ -164,9 +183,17 @@ def analyze_residual_variation(
     model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     model.fit(cell_type_dummies, norm_protein_data)
     predicted_baseline = model.predict(cell_type_dummies)
-
+    # sort predicted_baseline by cell_types
+    predicted_baseline_temp = predicted_baseline[np.argsort(cell_types)]
     # Calculate residuals (variations not explained by cell type)
     residuals = norm_protein_data - predicted_baseline
+    # Residuals heatmap
+    if plot:
+        plt.figure(figsize=(10, 10))
+        sns.heatmap(residuals[subset_idx], cmap="viridis")
+        plt.title("Residual Protein Expression Heatmap (Subset)")
+        plt.savefig(f"{output_dir}/residuals_heatmap.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
     # Use canonical correlation analysis to find relationships between CN features and residual protein expression
     if verbose:
@@ -180,6 +207,28 @@ def analyze_residual_variation(
 
     # Project CN data onto directions that best explain residuals
     cn_projection = cca.transform(norm_cn_data)
+    # CN projection heatmap
+    if plot:
+        plt.figure(figsize=(10, 10))
+        sns.heatmap(cn_projection[subset_idx], cmap="viridis")
+        plt.title("CN Projection Heatmap (Subset)")
+        plt.savefig(f"{output_dir}/cn_projection_heatmap.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        cn_projection_adata = sc.AnnData(cn_projection[subset_idx])
+        cn_projection_adata.obs = adata_prot.obs.iloc[subset_idx].copy()
+        sc.pp.pca(cn_projection_adata)
+        sc.pp.neighbors(cn_projection_adata)
+        sc.tl.umap(cn_projection_adata)
+        sc.pl.umap(
+            cn_projection_adata,
+            color="cell_types",
+            title="CN Projection UMAP, colored by cell type",
+        )
+        sc.pl.umap(cn_projection_adata, color="CN", title="CN Projection UMAP, colored by CN")
+        plt.savefig(f"{output_dir}/cn_projection_umap.png", dpi=300, bbox_inches="tight")
+        plt.savefig(f"temp.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
     # Create enhanced feature space
     enhanced_features = np.hstack([norm_protein_data, cn_projection])
@@ -222,41 +271,100 @@ def analyze_residual_variation(
         combined_data = np.hstack([protein_mat, cn_projection])
         new_adata = sc.AnnData(combined_data, obs=adata_prot.obs.copy(), var=new_var)
 
-    # Copy over other important annotations from original AnnData
+    # Copy over other important annotations from original AnnData - simplified version
     if hasattr(adata_prot, "obsm") and adata_prot.obsm:
         for key in adata_prot.obsm.keys():
-            new_adata.obsm[key] = (
-                adata_prot.obsm[key].copy()
-                if hasattr(adata_prot.obsm[key], "copy")
-                else adata_prot.obsm[key]
-            )
+            new_adata.obsm[key] = adata_prot.obsm[key]
 
     if hasattr(adata_prot, "obsp") and adata_prot.obsp:
         for key in adata_prot.obsp.keys():
-            new_adata.obsp[key] = (
-                adata_prot.obsp[key].copy()
-                if hasattr(adata_prot.obsp[key], "copy")
-                else adata_prot.obsp[key]
-            )
+            new_adata.obsp[key] = adata_prot.obsp[key]
 
     if hasattr(adata_prot, "uns") and adata_prot.uns:
         for key in adata_prot.uns.keys():
-            new_adata.uns[key] = (
-                adata_prot.uns[key].copy()
-                if hasattr(adata_prot.uns[key], "copy")
-                else adata_prot.uns[key]
-            )
+            new_adata.uns[key] = adata_prot.uns[key]
 
-    # UMAP to visualize enhanced features
-    if verbose:
-        print("Generating UMAP visualization...")
-    temp_adata = sc.AnnData(enhanced_features)
-    temp_adata.obs = adata_prot.obs
-    sc.pp.neighbors(temp_adata)
-    sc.tl.umap(temp_adata)
+    # Enhanced features UMAP
+    if plot:
+        if verbose:
+            print("Generating UMAP visualization...")
+        temp_adata = sc.AnnData(enhanced_features[subset_idx])
+        temp_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(temp_adata)
+        sc.tl.umap(temp_adata)
+        sc.pl.umap(temp_adata, color="cell_types")
+        plt.savefig(f"{output_dir}/enhanced_features_umap.png", dpi=300, bbox_inches="tight")
+        plt.close()
+        # plot the following, original only protein feateurs umap,
+        # origanl protein + CN vector  umap,
+        #   CN only umap
+        # projeccted CN only umap
+        # enhance features (protein + projected CN vector) umap
+    if plot:
+        if verbose:
+            print("Generating UMAP visualizations...")
 
-    # Add UMAP coordinates to the new AnnData
-    new_adata.obsm["X_umap"] = temp_adata.obsm["X_umap"]
+        # 1. Original protein features UMAP
+        protein_adata = sc.AnnData(protein_data[subset_idx])
+        protein_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(protein_adata)
+        sc.tl.umap(protein_adata)
+        sc.pl.umap(
+            protein_adata, color="cell_types", title="Original Protein Features - Cell Types"
+        )
+        plt.savefig(f"{output_dir}/protein_only_umap_celltypes.png", dpi=300, bbox_inches="tight")
+        plt.savefig(f"temp.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 2. Original protein + CN vectors UMAP
+        orig_combined = np.hstack([protein_data, cn_data])
+        orig_combined_adata = sc.AnnData(orig_combined[subset_idx])
+        orig_combined_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(orig_combined_adata)
+        sc.tl.umap(orig_combined_adata)
+        sc.pl.umap(
+            orig_combined_adata, color="cell_types", title="Original Protein + CN - Cell Types"
+        )
+        plt.savefig(f"{output_dir}/protein_cn_umap_celltypes.png", dpi=300, bbox_inches="tight")
+        sc.pl.umap(orig_combined_adata, color="CN", title="Original Protein + CN - CN")
+        plt.savefig(f"{output_dir}/protein_cn_umap_cn.png", dpi=300, bbox_inches="tight")
+        plt.savefig(f"temp_1.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 3. CN only UMAP
+        cn_adata = sc.AnnData(cn_data[subset_idx])
+        cn_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(cn_adata)
+        sc.tl.umap(cn_adata)
+        sc.pl.umap(cn_adata, color="cell_types", title="CN Only - Cell Types")
+        plt.savefig(f"{output_dir}/cn_only_umap_celltypes.png", dpi=300, bbox_inches="tight")
+        sc.pl.umap(cn_adata, color="CN", title="CN Only - CN")
+        plt.savefig(f"{output_dir}/cn_only_umap_cn.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 4. Projected CN only UMAP
+        cn_proj_adata = sc.AnnData(cn_projection[subset_idx])
+        cn_proj_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(cn_proj_adata)
+        sc.tl.umap(cn_proj_adata)
+        sc.pl.umap(cn_proj_adata, color="cell_types", title="Projected CN - Cell Types")
+        plt.savefig(f"{output_dir}/cn_projected_umap_celltypes.png", dpi=300, bbox_inches="tight")
+        sc.pl.umap(cn_proj_adata, color="CN", title="Projected CN - CN")
+        plt.savefig(f"{output_dir}/cn_projected_umap_cn.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 5. Enhanced features (protein + projected CN) UMAP
+        enhanced_adata = sc.AnnData(enhanced_features[subset_idx])
+        enhanced_adata.obs = adata_prot.obs.iloc[subset_idx]
+        sc.pp.neighbors(enhanced_adata)
+        sc.tl.umap(enhanced_adata)
+        sc.pl.umap(enhanced_adata, color="cell_types", title="Enhanced Features - Cell Types")
+        plt.savefig(
+            f"{output_dir}/enhanced_features_umap_celltypes.png", dpi=300, bbox_inches="tight"
+        )
+        sc.pl.umap(enhanced_adata, color="CN", title="Enhanced Features - CN")
+        plt.savefig(f"{output_dir}/enhanced_features_umap_cn.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
     # Evaluate if CN features explain intra-cluster variation
     if verbose:
@@ -276,6 +384,49 @@ def analyze_residual_variation(
                 print(f"Cell type {cell_type}: CN explains {r2:.2f} of residual variation")
 
     # Visualize the results of residual modeling
+    # Enhanced R² Plot with Variance Explanation
+    if plot:
+        plt.figure(figsize=(12, 6))
+        cell_types_plot = list(r2_values.keys())
+        r2_vals_plot = list(r2_values.values())
+
+        # Sort by R² value descending
+        sorted_indices = np.argsort(r2_vals_plot)[::-1]
+        sorted_cell_types = [cell_types_plot[i] for i in sorted_indices]
+        sorted_r2 = [r2_vals_plot[i] for i in sorted_indices]
+
+        # Create bar plot with annotations
+        bars = plt.bar(sorted_cell_types, sorted_r2, color="skyblue")
+        plt.axhline(
+            np.mean(sorted_r2),
+            color="red",
+            linestyle="--",
+            label=f"Mean R²: {np.mean(sorted_r2):.2f}",
+        )
+
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{height:.2f}",
+                ha="center",
+                va="bottom",
+            )
+
+        plt.title("Variance Explained by CN Projections per Cell Type", pad=20)
+        plt.ylabel("Proportion of Variance Explained (R²)")
+        plt.xticks(rotation=45, ha="right")
+        plt.legend()
+        plt.tight_layout()
+
+        # Save to output directory
+        plt.savefig(
+            f"{output_dir}/cn_variance_explained_per_celltype.png", dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
     if plot:
         # Plot 1: UMAP of enhanced features colored by cell type
         if verbose:
@@ -350,7 +501,7 @@ def analyze_residual_variation(
 
     # Store results in the AnnData object's uns
     new_adata.uns["cn_analysis"] = {"r2_values": r2_values, "n_components": n_components}
-
+    print("done, returning new_adata and results_dict")
     return new_adata, results_dict
 
 
@@ -365,6 +516,6 @@ if __name__ == "__main__":
     new_adata, results = analyze_residual_variation(adata_obj=adata, plot=True, verbose=True)
 
     # Save the new AnnData object with CN projections
-    new_adata.write_h5ad("CODEX_RNA_seq/data/processed_data/adata_with_cn_projections.h5ad")
+    # new_adata.write_h5ad("CODEX_RNA_seq/data/processed_data/adata_with_cn_projections.h5ad")
 
 # %%
