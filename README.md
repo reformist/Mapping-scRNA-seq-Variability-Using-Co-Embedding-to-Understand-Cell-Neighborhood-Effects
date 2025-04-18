@@ -1,4 +1,4 @@
-# Mapping scRNA-seq Variability Using Co-Embedding to Understand Cell Neighborhood Effects
+# ARCADIA---ARchetype-based-Clustering-and-Alignment-with-Dual-Integrative-Autoencoders
 
 This repository explores methods to understand and align scRNA-seq and protein-based single-cell modalities
 (e.g., from CITE-seq) by jointly embedding them. The approach aims to capture and preserve cell
