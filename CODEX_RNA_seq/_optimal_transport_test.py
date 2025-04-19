@@ -256,7 +256,7 @@ def compute_hop_distance(adj: torch.Tensor, max_hops: int = 10) -> torch.Tensor:
     n = adj.size(0)
     hop_dists = torch.full((n, n), float("inf"), device=adj.device)
 
-    for src in range(n):
+    for src in tqdm(range(n), desc="Computing hop distances", total=n):
         queue = torch.tensor([src], device=adj.device)
         visited = torch.tensor([src], device=adj.device)
         hop_dists[src, src] = 0
@@ -849,6 +849,13 @@ def stabilize_matrices(C1, C2):
     # Replace inf with max finite value
     C1 = torch.where(C1 == float("inf"), C1[C1 != float("inf")].max(), C1)
     C2 = torch.where(C2 == float("inf"), C2[C2 != float("inf")].max(), C2)
+
+    # --- Symmetrize the matrices ---
+    C1 = ((C1 + C1.T) / 2).to(torch.int32)
+    C2 = ((C2 + C2.T) / 2).to(torch.int32)
+
+    print_top_4_most_common_distance_values(C1, C2)
+
     # for numerical stability
     # Normalize to [0,1]
 
@@ -869,6 +876,7 @@ def compute_distance_matrix(
     metric: Literal["euclidean", "nn"],
     kwargs: dict = {"k": 15, "max_hops": 15},
 ):
+    print(f"using max_hops: {kwargs['max_hops']} and k: {kwargs['k']}")
     if metric == "euclidean":
         C1 = torch.cdist(archetype1, archetype1)
         C2 = torch.cdist(archetype2, archetype2)
@@ -877,12 +885,8 @@ def compute_distance_matrix(
         knn_indices_2 = knn_graph(archetype2, kwargs["k"])
         C1 = compute_hop_distance(knn_indices_1, kwargs["max_hops"])
         C2 = compute_hop_distance(knn_indices_2, kwargs["max_hops"])
-    # --- Symmetrize the matrices ---
-    C1 = ((C1 + C1.T) / 2).to(torch.int32)
-    C2 = ((C2 + C2.T) / 2).to(torch.int32)
     # Normalize the distance matrices
     print_top_4_most_common_distance_values(C1, C2)
-
     C1, C2 = stabilize_matrices(C1, C2)
     return C1, C2
 
@@ -901,25 +905,28 @@ def plot_target_transport_effect(
         title (str, optional): Custom plot title
     """
     # Compute transported target (barycentric projection)
-
+    subset_size = 1000
+    skip_size = max(int(archetype2_np.shape[0] / subset_size), 1)
+    archetype2_np_subset = archetype2_np[::skip_size]
+    transformed_target_scaled_np_subset = transformed_target_scaled_np[::skip_size]
     # First heatmap
     plt.figure(figsize=(10, 8))
-    sns.heatmap(archetype2_np, cmap="viridis")
+    sns.heatmap(archetype2_np_subset, cmap="viridis")
     plt.title("Original Target Data")
     plt.show()
 
     # Second heatmap
     plt.figure(figsize=(10, 8))
-    sns.heatmap(transformed_target_scaled_np, cmap="viridis")
+    sns.heatmap(transformed_target_scaled_np_subset, cmap="viridis")
     plt.title("Transported Target Data")
     plt.show()
 
     # PCA visualization
     pca = PCA(n_components=n_components)
-    all_data = np.vstack([archetype2_np, transformed_target_scaled_np])
+    all_data = np.vstack([archetype2_np_subset, transformed_target_scaled_np_subset])
     pca.fit(all_data)
-    archetype2_2d = pca.transform(archetype2_np)
-    transported_archetype2_2d = pca.transform(transformed_target_scaled_np)
+    archetype2_2d = pca.transform(archetype2_np_subset)
+    transported_archetype2_2d = pca.transform(transformed_target_scaled_np_subset)
 
     plt.figure(figsize=(8, 8))
     plt.scatter(
@@ -1149,9 +1156,8 @@ weights_prot = adata_2_prot.obsm["archetype_vec"]
 
 # %%
 
-op_subsample_size = 5000
+op_subsample_size = 3000
 n_dim = 4
-max_iter = 70  # should be higher
 max_iter = 70  # should be higher
 metric = "nn"  #  change to neighbor graph distance
 loss_type = "kl_loss"
@@ -1279,19 +1285,14 @@ for target_idx, archetype1 in tqdm(
 
         # Compute distance matrices within each archetype
         plot_raw_source_vs_target(archetype1_np, archetype2_np, target_idx, source_idx)
-        nn_metric_kwargs = {"k": 15, "max_hops": int(3 * np.log(num_cells))}
+        nn_metric_kwargs = {"k": 5, "max_hops": int(3 * np.log(num_cells))}
         C1, C2 = compute_distance_matrix(
             archetype1, archetype2, metric="nn", kwargs=nn_metric_kwargs
         )
-        # print uniqeu count of C1 and C2 usieng torch , how many of each unique value
-        # Print top 4 most common values for each distance matrix
-
         plot_distance_heatmap(C1, target_idx, source_idx)
         plot_knn_graph(archetype1, archetype2, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
         plot_k_distance(archetype1, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
         plot_hop_distribution(C1, C2, source_idx, target_idx)
-        # # Plot the distance matrices
-
         # Define weights for samples (uniform weights)
         p = torch.ones(len(archetype1), device=device, dtype=torch.float32) / len(archetype1)
         q = torch.ones(len(archetype2), device=device, dtype=torch.float32) / len(archetype2)
