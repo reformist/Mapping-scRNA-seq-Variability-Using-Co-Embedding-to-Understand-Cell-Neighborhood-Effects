@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -289,9 +290,6 @@ class KNN(NN):
         return winner
 
 
-import networkx as nx
-
-
 def plot_distance_heatmap(C1, i, j, max_cells=100):
     """Plot enhanced hop distance matrix with histogram."""
     # Subset for visualization
@@ -386,67 +384,78 @@ def plot_k_distance(archetype, k=5, i=None, j=None):
     plt.show()
 
 
-def plot_knn_graph(archetype, k=5, max_cells=100, i=None, j=None):
+def plot_knn_graph(archetype1, archetype2, k=5, max_cells=100, i=None, j=None):
     """Visualize the k-NN graph structure for an archetype."""
     # Limit to a manageable number of cells
     # subsample randomly
-    subset = archetype[torch.randperm(archetype.shape[0])[:max_cells]]
+    max_index_values = min(archetype1.shape[0], archetype2.shape[0])
+    rand_indeces = np.random.permutation(max_index_values)[:max_cells]
+    subset_1 = archetype1[rand_indeces]
+    subset_2 = archetype2[rand_indeces]
 
     # Create k-NN graph
-    knn_idx = knn_graph(subset, k=k)
+    knn_idx_1 = knn_graph(subset_1, k=k)
+    knn_idx_2 = knn_graph(subset_2, k=k)
+
+    subset_1 = subset_1.cpu().numpy()
+    subset_2 = subset_2.cpu().numpy()
+    subset_1_2d, subset_2_2d = get_2D_data(subset_1, subset_2)
 
     # Convert to networkx graph
-    G = nx.DiGraph()
-    subset_np = subset.cpu().numpy()
+    G_1 = nx.DiGraph()
+    G_2 = nx.DiGraph()
 
     # Add nodes
-    for idx in range(len(subset_np)):
-        G.add_node(idx, pos=subset_np[idx, :2])  # Use first 2 dimensions for position
-
+    for idx in range(len(subset_1)):
+        G_1.add_node(idx, pos=subset_1_2d[idx, :2])
+        G_2.add_node(idx, pos=subset_2_2d[idx, :2])
     # Add edges
-    for src in range(len(subset_np)):
-        for dst in knn_idx[src].cpu().numpy():
-            G.add_edge(src, dst)
-
+    for src in range(len(subset_1)):
+        for dst in knn_idx_1[src].cpu().numpy():
+            G_1.add_edge(src, dst)
+        for dst in knn_idx_2[src].cpu().numpy():
+            G_2.add_edge(src, dst)
     # Extract positions
-    pos = nx.get_node_attributes(G, "pos")
+    pos_1 = nx.get_node_attributes(G_1, "pos")
+    pos_2 = nx.get_node_attributes(G_2, "pos")
 
     # Plot
     plt.figure(figsize=(10, 10))
+    plt.subplot(1, 2, 1)
     nx.draw(
-        G,
-        pos,
+        G_1,
+        pos_1,
         with_labels=False,
         node_size=50,
         node_color="blue",
         alpha=0.7,
-        edge_color="gray",
+        edge_color="green",
+        arrows=False,
+        width=0.5,
+    )
+    plt.legend(["Source"])
+    plt.subplot(1, 2, 2)
+    nx.draw(
+        G_2,
+        pos_2,
+        with_labels=False,
+        node_size=50,
+        node_color="red",
+        alpha=0.7,
+        edge_color="orange",
         arrows=False,
         width=0.5,
     )
 
     # Include archetype indices in title if provided
-    if i is not None and j is not None:
-        plt.title(f"k-NN Graph for Archetype {i} → {j} (First {len(subset_np)} cells, k={k})")
-    else:
-        plt.title(f"k-NN Graph (First {len(subset_np)} cells, k={k})")
-
+    plt.suptitle(f"k-NN Graph for Archetype {i} → {j} (First {len(subset_1)} cells, k={k})")
+    plt.legend(["Target"])
     plt.show()
 
 
 def soften_matching(M, temperature=0.1):
     M_exp = np.exp(-M / temperature)
     return M_exp / M_exp.sum(axis=1, keepdims=True)
-
-
-# def knn(ref, query, k):
-#     ref_c =torch.stack([ref] * query.shape[-1], dim=0).permute(0, 2, 1).reshape(-1, 2).transpose(0, 1)
-#     query_c = torch.repeat_interleave(query, repeats=ref.shape[-1], dim=1)
-#     delta = query_c - ref_c
-#     distances = torch.sqrt(torch.pow(delta, 2).sum(dim=0))
-#     distances = distances.view(query.shape[-1], ref.shape[-1])
-#     sorted_dist, indices = torch.sort(distances, dim=-1)
-#     return sorted_dist[:, :k], indices[:, :k]
 
 
 def compute_nn_distance_matrix(data, k=5):
@@ -479,20 +488,22 @@ def compute_nn_distance_matrix(data, k=5):
     return dist_matrix
 
 
-def plot_raw_source_vs_target(archetype1, archetype2, i, j):
+def plot_raw_source_vs_target(archetype1_np, archetype2_np, i, j):
     """Plot the source and target archetypes side by side."""
     # Limit to first 1000 cells
-    n_cells_to_plot = min(1000, len(archetype1), len(archetype2))
-    archetype1_np = archetype1[:n_cells_to_plot]
-    archetype2_np = archetype2[:n_cells_to_plot]
+    archetype1_np_2d, archetype2_np_2d = get_2D_data(archetype1_np, archetype2_np)
+
+    n_cells_to_plot = min(1000, len(archetype1_np_2d), len(archetype2_np_2d))
+    archetype1_np_2d = archetype1_np_2d[:n_cells_to_plot]
+    archetype2_np_2d = archetype2_np_2d[:n_cells_to_plot]
 
     fig = plt.figure(figsize=(10, 5))
 
     # Source archetype
     ax1 = fig.add_subplot(121)
     ax1.scatter(
-        archetype1_np[:, 0],
-        archetype1_np[:, 1],
+        archetype1_np_2d[:, 0],
+        archetype1_np_2d[:, 1],
         c="b",
         label="Source",
     )
@@ -500,8 +511,8 @@ def plot_raw_source_vs_target(archetype1, archetype2, i, j):
     # Target archetype
     ax2 = fig.add_subplot(122)
     ax2.scatter(
-        archetype2_np[:, 0],
-        archetype2_np[:, 1],
+        archetype2_np_2d[:, 0],
+        archetype2_np_2d[:, 1],
         c="r",
         label="Target",
     )
@@ -562,49 +573,18 @@ def plot_transport_plan_heatmap(transport_plan_np, i, j, gw_dist):
     plt.close()
 
 
-def scale_transformed_source(transport_plan_np, archetype2):
-    """Transform source points using transport plan and scale them to match target range."""
-    # Limit to first 1000 cells for consistency with other plots
-    # n_cells_to_plot = min(1000, transport_plan_np.shape[0], len(archetype2_np))
-
-    # Use the transport plan to transform source points
-    # Each source point is mapped as a weighted combination of target points
-    archetype2_np = archetype2.cpu().numpy()
-    transformed_source = transport_plan_np @ archetype2_np
-    transformed_source = transformed_source / np.sum(transport_plan_np, axis=1, keepdims=True)
-    # Rescale transformed source to match target scale for better visualization
-    # Get min/max of target data
-    target_min = archetype2_np.min(axis=0)
-    target_max = archetype2_np.max(axis=0)
-    target_range = target_max - target_min
-
-    # Get min/max of transformed source
-    trans_min = transformed_source.min(axis=0)
-    trans_max = transformed_source.max(axis=0)
-    trans_range = trans_max - trans_min
-
-    # # Apply scaling to match target range
-    # transformed_source_scaled = np.zeros_like(transformed_source)
-    # for dim in range(transformed_source.shape[1]):
-    #     if trans_range[dim] > 1e-10:  # Avoid division by zero
-    #         transformed_source_scaled[:, dim] = (
-    #             transformed_source[:, dim] - trans_min[dim]
-    #         ) / trans_range[dim] * target_range[dim] + target_min[dim]
-    #     else:
-    #         transformed_source_scaled[:, dim] = target_min[dim] + target_range[dim] / 2
-
-    return transformed_source
-
-
-def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_source_scaled, i, j):
+def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_source_scaled_np, i, j):
     """Plot histograms comparing distributions before and after transport."""
+    # Compute transported target using the same method as in plot_target_transport_effect
+
+    # Calculate transformed target using same method as plot_target_transport_effect
     # Limit to first 1000 cells
     n_cells_to_plot = min(
-        1000, len(archetype1_np), len(archetype2_np), len(transformed_source_scaled)
+        1000, len(archetype1_np), len(archetype2_np), len(transformed_source_scaled_np)
     )
     archetype1_np = archetype1_np[:n_cells_to_plot]
     archetype2_np = archetype2_np[:n_cells_to_plot]
-    transformed_source_scaled = transformed_source_scaled[:n_cells_to_plot]
+    transformed_source_scaled_np_subset = transformed_source_scaled_np[:n_cells_to_plot]
 
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 
@@ -612,22 +592,22 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
     x_min = min(
         archetype1_np[:, 0].min(),
         archetype2_np[:, 0].min(),
-        transformed_source_scaled[:, 0].min(),
+        transformed_source_scaled_np_subset[:, 0].min(),
     )
     x_max = max(
         archetype1_np[:, 0].max(),
         archetype2_np[:, 0].max(),
-        transformed_source_scaled[:, 0].max(),
+        transformed_source_scaled_np_subset[:, 0].max(),
     )
     y_min = min(
         archetype1_np[:, 1].min(),
         archetype2_np[:, 1].min(),
-        transformed_source_scaled[:, 1].min(),
+        transformed_source_scaled_np_subset[:, 1].min(),
     )
     y_max = max(
         archetype1_np[:, 1].max(),
         archetype2_np[:, 1].max(),
-        transformed_source_scaled[:, 1].max(),
+        transformed_source_scaled_np_subset[:, 1].max(),
     )
 
     x_bins = np.linspace(x_min, x_max, 100)
@@ -642,7 +622,7 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
         label="Source",
     )
     axs[0, 0].hist(
-        transformed_source_scaled[:, 0],
+        transformed_source_scaled_np_subset[:, 0],
         bins=x_bins,
         alpha=0.5,
         color="green",
@@ -667,7 +647,7 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
         label="Source",
     )
     axs[0, 1].hist(
-        transformed_source_scaled[:, 1],
+        transformed_source_scaled_np_subset[:, 1],
         bins=y_bins,
         alpha=0.5,
         color="green",
@@ -686,8 +666,8 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
     # Bottom-left: 2D density of source and transformed
     axs[1, 0].scatter(archetype1_np[:, 0], archetype1_np[:, 1], c="blue", alpha=0.5, label="Source")
     axs[1, 0].scatter(
-        transformed_source_scaled[:, 0],
-        transformed_source_scaled[:, 1],
+        transformed_source_scaled_np_subset[:, 0],
+        transformed_source_scaled_np_subset[:, 1],
         c="green",
         alpha=0.5,
         label="Transformed",
@@ -697,8 +677,8 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
 
     # Bottom-right: 2D density of transformed and target
     axs[1, 1].scatter(
-        transformed_source_scaled[:, 0],
-        transformed_source_scaled[:, 1],
+        transformed_source_scaled_np_subset[:, 0],
+        transformed_source_scaled_np_subset[:, 1],
         c="green",
         alpha=0.5,
         label="Transformed",
@@ -714,17 +694,9 @@ def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_sourc
     plt.close()
 
 
-def get_2D_data(archetype1, archetype2):
+def get_2D_data(archetype1_np, archetype2_np):
     """Convert high-dimensional data to 2D using PCA."""
-    # Limit to first 1000 cells
-    # n_cells_to_plot = min(1000, len(archetype1), len(archetype2))
-    # archetype1_subset = archetype1[:n_cells_to_plot]
-    # archetype2_subset = archetype2[:n_cells_to_plot]
-
     # Visualize the transported source points to see overlap
-    archetype1_np = archetype1.cpu().numpy()
-    archetype2_np = archetype2.cpu().numpy()
-
     # pca each one separately
     archetype1_np = PCA(n_components=2).fit_transform(archetype1_np)
     archetype2_np = PCA(n_components=2).fit_transform(archetype2_np)
@@ -754,17 +726,14 @@ def plot_convergence(log, i, j):
         plt.close()
 
 
-def plot_pre_post_transport_plan(archetype1, archetype2, transport_plan_np, i=None, j=None):
-    transported_archetype2 = (
-        transport_plan_np
-        @ archetype2.detach().cpu().numpy()
-        / np.sum(transport_plan_np, axis=1, keepdims=True)
-    )
+def plot_pre_post_transport_plan(
+    archetype1_np, archetype2_np, transformed_target_scaled_np, i=None, j=None
+):
     subsample_size = 1000
-    skip_size = int(archetype1.shape[0] / subsample_size)
-    archetype1_subset = archetype1[::skip_size]
-    archetype2_subset = archetype2[::skip_size]
-    transported_archetype2_subset = transported_archetype2[::skip_size]
+    skip_size = max(int(archetype1_np.shape[0] / subsample_size), 1)
+    archetype1_subset = archetype1_np[::skip_size]
+    archetype2_subset = archetype2_np[::skip_size]
+    transformed_target_scaled_np_subset = transformed_target_scaled_np[::skip_size]
     plt.figure(figsize=(10, 5))
     # add gloabl axis names
     plt.xlabel("cells")
@@ -778,18 +747,18 @@ def plot_pre_post_transport_plan(archetype1, archetype2, transport_plan_np, i=No
 
     plt.subplot(1, 3, 1)
     # remove colorbar
-    sns.heatmap(archetype1_subset.detach().cpu().numpy(), cbar=False)
+    sns.heatmap(archetype1_subset, cbar=False)
     plt.title("archetype1")
     plt.xticks([])
     plt.yticks([])
     plt.subplot(1, 3, 2)
     plt.title("archetype2")
-    sns.heatmap(archetype2_subset.detach().cpu().numpy(), cbar=False)
+    sns.heatmap(archetype2_subset, cbar=False)
     plt.xticks([])
     plt.yticks([])
     plt.subplot(1, 3, 3)
     plt.title("transported archetype2")
-    sns.heatmap(transported_archetype2_subset, cbar=False)
+    sns.heatmap(transformed_target_scaled_np_subset, cbar=False)
     # remove ticks to all subplots
     plt.xticks([])
     plt.yticks([])
@@ -886,57 +855,44 @@ def compute_distance_matrix(
     C1 = ((C1 + C1.T) / 2).to(torch.int32)
     C2 = ((C2 + C2.T) / 2).to(torch.int32)
     # Normalize the distance matrices
+    print_top_4_most_common_distance_values(C1, C2)
+
     C1, C2 = stabilize_matrices(C1, C2)
     return C1, C2
 
 
 def plot_target_transport_effect(
-    archetype2, transport_plan, n_components=2, i=None, j=None, title=None
+    archetype2_np, transformed_target_scaled_np, n_components=2, i=None, j=None
 ):
     """
     Visualize how much the transport plan changes the target.
     Parameters:
-        archetype2 (np.ndarray): Target data, shape (n_samples, n_features)
-        transport_plan (np.ndarray): Transport matrix, shape (n_samples, n_samples)
+        archetype2_np (np.ndarray): Target data, shape (n_samples, n_features)
+        transported_target_np (np.ndarray): Transported target data, shape (n_samples, n_features)
         n_components (int): Number of PCA components for visualization (default: 2)
         i, j (int, optional): Source and target archetype indices for title
         title (str, optional): Custom plot title
     """
     # Compute transported target (barycentric projection)
-    transported_target = (
-        transport_plan @ archetype2 / (transport_plan.sum(axis=1, keepdims=True) + 1e-12)
-    )
-
-    # Project both to 2D (use same PCA for both)
-    if isinstance(archetype2, torch.Tensor):
-        archetype2_np = archetype2.detach().cpu().numpy()
-        transported_target_np = transported_target.detach().cpu().numpy()
-        transport_plan_np = transport_plan.detach().cpu().numpy()
 
     # First heatmap
     plt.figure(figsize=(10, 8))
     sns.heatmap(archetype2_np, cmap="viridis")
-    if i is not None and j is not None:
-        plt.title(f"Original Target Data: Archetype {i} → {j}")
-    else:
-        plt.title("Original Target Data")
+    plt.title("Original Target Data")
     plt.show()
 
     # Second heatmap
     plt.figure(figsize=(10, 8))
-    sns.heatmap(transported_target_np, cmap="viridis")
-    if i is not None and j is not None:
-        plt.title(f"Transported Target Data: Archetype {i} → {j}")
-    else:
-        plt.title("Transported Target Data")
+    sns.heatmap(transformed_target_scaled_np, cmap="viridis")
+    plt.title("Transported Target Data")
     plt.show()
 
     # PCA visualization
     pca = PCA(n_components=n_components)
-    all_data = np.vstack([archetype2_np, transported_target_np])
+    all_data = np.vstack([archetype2_np, transformed_target_scaled_np])
     pca.fit(all_data)
     archetype2_2d = pca.transform(archetype2_np)
-    transported_archetype2_2d = pca.transform(transported_target_np)
+    transported_archetype2_2d = pca.transform(transformed_target_scaled_np)
 
     plt.figure(figsize=(8, 8))
     plt.scatter(
@@ -959,13 +915,7 @@ def plot_target_transport_effect(
         )
 
     # Set the title based on provided parameters
-    if title:
-        plt.title(title)
-    elif i is not None and j is not None:
-        plt.title(f"Target vs. Transported Target: Archetype {i} → {j}")
-    else:
-        plt.title("Target vs. Transported Target")
-
+    plt.title(f"Target vs. Transported Target: Archetype {i} → {j}")
     plt.legend()
     plt.xlabel("PCA 1")
     plt.ylabel("PCA 2")
@@ -1092,6 +1042,29 @@ def get_epsilon_and_tol(op_subsample_size, n_dim):
     else:
         tol = 1e-6  # Further relaxed for large datasets
     return epsilon, tol
+
+
+def print_top_4_most_common_distance_values(C1, C2):
+    C1_unique, C1_counts = torch.unique(C1, return_counts=True)
+    C2_unique, C2_counts = torch.unique(C2, return_counts=True)
+
+    # Sort by count and get top 4
+    C1_top = sorted(zip(C1_counts, C1_unique), reverse=True)[:4]
+    C2_top = sorted(zip(C2_counts, C2_unique), reverse=True)[:4]
+
+    print("\nTop 4 most common distance values in C1 (pre normalization):")
+    print(
+        tabulate(
+            [[value, count] for count, value in C1_top], headers=["Value", "Count"], tablefmt="grid"
+        )
+    )
+
+    print("\nTop 4 most common distance values in C2 (pre normalization):")
+    print(
+        tabulate(
+            [[value, count] for count, value in C2_top], headers=["Value", "Count"], tablefmt="grid"
+        )
+    )
 
 
 # read those adata_1_rna.write(f"CODEX_RNA_seq/data/processed_data/adata_rna_archetype_generated_ot_test.h5ad")
@@ -1231,10 +1204,10 @@ num_archetypes2 = len(archetypes_space2)
 
 cost_matrix = np.zeros((num_archetypes1, num_archetypes2))
 # %%
-for target_archetype_index, archetype1 in tqdm(
+for target_idx, archetype1 in tqdm(
     enumerate(archetypes_space1), total=num_archetypes1, desc="Computing GW distances"
 ):
-    for source_archetype_index, archetype2 in enumerate(archetypes_space2):
+    for source_idx, archetype2 in enumerate(archetypes_space2):
         # Visualize the archetypes
         print(
             f"archetype1.shape: {list(archetype1.shape)}, \narchetype2.shape: {list(archetype2.shape)}"
@@ -1245,44 +1218,24 @@ for target_archetype_index, archetype1 in tqdm(
         print(f"epsilon: {epsilon}, tol: {tol}")
         # Skip if either archetype has no cells
         if len(archetype1) == 0 or len(archetype2) == 0:
-            cost_matrix[target_archetype_index, source_archetype_index] = np.inf
+            cost_matrix[target_idx, source_idx] = np.inf
             continue
+        archetype1_np = archetype1.cpu().numpy()
+        archetype2_np = archetype2.cpu().numpy()
 
         # Compute distance matrices within each archetype
-        archetype1_np_2d, archetype2_np_2d = get_2D_data(archetype1, archetype2)
-        plot_raw_source_vs_target(
-            archetype1_np_2d, archetype2_np_2d, target_archetype_index, source_archetype_index
-        )
+        plot_raw_source_vs_target(archetype1_np, archetype2_np, target_idx, source_idx)
         nn_metric_kwargs = {"k": 15, "max_hops": int(3 * np.log(num_cells))}
         C1, C2 = compute_distance_matrix(
             archetype1, archetype2, metric="nn", kwargs=nn_metric_kwargs
         )
         # print uniqeu count of C1 and C2 usieng torch , how many of each unique value
-        # print it as a table nice format using tabulate
-        print(
-            tabulate(
-                [[value, count] for value, count in zip(*torch.unique(C1, return_counts=True))],
-                headers=["Value", "Count"],
-                tablefmt="grid",
-            )
-        )
-        print(
-            tabulate(
-                [[value, count] for value, count in zip(*torch.unique(C2, return_counts=True))],
-                headers=["Value", "Count"],
-                tablefmt="grid",
-            )
-        )
-        print(f"Unique values and counts in C1:")
+        # Print top 4 most common values for each distance matrix
 
-        plot_distance_heatmap(C1, target_archetype_index, source_archetype_index)
-        plot_knn_graph(
-            archetype1, k=nn_metric_kwargs["k"], i=target_archetype_index, j=source_archetype_index
-        )
-        plot_k_distance(
-            archetype1, k=nn_metric_kwargs["k"], i=target_archetype_index, j=source_archetype_index
-        )
-        plot_hop_distribution(C1, source_archetype_index, target_archetype_index)
+        plot_distance_heatmap(C1, target_idx, source_idx)
+        plot_knn_graph(archetype1, archetype2, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
+        plot_k_distance(archetype1, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
+        plot_hop_distribution(C1, source_idx, target_idx)
         # # Plot the distance matrices
 
         # Define weights for samples (uniform weights)
@@ -1305,62 +1258,45 @@ for target_archetype_index, archetype1 in tqdm(
             verbose=True,
             log=True,
         )
-        transport_plan = log["T"]  # Get transport plan from log dict
-
+        transport_plan = log["T"]
+        transport_plan_np = transport_plan.cpu().numpy()
+        transformed_target_scaled = (
+            transport_plan @ archetype2 / torch.sum(transport_plan, axis=1, keepdims=True)
+        )
+        transformed_target_scaled_np = transformed_target_scaled.cpu().numpy()
         plot_target_transport_effect(
-            archetype2,
-            transport_plan,
+            archetype2_np,
+            transformed_target_scaled_np,
             n_components=2,
-            i=target_archetype_index,
-            j=source_archetype_index,
+            i=target_idx,
+            j=source_idx,
         )
 
-        print_transport_plan_validation(
-            transport_plan, p, q, target_archetype_index, source_archetype_index
-        )
+        print_transport_plan_validation(transport_plan, p, q, target_idx, source_idx)
 
-        # Plot the transport plan
-        transport_plan_np = transport_plan.cpu().numpy()
-        plot_transport_plan_heatmap(
-            transport_plan_np, target_archetype_index, source_archetype_index, gw_dist
-        )
+        plot_transport_plan_heatmap(transport_plan_np, target_idx, source_idx, gw_dist)
 
-        # calcalge the power the matrix
-
-        transformed_source_scaled = scale_transformed_source(transport_plan_np, archetype2)
-        # Plot connections between points
-        transport_plan_np = transport_plan.cpu().numpy()
-        plot_transport_plan_diagonal_vs_all(
-            transport_plan_np, target_archetype_index, source_archetype_index
-        )
+        plot_transport_plan_diagonal_vs_all(transport_plan_np, target_idx, source_idx)
 
         plot_pre_post_transport_plan(
-            archetype1,
-            archetype2,
-            transport_plan_np,
-            target_archetype_index,
-            source_archetype_index,
+            archetype1_np,
+            archetype2_np,
+            transformed_target_scaled_np,
+            target_idx,
+            source_idx,
         )
-        transformed_source_scaled = (
-            transport_plan_np
-            @ archetype2.detach().cpu().numpy()
-            / np.sum(transport_plan_np, axis=1, keepdims=True)
-        )
-        # good
 
         plot_distribution_comparison(
-            archetype1_np_2d,
-            archetype2_np_2d,
-            transformed_source_scaled,
-            target_archetype_index,
-            source_archetype_index,
+            archetype1_np,
+            archetype2_np,
+            transformed_target_scaled_np,
+            target_idx,
+            source_idx,
         )
 
-        # Plot convergence
-        plot_convergence(log, target_archetype_index, source_archetype_index)
-
+        plot_convergence(log, target_idx, source_idx)
         # Use the Gromov-Wasserstein distance as the cost
-        cost_matrix[target_archetype_index, source_archetype_index] = gw_dist
+        cost_matrix[target_idx, source_idx] = gw_dist
 
 # %%
 # Handle potential numerical issues in the cost matrix
