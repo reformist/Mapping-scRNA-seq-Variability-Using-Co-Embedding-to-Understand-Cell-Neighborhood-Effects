@@ -1,7 +1,9 @@
 # %%
 import copy
+import functools
 import os
 import sys
+import time
 import warnings
 from typing import Literal
 
@@ -36,6 +38,23 @@ Full project repository: https://github.com/wzjoriv/Lign (A graph deep learning 
 """
 
 
+def timeit(func):
+    """
+    Decorator to measure execution time of functions.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"Function {func.__name__} took {end_time - start_time:.4f} seconds to execute")
+        return result
+
+    return wrapper
+
+
+@timeit
 def plot_transport_plan_diagonal_vs_all(transport_plan_np, i, j, bins=50):
     """
     Create a histogram comparing the transport plan's diagonal elements vs all elements.
@@ -290,6 +309,7 @@ class KNN(NN):
         return winner
 
 
+@timeit
 def plot_distance_heatmap(C1, i, j, max_cells=100):
     """Plot enhanced hop distance matrix with histogram."""
     # Subset for visualization
@@ -336,6 +356,7 @@ def plot_distance_heatmap(C1, i, j, max_cells=100):
     plt.show()
 
 
+@timeit
 def plot_k_distance(archetype, k=5, i=None, j=None):
     """Plot k-distance graph to determine optimal eps value."""
     # Calculate pairwise distances
@@ -374,16 +395,14 @@ def plot_k_distance(archetype, k=5, i=None, j=None):
     plt.ylabel(f"Distance to {k}-th nearest neighbor")
 
     # Include archetype indices in title if provided
-    if i is not None and j is not None:
-        plt.title(f"K-Distance Plot for Archetype {i} → {j} (k={k})")
-    else:
-        plt.title(f"K-Distance Plot (k={k})")
+    plt.title(f"K-Distance Plot for Archetype {i} → {j} (k={k})")
 
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.show()
 
 
+@timeit
 def plot_knn_graph(archetype1, archetype2, k=5, max_cells=100, i=None, j=None):
     """Visualize the k-NN graph structure for an archetype."""
     # Limit to a manageable number of cells
@@ -488,6 +507,7 @@ def compute_nn_distance_matrix(data, k=5):
     return dist_matrix
 
 
+@timeit
 def plot_raw_source_vs_target(archetype1_np, archetype2_np, i, j):
     """Plot the source and target archetypes side by side."""
     # Limit to first 1000 cells
@@ -520,6 +540,7 @@ def plot_raw_source_vs_target(archetype1_np, archetype2_np, i, j):
     plt.show()
 
 
+@timeit
 def plot_distance_matrices(C1, C2, i, j):
     """Plot the distance matrices of the source and target archetypes."""
     # Select first 1000 cells to plot
@@ -553,6 +574,7 @@ def plot_distance_matrices(C1, C2, i, j):
     plt.close()
 
 
+@timeit
 def plot_transport_plan_heatmap(transport_plan_np, i, j, gw_dist):
     """Plot the transport plan as a heatmap."""
 
@@ -573,6 +595,7 @@ def plot_transport_plan_heatmap(transport_plan_np, i, j, gw_dist):
     plt.close()
 
 
+@timeit
 def plot_distribution_comparison(archetype1_np, archetype2_np, transformed_source_scaled_np, i, j):
     """Plot histograms comparing distributions before and after transport."""
     # Compute transported target using the same method as in plot_target_transport_effect
@@ -712,6 +735,7 @@ def print_transport_plan_validation(transport_plan, p, q, i, j):
     print(f"Percentage of mass transported: {100*transport_plan.sum().item()/p.sum().item():.1f}%")
 
 
+@timeit
 def plot_convergence(log, i, j):
     """Plot the convergence of the Gromov-Wasserstein algorithm."""
     if "errs" in log:
@@ -726,6 +750,7 @@ def plot_convergence(log, i, j):
         plt.close()
 
 
+@timeit
 def plot_pre_post_transport_plan(
     archetype1_np, archetype2_np, transformed_target_scaled_np, i=None, j=None
 ):
@@ -837,6 +862,7 @@ def stabilize_matrices(C1, C2):
     return C1, C2
 
 
+@timeit
 def compute_distance_matrix(
     archetype1,
     archetype2,
@@ -861,6 +887,7 @@ def compute_distance_matrix(
     return C1, C2
 
 
+@timeit
 def plot_target_transport_effect(
     archetype2_np, transformed_target_scaled_np, n_components=2, i=None, j=None
 ):
@@ -923,25 +950,37 @@ def plot_target_transport_effect(
     plt.show()
 
 
-def plot_hop_distribution(C1, source_archetype_index, target_archetype_index=None):
+@timeit
+def plot_hop_distribution(C1, C2, source_idx, target_idx):
     """Plot the distribution of hop distances in a k-NN graph using Seaborn.
 
     Parameters:
     -----------
     C1 : torch.Tensor or numpy.ndarray
         The hop distance matrix
-    source_archetype_index : int
+    C2 : torch.Tensor or numpy.ndarray
+        The hop distance matrix
+    source_idx : int
         Source archetype index (for title)
-    target_archetype_index : int, optional
+    target_idx : int, optional
         Target archetype index if comparing two archetypes
     figsize : tuple, optional
         Figure size (width, height)_
     palette : str, optional
         Seaborn color palette to use
     """
-    # Convert to numpy and handle infinities
-    C1_np = C1.cpu().numpy() if hasattr(C1, "cpu") else C1
-    C2_np = C2.cpu().numpy() if hasattr(C2, "cpu") else C2
+    ## Convert to numpy and handle infinities
+    # use a random subset of the values
+    random_subset_size = min(500, len(C1), len(C2))
+    indices_1 = np.random.rand(len(C1)) < random_subset_size / len(C1)
+    C_1_random_subset = C1[indices_1, :][:, indices_1]
+    C_2_random_subset = C2[indices_1, :][:, indices_1]
+    C1_np = (
+        C_1_random_subset.cpu().numpy() if hasattr(C_1_random_subset, "cpu") else C_1_random_subset
+    )
+    C2_np = (
+        C_2_random_subset.cpu().numpy() if hasattr(C_2_random_subset, "cpu") else C_2_random_subset
+    )
 
     # Extract finite hop distances
     num_of_inf_C1 = np.sum(np.isinf(C1_np))
@@ -953,7 +992,7 @@ def plot_hop_distribution(C1, source_archetype_index, target_archetype_index=Non
     if c2_hop_values[c2_hop_values > 0].min() < 1:
         c2_hop_values = c2_hop_values * (1 / c2_hop_values[c2_hop_values > 0].min())
     if any(c1_hop_values - c1_hop_values.astype(int) > 0):
-        raise ValueError("Hop values are not integers")
+        warnings.warn("Hop values are not integers (maybe due to random subset)")
     c1_hop_values = c1_hop_values.astype(int)
     c2_hop_values = c2_hop_values.astype(int)
     # Create figure
@@ -967,7 +1006,6 @@ def plot_hop_distribution(C1, source_archetype_index, target_archetype_index=Non
     # a random subset of the values
     c1_hop_values = c1_hop_values[np.random.rand(len(c1_hop_values)) < 0.1]
     c2_hop_values = c2_hop_values[np.random.rand(len(c2_hop_values)) < 0.1]
-    # Plot distribution with Seaborn
     ax = sns.histplot(
         c1_hop_values,
         bins=n_bins,
@@ -998,7 +1036,7 @@ def plot_hop_distribution(C1, source_archetype_index, target_archetype_index=Non
     )
     # Add labels and title
     plt.title(
-        f"Hop Distance Distribution for Archetypes {target_archetype_index}↔{source_archetype_index} \
+        f"Hop Distance Distribution for Archetypes {target_idx}↔{source_idx} \
               \nNumber of infinite values in C1: {num_of_inf_C1}, Number of infinite values in C2: {num_of_inf_C2}",
         fontsize=14,
     )
@@ -1067,6 +1105,22 @@ def print_top_4_most_common_distance_values(C1, C2):
     )
 
 
+def run_gromov_wasserstein(C1, C2, p, q, epsilon, max_iter, tol, loss_type):
+    gw_dist, log = ot.gromov.entropic_gromov_wasserstein2(
+        C1,
+        C2,
+        p,
+        q,
+        loss_type,
+        epsilon=epsilon,
+        max_iter=max_iter,
+        tol=tol,
+        verbose=True,
+        log=True,
+    )
+    return gw_dist, log
+
+
 # read those adata_1_rna.write(f"CODEX_RNA_seq/data/processed_data/adata_rna_archetype_generated_ot_test.h5ad")
 # adata_2_prot.write(f"CODEX_RNA_seq/data/processed_data/adata_prot_archetype_generated_ot_test.h5ad")
 adata_1_rna = sc.read_h5ad(
@@ -1095,7 +1149,7 @@ weights_prot = adata_2_prot.obsm["archetype_vec"]
 
 # %%
 
-op_subsample_size = 500
+op_subsample_size = 5000
 n_dim = 4
 max_iter = 70  # should be higher
 max_iter = 70  # should be higher
@@ -1235,7 +1289,7 @@ for target_idx, archetype1 in tqdm(
         plot_distance_heatmap(C1, target_idx, source_idx)
         plot_knn_graph(archetype1, archetype2, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
         plot_k_distance(archetype1, k=nn_metric_kwargs["k"], i=target_idx, j=source_idx)
-        plot_hop_distribution(C1, source_idx, target_idx)
+        plot_hop_distribution(C1, C2, source_idx, target_idx)
         # # Plot the distance matrices
 
         # Define weights for samples (uniform weights)
@@ -1246,18 +1300,8 @@ for target_idx, archetype1 in tqdm(
         # try UCOOT (Co-Optimal Transport) too later
         if not (torch.allclose(C1, C1.T) and torch.allclose(C2, C2.T)):
             raise ValueError("C1 or C2 is not symmetric (need to change the arg for ot)")  # why?
-        gw_dist, log = ot.gromov.entropic_gromov_wasserstein2(
-            C1,
-            C2,
-            p,
-            q,
-            loss_type,
-            epsilon=epsilon,
-            max_iter=max_iter,
-            tol=tol,
-            verbose=True,
-            log=True,
-        )
+
+        gw_dist, log = run_gromov_wasserstein(C1, C2, p, q, epsilon, max_iter, tol, loss_type)
         transport_plan = log["T"]
         transport_plan_np = transport_plan.cpu().numpy()
         transformed_target_scaled = (
